@@ -1,22 +1,20 @@
 # docker-compose.yml
-
-  component-cameras:
+services:
+  component_cameras:
     build:
-      context: ./component-cameras
+      context: ./component_cameras
       dockerfile: Dockerfile
-    image: leo_raph/component-oak_camera:dev
+    image: gnc_moon_simulator/component_cameras:dev
     network_mode: host
     ipc: host
-    restart: unless-stopped
-    entrypoint: >
-      bash -lc "/entrypoint.sh"
-    devices:
-      - /dev/input/:/dev/input/
-    volumes:
-      - /run/udev:/run/udev
-      - /dev/bus/usb:/dev/bus/usb
+    # restart: unless-stopped
+    entrypoint: ["/bin/bash", "-c", "source /opt/ros/jazzy/setup.bash && exec /bin/bash"]    
     privileged: true
+    stdin_open: true # Equivalent to -i
+    tty: true        # Equivalent to -t
     environment:
       ROBOT_NAMESPACE: ""
       LAUNCH_ARGS: ""
       RCUTILS_COLORIZED_OUTPUT: 1
+    volumes:
+      - ./component_cameras:/opt/ros/jazzy/src/component_cameras

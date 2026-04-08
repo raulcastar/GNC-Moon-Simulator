@@ -58,6 +58,6 @@ def generate_launch_description():
         cameras_node,
 
         #activate system
-        cameras_node_trans_event,
+        cameras_node_configure_event,
         active_state_handler,
     ])
