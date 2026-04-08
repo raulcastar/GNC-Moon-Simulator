@@ -1,0 +1,22 @@
+# docker-compose.yml
+
+  component-cameras:
+    build:
+      context: ./component-cameras
+      dockerfile: Dockerfile
+    image: leo_raph/component-oak_camera:dev
+    network_mode: host
+    ipc: host
+    restart: unless-stopped
+    entrypoint: >
+      bash -lc "/entrypoint.sh"
+    devices:
+      - /dev/input/:/dev/input/
+    volumes:
+      - /run/udev:/run/udev
+      - /dev/bus/usb:/dev/bus/usb
+    privileged: true
+    environment:
+      ROBOT_NAMESPACE: ""
+      LAUNCH_ARGS: ""
+      RCUTILS_COLORIZED_OUTPUT: 1

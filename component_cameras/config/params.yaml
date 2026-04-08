@@ -1,0 +1,6 @@
+lc_component_cameras:
+  ros__parameters:
+    debug_mode:                          false
+    port:                                 9000
+    ip:                              127.0.0.1
+    image_reading_hz_rate:                   1
