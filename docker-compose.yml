@@ -13,8 +13,12 @@ services:
     stdin_open: true # Equivalent to -i
     tty: true        # Equivalent to -t
     environment:
+      ROS_DOMAIN_ID: 0
       ROBOT_NAMESPACE: ""
       LAUNCH_ARGS: ""
       RCUTILS_COLORIZED_OUTPUT: 1
+      DISPLAY: ${DISPLAY}
+      QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
     volumes:
       - ./component_cameras:/opt/ros/jazzy/src/component_cameras
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
