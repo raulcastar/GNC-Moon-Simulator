@@ -50,7 +50,7 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         # Runtime configuration variables
         self.target_ip: str = "127.0.0.1"
         self.target_port: int = 3002
-        self.track_width: float = 1.0
+        self.rover_width: float = 1.0
 
         # Declare ROS 2 Parameters
         self.declare_parameters(
@@ -58,7 +58,7 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
             parameters=[
                 ('ip',          rclpy.Parameter.Type.STRING),
                 ('port',        rclpy.Parameter.Type.INTEGER),
-                ('track_width', rclpy.Parameter.Type.DOUBLE),
+                ('rover_width', rclpy.Parameter.Type.DOUBLE),
             ])
 
     def twist_to_wheels(self, v: float, w: float) -> dict:
@@ -77,8 +77,8 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
             dict: JSON-serializable dictionary of the 4 motor commands.
         """
         # Calculate actual physical velocity needed for each side
-        vel_left  = v - (w * self.track_width / 2.0)
-        vel_right = v + (w * self.track_width / 2.0)
+        vel_left  = v - (w * self.rover_width / 2.0)
+        vel_right = v + (w * self.rover_width / 2.0)
         
         # Invert the physical velocity to get the motor command
         cmd_left = -vel_left
@@ -133,7 +133,7 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         # Read Parameters
         self.target_ip   = self.get_parameter('ip').value
         self.target_port = self.get_parameter('port').value
-        self.track_width = self.get_parameter('track_width').value
+        self.rover_width = self.get_parameter('rover_width').value
 
         # Initialize UDP Datagram Socket
         try:
