@@ -1,0 +1,5 @@
+lc_component_rover_leo_raph:
+  ros__parameters:
+    port:                       3002
+    ip:                    127.0.0.1
+    track_width:                 1.0
