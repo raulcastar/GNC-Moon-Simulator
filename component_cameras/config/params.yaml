@@ -4,3 +4,5 @@ lc_component_cameras:
     port:                                 9000
     ip:                           10.187.18.254
     image_reading_hz_rate:                 1.0
+    enable_object_mask:                   true
+    depth_max_distance:                   10.0 #meters

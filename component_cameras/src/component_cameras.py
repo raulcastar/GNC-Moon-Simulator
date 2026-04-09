@@ -2,12 +2,15 @@
 ROS 2 Lifecycle Node for Unreal Engine Camera Integration.
 
 This module bridges simulated camera data from Unreal Engine (via UnrealCV) 
-into standard ROS 2 image pipelines, publishing both raw and compressed RGB streams, 
-as well as 32-bit floating-point depth maps.
+into standard ROS 2 image pipelines. It publishes synchronized streams for 
+raw RGB, compressed RGB, 32-bit floating-point depth maps, and conditionally 
+semantic object masks alongside a JSON string representing the object-to-color mapping.
 """
 
 from typing import Optional
 import time
+import re
+import json
 
 import rclpy
 import rclpy.lifecycle
@@ -16,6 +19,7 @@ from rclpy.timer import Timer
 
 from sensor_msgs.msg import Image as RosImage
 from sensor_msgs.msg import CompressedImage
+from std_msgs.msg import String
 from cv_bridge import CvBridge
 
 from unrealcv import Client
@@ -32,9 +36,9 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
     """
     Lifecycle node responsible for polling and publishing UnrealCV camera data.
 
-    Subscribes to UnrealCV TCP endpoints, processes the raw NumPy arrays to ensure 
-    memory contiguity and standard ROS encodings, and broadcasts the data across 
-    designated image topics.
+    Subscribes to UnrealCV TCP endpoints, processes raw NumPy arrays to ensure 
+    memory contiguity and standard ROS encodings, and dynamically handles 
+    scene-wide semantic color maps and depth truncation based on runtime parameters.
     """
 
     def __init__(self, node_name: str, **kwargs):
@@ -46,16 +50,29 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
         """
         super().__init__(node_name, **kwargs)
         
-        # Publisher handles
+        # Core image publishers
         self._pub_rgb:            Optional[Publisher] = None
         self._pub_rgb_compressed: Optional[Publisher] = None
         self._pub_depth:          Optional[Publisher] = None
         
-        # Node utilities
+        # Semantic segmentation publishers
+        self._pub_mask:           Optional[Publisher] = None
+        self._pub_mask_mapping:   Optional[Publisher] = None
+        
+        # Node utilities and state variables
         self._timer: Optional[Timer] = None
         self.unreal_client: Optional[Client] = None
         self.cv_bridge = CvBridge()
+        
+        # Cache for the scene object-to-color mapping (JSON formatted)
+        self._cached_color_map_json: str = "{}"
+        
+        # Runtime configuration variables
+        self.enable_object_mask: bool = False
+        self.depth_max_distance: float = 1000.0
+        self.debug_mode: bool = False
 
+        # Declare ROS 2 Parameters
         self.declare_parameters(
             namespace='',
             parameters=[
@@ -63,6 +80,8 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
                 ('port',                  rclpy.Parameter.Type.INTEGER),
                 ('debug_mode',            rclpy.Parameter.Type.BOOL),
                 ('image_reading_hz_rate', rclpy.Parameter.Type.DOUBLE),
+                ('enable_object_mask',    rclpy.Parameter.Type.BOOL),
+                ('depth_max_distance',    rclpy.Parameter.Type.DOUBLE),
             ])
 
     def connect_unrealcv(self, ip: str, port: int) -> None:
@@ -82,9 +101,47 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
             
         self.get_logger().info('UnrealCV TCP connection established successfully.')
 
+    def _build_color_mapping(self) -> str:
+        """
+        Retrieves all scene objects and maps their names to their segmentation color.
+
+        This operation requires hundreds of individual TCP queries to the Unreal Engine 
+        API. It is executed strictly once during node configuration to prevent massive 
+        CPU and network bottlenecking during the high-frequency read cycle.
+
+        Returns:
+            str: A JSON-serialized dictionary mapping object IDs to [R, G, B] lists.
+        """
+        self.get_logger().info('Downloading object color mapping from Unreal Engine... This may take a moment.')
+        
+        res_objects = self.unreal_client.request('vget /objects')
+        if not res_objects:
+            self.get_logger().warn('No objects found in scene. Semantic mapping will be empty.')
+            return "{}"
+
+        scene_objects = res_objects.split(' ')
+        color_mapping = {}
+        
+        # Regex to parse UnrealCV's proprietary color string format: e.g., (R=255,G=128,B=0,A=255)
+        color_regex = re.compile(r'\(R=(.*),G=(.*),B=(.*),A=(.*)\)')
+
+        for obj_id in scene_objects:
+            color_str = self.unreal_client.request(f'vget /object/{obj_id}/color')
+            if color_str:
+                match = color_regex.match(color_str)
+                if match:
+                    r = int(match.group(1))
+                    g = int(match.group(2))
+                    b = int(match.group(3))
+                    # Storing as an RGB list array to facilitate clean JSON parsing downstream
+                    color_mapping[obj_id] = [r, g, b]
+
+        self.get_logger().info(f'Successfully mapped {len(color_mapping)} objects for semantic segmentation.')
+        return json.dumps(color_mapping)
+
     def read_unreal_cameras(self) -> None:
         """
-        Timer callback to fetch, process, and publish camera frames.
+        Timer callback to fetch, process, and publish synchronized camera frames.
 
         Performs synchronization, data type casting, and memory realignment 
         to ensure safe serialization into ROS 2 DDS middleware. 
@@ -95,7 +152,7 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
             return
 
         try:
-            # Synchronize timestamp for all resulting image messages
+            # Generate a unified timestamp to guarantee synchronization across all published topics
             current_time = self.get_clock().now().to_msg()
 
             # ---------------------------------------------------------
@@ -108,30 +165,25 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
                 # Cast payload to unsigned 8-bit integers for OpenCV/ROS compatibility
                 img_rgb_np = img_rgb_np.astype(np.uint8)
                 
-                # Truncate the alpha channel to prevent rendering faults in RQT and standard tools
+                # Truncate the alpha channel to prevent rendering faults in standard ROS tools
                 if img_rgb_np.shape[2] == 4:
                     img_rgb_np = img_rgb_np[:, :, :3]
-                    
+                
                 # Reallocate memory to ensure C-contiguous layout, preventing serialization crashes
                 img_rgb_np = np.ascontiguousarray(img_rgb_np) 
 
-                # Publish uncompressed RGB payload
+                # Construct and publish uncompressed RGB payload
                 msg_rgb = self.cv_bridge.cv2_to_imgmsg(img_rgb_np, encoding="rgb8")                
                 msg_rgb.header.stamp = current_time
                 msg_rgb.header.frame_id = "unreal_camera_3"
                 self._pub_rgb.publish(msg_rgb)
-                if self.debug_mode:
-                    self.get_logger().info('Broadcasted RGB image.')
 
-                # Publish JPEG compressed RGB payload
-                # Note: OpenCV compression implicitly requires BGR formatting
+                # Construct and publish JPEG compressed RGB payload
                 img_bgr_np = cv2.cvtColor(img_rgb_np, cv2.COLOR_RGB2BGR)
                 msg_rgb_compressed = self.cv_bridge.cv2_to_compressed_imgmsg(img_bgr_np, dst_format='jpg')
                 msg_rgb_compressed.header.stamp = current_time
                 msg_rgb_compressed.header.frame_id = "unreal_camera_3"
                 self._pub_rgb_compressed.publish(msg_rgb_compressed)
-                if self.debug_mode:
-                    self.get_logger().info('Broadcasted RGB compressed image.')
 
             # ---------------------------------------------------------
             # Camera 3: Depth Processing & Publishing
@@ -140,19 +192,45 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
             if res_depth:
                 depth_np = read_npy(res_depth)
                 
-                # Sanitize invalid depth values (NaN/Inf) and clamp to predefined 10m range
-                depth_np = np.nan_to_num(depth_np, posinf=1000.0, nan=0.0, neginf=0.0)
-                depth_np = np.clip(depth_np, 0, 1000.0)
+                # Sanitize invalid depth values and clamp to the user-defined maximum distance parameter
+                depth_np = np.nan_to_num(depth_np, posinf=self.depth_max_distance, nan=0.0, neginf=0.0)
+                depth_np = np.clip(depth_np, 0.0, self.depth_max_distance)
                 
-                # Cast to 32-bit floating point for standard 32FC1 depth map encoding
+                # Cast to 32-bit floating point for standard 32FC1 ROS depth map encoding
                 depth_np = depth_np.astype(np.float32)
 
                 msg_depth = self.cv_bridge.cv2_to_imgmsg(depth_np, encoding="32FC1")
                 msg_depth.header.stamp = current_time
                 msg_depth.header.frame_id = "unreal_camera_3"
                 self._pub_depth.publish(msg_depth)
-                if self.debug_mode:
-                    self.get_logger().info('Broadcasted Depth image.')
+
+            # ---------------------------------------------------------
+            # Camera 3: Semantic Object Mask & JSON Mapping (Conditional)
+            # ---------------------------------------------------------
+            if self.enable_object_mask:
+                res_mask = self.unreal_client.request('vget /camera/3/object_mask png')
+                if res_mask:
+                    img_mask_np = read_png(res_mask)
+                    img_mask_np = img_mask_np.astype(np.uint8)
+                    
+                    # Enforce standard RGB formatting by dropping the alpha mask
+                    if img_mask_np.shape[2] == 4:
+                        img_mask_np = img_mask_np[:, :, :3]
+                    img_mask_np = np.ascontiguousarray(img_mask_np)
+
+                    # Publish visual mask image
+                    msg_mask = self.cv_bridge.cv2_to_imgmsg(img_mask_np, encoding="rgb8")
+                    msg_mask.header.stamp = current_time
+                    msg_mask.header.frame_id = "unreal_camera_3"
+                    self._pub_mask.publish(msg_mask)
+                    
+                    # Publish the cached JSON string payload corresponding to the colors in the mask
+                    msg_map = String()
+                    msg_map.data = self._cached_color_map_json
+                    self._pub_mask_mapping.publish(msg_map)
+
+            if self.debug_mode:
+                self.get_logger().info('Synchronized broadcast completed.')
 
         except Exception as e:
             self.get_logger().error(f"UnrealCV integration fault during read/publish cycle: {e}")
@@ -164,22 +242,36 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
     def on_configure(self, state: State) -> TransitionCallbackReturn:
         """
         Transition callback for node configuration.
-        Initializes TCP sockets, parameters, publishers, and read timers.
+        Initializes TCP sockets, parameters, and dynamic network publishers.
         """
         self.get_logger().info("Lifecycle state transition: CONFIGURED.")
 
-        self.debug_mode = self.get_parameter('debug_mode').value
-        config_image_reading_hz_rate = self.get_parameter('image_reading_hz_rate').value
-        config_ip = self.get_parameter('ip').value
-        config_port = self.get_parameter('port').value
+        # Read Parameters
+        self.debug_mode           = self.get_parameter('debug_mode').value
+        self.enable_object_mask   = self.get_parameter('enable_object_mask').value
+        self.depth_max_distance   = self.get_parameter('depth_max_distance').value
+        config_image_hz_rate      = self.get_parameter('image_reading_hz_rate').value
+        config_ip                 = self.get_parameter('ip').value
+        config_port               = self.get_parameter('port').value
 
         self.connect_unrealcv(config_ip, config_port)
 
+        # 1. Allocate Base DDS endpoints (Publishers)
         self._pub_rgb            = self.create_lifecycle_publisher(RosImage, 'unreal/camera3/image_color', 10)
         self._pub_rgb_compressed = self.create_lifecycle_publisher(CompressedImage, 'unreal/camera3/image_color/compressed', 10)
         self._pub_depth          = self.create_lifecycle_publisher(RosImage, 'unreal/camera3/image_depth', 10)
 
-        self._timer = self.create_timer(1.0 / config_image_reading_hz_rate, self.read_unreal_cameras)
+        # 2. Conditionally allocate Object Mask resources
+        if self.enable_object_mask:
+            self.get_logger().info("Object masking is ENABLED. Initializing semantic mapping...")
+            self._pub_mask         = self.create_lifecycle_publisher(RosImage, 'unreal/camera3/object_mask', 10)
+            self._pub_mask_mapping = self.create_lifecycle_publisher(String, 'unreal/camera3/object_mask_mapping', 10)
+            self._cached_color_map_json = self._build_color_mapping()
+        else:
+            self.get_logger().info("Object masking is DISABLED. Semantic mapping bypassed.")
+
+        # 3. Initialize high-frequency execution timer
+        self._timer = self.create_timer(1.0 / config_image_hz_rate, self.read_unreal_cameras)
 
         return TransitionCallbackReturn.SUCCESS
 
@@ -196,14 +288,25 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
     def on_cleanup(self, state: State) -> TransitionCallbackReturn:
         """
         Transition callback for node cleanup.
-        Destroys existing publishers, timers, and active TCP connections to free memory.
+        Destroys existing publishers, timers, and active TCP connections to release system resources.
         """
         self.get_logger().info('Lifecycle state transition: CLEANING UP.')
         
-        self.destroy_timer(self._timer)
-        self.destroy_publisher(self._pub_rgb)
-        self.destroy_publisher(self._pub_rgb_compressed)
-        self.destroy_publisher(self._pub_depth)
+        if self._timer:
+            self.destroy_timer(self._timer)
+            
+        if self._pub_rgb:
+            self.destroy_publisher(self._pub_rgb)
+        if self._pub_rgb_compressed:
+            self.destroy_publisher(self._pub_rgb_compressed)
+        if self._pub_depth:
+            self.destroy_publisher(self._pub_depth)
+            
+        # Conditionally destroy mask publishers
+        if self._pub_mask:
+            self.destroy_publisher(self._pub_mask)
+        if self._pub_mask_mapping:
+            self.destroy_publisher(self._pub_mask_mapping)
         
         if self.unreal_client:
             self.unreal_client.disconnect()
@@ -217,14 +320,21 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
         """
         self.get_logger().info('Lifecycle state transition: SHUTTING DOWN.')
         
+        # Cleanup logic is identical to on_cleanup here
         if self._timer:
             self.destroy_timer(self._timer)
+            
         if self._pub_rgb:
             self.destroy_publisher(self._pub_rgb)
         if self._pub_rgb_compressed:
             self.destroy_publisher(self._pub_rgb_compressed)
         if self._pub_depth:
             self.destroy_publisher(self._pub_depth)
+            
+        if self._pub_mask:
+            self.destroy_publisher(self._pub_mask)
+        if self._pub_mask_mapping:
+            self.destroy_publisher(self._pub_mask_mapping)
             
         if self.unreal_client:
             self.unreal_client.disconnect()
