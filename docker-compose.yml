@@ -7,11 +7,10 @@ services:
     image: gnc_moon_simulator/component_cameras:dev
     network_mode: host
     ipc: host
-    # restart: unless-stopped
-    entrypoint: ["/bin/bash", "-c", "source /opt/ros/jazzy/setup.bash && exec /bin/bash"]    
+    restart: unless-stopped
+    entrypoint: >
+      bash -lc "/entrypoint.sh"
     privileged: true
-    stdin_open: true # Equivalent to -i
-    tty: true        # Equivalent to -t
     environment:
       ROS_DOMAIN_ID: 0
       ROBOT_NAMESPACE: ""
@@ -30,7 +29,28 @@ services:
     image: gnc_moon_simulator/component_rover_leo_raph:dev
     network_mode: host
     ipc: host
-    # restart: unless-stopped
+    restart: unless-stopped
+    entrypoint: >
+      bash -lc "/entrypoint.sh"  
+    privileged: true
+    environment:
+      ROS_DOMAIN_ID: 0
+      ROBOT_NAMESPACE: ""
+      LAUNCH_ARGS: ""
+      RCUTILS_COLORIZED_OUTPUT: 1
+      DISPLAY: ${DISPLAY}
+      QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
+    volumes:
+      - ./component_rover_leo_raph:/opt/ros/jazzy/src/component_rover_leo_raph
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+
+  debug_cli:
+    build:
+      context: ./docker
+      dockerfile: base.Dockerfile
+    image: gnc_moon_simulator/debug_cli:dev
+    network_mode: host
+    ipc: host
     entrypoint: ["/bin/bash", "-c", "source /opt/ros/jazzy/setup.bash && exec /bin/bash"]    
     privileged: true
     stdin_open: true # Equivalent to -i
@@ -43,5 +63,4 @@ services:
       DISPLAY: ${DISPLAY}
       QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
     volumes:
-      - ./component_rover_leo_raph:/opt/ros/jazzy/src/component_rover_leo_raph
       - /tmp/.X11-unix:/tmp/.X11-unix:rw

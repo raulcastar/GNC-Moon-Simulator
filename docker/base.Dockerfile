@@ -48,4 +48,7 @@ RUN apt-get update && apt-get install -y \
     nano \
  && rm -rf /var/lib/apt/lists/*
 
+WORKDIR /opt/ros/jazzy/src
+RUN rm -rf ./*
+
 CMD ["bash"]

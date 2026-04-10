@@ -78,6 +78,7 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
             parameters=[
                 ('ip',                    rclpy.Parameter.Type.STRING),
                 ('port',                  rclpy.Parameter.Type.INTEGER),
+                ('camera_id',             rclpy.Parameter.Type.INTEGER),
                 ('debug_mode',            rclpy.Parameter.Type.BOOL),
                 ('image_reading_hz_rate', rclpy.Parameter.Type.DOUBLE),
                 ('enable_object_mask',    rclpy.Parameter.Type.BOOL),
@@ -156,9 +157,10 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
             current_time = self.get_clock().now().to_msg()
 
             # ---------------------------------------------------------
-            # Camera 3: RGB Processing & Publishing
+            # Camera: RGB Processing & Publishing
             # ---------------------------------------------------------
-            res_rgb = self.unreal_client.request('vget /camera/3/lit png')
+            frame_id = f"unreal_camera_{self.camera_id}"
+            res_rgb = self.unreal_client.request(f'vget /camera/{self.camera_id}/lit png')
             if res_rgb:
                 img_rgb_np = read_png(res_rgb)
                 
@@ -175,20 +177,20 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
                 # Construct and publish uncompressed RGB payload
                 msg_rgb = self.cv_bridge.cv2_to_imgmsg(img_rgb_np, encoding="rgb8")                
                 msg_rgb.header.stamp = current_time
-                msg_rgb.header.frame_id = "unreal_camera_3"
+                msg_rgb.header.frame_id = frame_id
                 self._pub_rgb.publish(msg_rgb)
 
                 # Construct and publish JPEG compressed RGB payload
                 img_bgr_np = cv2.cvtColor(img_rgb_np, cv2.COLOR_RGB2BGR)
                 msg_rgb_compressed = self.cv_bridge.cv2_to_compressed_imgmsg(img_bgr_np, dst_format='jpg')
                 msg_rgb_compressed.header.stamp = current_time
-                msg_rgb_compressed.header.frame_id = "unreal_camera_3"
+                msg_rgb_compressed.header.frame_id = frame_id
                 self._pub_rgb_compressed.publish(msg_rgb_compressed)
 
             # ---------------------------------------------------------
-            # Camera 3: Depth Processing & Publishing
+            # Camera: Depth Processing & Publishing
             # ---------------------------------------------------------
-            res_depth = self.unreal_client.request('vget /camera/3/depth npy')
+            res_depth = self.unreal_client.request(f'vget /camera/{self.camera_id}/depth npy')
             if res_depth:
                 depth_np = read_npy(res_depth)
                 
@@ -201,14 +203,14 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
 
                 msg_depth = self.cv_bridge.cv2_to_imgmsg(depth_np, encoding="32FC1")
                 msg_depth.header.stamp = current_time
-                msg_depth.header.frame_id = "unreal_camera_3"
+                msg_depth.header.frame_id = frame_id
                 self._pub_depth.publish(msg_depth)
 
             # ---------------------------------------------------------
-            # Camera 3: Semantic Object Mask & JSON Mapping (Conditional)
+            # Camera: Semantic Object Mask & JSON Mapping (Conditional)
             # ---------------------------------------------------------
             if self.enable_object_mask:
-                res_mask = self.unreal_client.request('vget /camera/3/object_mask png')
+                res_mask = self.unreal_client.request(f'vget /camera/{self.camera_id}/object_mask png')
                 if res_mask:
                     img_mask_np = read_png(res_mask)
                     img_mask_np = img_mask_np.astype(np.uint8)
@@ -221,7 +223,7 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
                     # Publish visual mask image
                     msg_mask = self.cv_bridge.cv2_to_imgmsg(img_mask_np, encoding="rgb8")
                     msg_mask.header.stamp = current_time
-                    msg_mask.header.frame_id = "unreal_camera_3"
+                    msg_mask.header.frame_id = frame_id
                     self._pub_mask.publish(msg_mask)
                     
                     # Publish the cached JSON string payload corresponding to the colors in the mask
@@ -248,6 +250,7 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
 
         # Read Parameters
         self.debug_mode           = self.get_parameter('debug_mode').value
+        self.camera_id            = self.get_parameter('camera_id').value
         self.enable_object_mask   = self.get_parameter('enable_object_mask').value
         self.depth_max_distance   = self.get_parameter('depth_max_distance').value
         config_image_hz_rate      = self.get_parameter('image_reading_hz_rate').value
@@ -255,17 +258,18 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
         config_port               = self.get_parameter('port').value
 
         self.connect_unrealcv(config_ip, config_port)
+        topic_base = f'unreal/camera{self.camera_id}'
 
         # 1. Allocate Base DDS endpoints (Publishers)
-        self._pub_rgb            = self.create_lifecycle_publisher(RosImage, 'unreal/camera3/image_color', 10)
-        self._pub_rgb_compressed = self.create_lifecycle_publisher(CompressedImage, 'unreal/camera3/image_color/compressed', 10)
-        self._pub_depth          = self.create_lifecycle_publisher(RosImage, 'unreal/camera3/image_depth', 10)
+        self._pub_rgb            = self.create_lifecycle_publisher(RosImage, f'{topic_base}/image_color', 10)
+        self._pub_rgb_compressed = self.create_lifecycle_publisher(CompressedImage, f'{topic_base}/image_color/compressed', 10)
+        self._pub_depth          = self.create_lifecycle_publisher(RosImage, f'{topic_base}/image_depth', 10)
 
         # 2. Conditionally allocate Object Mask resources
         if self.enable_object_mask:
             self.get_logger().info("Object masking is ENABLED. Initializing semantic mapping...")
-            self._pub_mask         = self.create_lifecycle_publisher(RosImage, 'unreal/camera3/object_mask', 10)
-            self._pub_mask_mapping = self.create_lifecycle_publisher(String, 'unreal/camera3/object_mask_mapping', 10)
+            self._pub_mask         = self.create_lifecycle_publisher(RosImage, f'{topic_base}/object_mask', 10)
+            self._pub_mask_mapping = self.create_lifecycle_publisher(String, f'{topic_base}/object_mask_mapping', 10)
             self._cached_color_map_json = self._build_color_mapping()
         else:
             self.get_logger().info("Object masking is DISABLED. Semantic mapping bypassed.")
