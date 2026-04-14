@@ -188,16 +188,10 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
 
                 # ---------------------------------------------------------
                 # Position Translation: Unreal Engine (cm) -> ROS 2 (m)
-                # Note: Y-axis is inverted to map from UE's Left-Handed Z-Up 
-                # to ROS 2's Right-Handed Z-Up system (REP-103).
-                # ---------------------------------------------------------
                 odom_msg.pose.pose.position.x = transform['x'] / 100.0
-                odom_msg.pose.pose.position.y = -transform['y'] / 100.0  
+                odom_msg.pose.pose.position.y = transform['y'] / 100.0  
                 odom_msg.pose.pose.position.z = transform['z'] / 100.0
 
-                # ---------------------------------------------------------
-                # Orientation Translation: Euler (deg) -> Quaternion
-                # ---------------------------------------------------------
                 q = self.euler_to_quaternion(transform['roll'], transform['pitch'], transform['yaw'])
                 odom_msg.pose.pose.orientation = q
 
