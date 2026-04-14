@@ -1,0 +1,27 @@
+lc_component_path_planner:
+  ros__parameters:
+    # ---------------------------------------------------------
+    # Map & Environment Configuration
+    # ---------------------------------------------------------
+    elevation_map_path: "maps/generated_elevationMap_40.csv"
+    soil_map_path: "maps/generated_soilMap_1.csv"
+    global_res: 1.0
+    slope_threshold: 30.0
+
+    # ---------------------------------------------------------
+    # Planning & Control Tuning
+    # ---------------------------------------------------------
+    control_rate_hz: 10.0           # The frequency of the DWA control loop
+    lookahead_dist: 7.0             # Distance to look ahead on the global path
+
+    # ---------------------------------------------------------
+    # Mission Waypoints (X, Y)
+    # ---------------------------------------------------------
+    start_pos: [110, 56]
+    goal_pos: [39, 99]
+
+    # ---------------------------------------------------------
+    # Debug & Visualization
+    # ---------------------------------------------------------
+    debug_mode: true
+    enable_path_visualization: true
