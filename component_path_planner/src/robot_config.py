@@ -12,7 +12,7 @@ class Robot():
         # ---------------------------------------------------------
         self.max_speed             = 2.5  # [m/s] 
         self.min_speed             = 0  # [m/s] 
-        self.max_accel             = 5   # [m/ss] 
+        self.max_accel             = 2.5   # [m/ss] 
 
         # Increased slightly so it doesn't take a full minute to turn 180 degrees
         self.max_yaw_rate          = 1.0 * math.pi / 180.0  # [rad/s]

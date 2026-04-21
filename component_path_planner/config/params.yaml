@@ -3,8 +3,8 @@ lc_component_path_planner:
     # ---------------------------------------------------------
     # Map & Environment Configuration
     # ---------------------------------------------------------
-    elevation_map_path: "maps/generated_elevationMap_40.csv"
-    soil_map_path: "maps/generated_soilMap_1.csv"
+    elevation_map_path: "maps/procedural_lunar_terrain_1_elevationMap.csv"
+    soil_map_path: "maps/procedural_lunar_terrain_1_soilMap_edges_0.csv"
     global_res: 1.0
     slope_threshold: 30.0
 
