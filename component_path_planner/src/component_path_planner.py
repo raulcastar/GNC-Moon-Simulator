@@ -296,13 +296,8 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         slope_thresh = self.get_parameter('slope_threshold').value
 
         try:
-            # Flip matrices vertically (up-down) to convert from Image/Matrix 
-            # coordinates (origin top-left) to Cartesian coordinates (origin bottom-left).
-            raw_elevation = np.loadtxt(open(elev_path, "rb"), delimiter=" ", skiprows=0)
-            self.elevationMap = np.fliplr(raw_elevation)
-            
-            raw_soil = np.loadtxt(open(soil_path, "rb"), delimiter=" ", skiprows=0)
-            soilMap = np.fliplr(raw_soil)
+            self.elevationMap = np.loadtxt(open(elev_path, "rb"), delimiter=" ", skiprows=0)
+            soilMap = np.loadtxt(open(soil_path, "rb"), delimiter=" ", skiprows=0)
             
             # Generate navigational costmaps using the properly aligned matrices
             self.costMap, self.obstacleMap, _ = self.path_planner.getCostMap(

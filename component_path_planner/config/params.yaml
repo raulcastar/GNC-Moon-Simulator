@@ -18,7 +18,7 @@ lc_component_path_planner:
     # Mission Waypoints (X, Y)
     # ---------------------------------------------------------
     start_pos: [5, 5]
-    goal_pos: [10, 17]
+    goal_pos: [206, 438]
 
     # ---------------------------------------------------------
     # Debug & Visualization
