@@ -110,7 +110,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         
         # Transform logic: Map specific simulator odometry to the algorithm's global frame
         # (Note: These offsets depend strictly on how the robot spawns in the simulator)
-        x = -raw_x
+        x = raw_x
         y = raw_y
         yaw_offset = 90.0 * math.pi / 180.0  # Rotate 90 degrees to align North = 0 rad
         yaw = -raw_yaw - yaw_offset

@@ -188,8 +188,8 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
 
                 # ---------------------------------------------------------
                 # Position Translation: Unreal Engine (cm) -> ROS 2 (m)
-                odom_msg.pose.pose.position.x = transform['x'] / 100.0
-                odom_msg.pose.pose.position.y = transform['y'] / 100.0  
+                odom_msg.pose.pose.position.x = -transform['x'] / 100.0
+                odom_msg.pose.pose.position.y = transform['y'] / 100.0
                 odom_msg.pose.pose.position.z = transform['z'] / 100.0
 
                 q = self.euler_to_quaternion(transform['roll'], transform['pitch'], transform['yaw'])
