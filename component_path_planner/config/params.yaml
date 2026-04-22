@@ -11,8 +11,8 @@ lc_component_path_planner:
     # ---------------------------------------------------------
     # Planning & Control Tuning
     # ---------------------------------------------------------
-    control_rate_hz: 10.0           # The frequency of the DWA control loop
-    lookahead_dist: 5.0            # Distance to look ahead on the global path
+    control_rate_hz: 10.0          # The frequency of the DWA control loop
+    lookahead_dist: 2.5            # Distance to look ahead on the global path
 
     # ---------------------------------------------------------
     # Mission Waypoints (X, Y)
