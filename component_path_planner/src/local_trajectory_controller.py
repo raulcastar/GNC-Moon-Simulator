@@ -96,7 +96,8 @@ class Local_Trajectory_Controller():
                 trajectory = self.predict_trajectory(x_init, v, y, robot_description)
                 # calc cost
                 to_goal_cost = robot_description.to_goal_cost_gain * self.calc_to_goal_cost(trajectory, goal)
-                speed_cost = robot_description.speed_cost_gain * (robot_description.max_speed - trajectory[-1, 3])
+                target_speed = robot_description.max_speed * math.exp(-to_goal_cost)
+                speed_cost = robot_description.speed_cost_gain * abs(target_speed - trajectory[-1, 3])
                 ob_cost = robot_description.obstacle_cost_gain * self.calc_obstacle_cost(trajectory, ob, robot_description)
 
                 final_cost = to_goal_cost + speed_cost + ob_cost
