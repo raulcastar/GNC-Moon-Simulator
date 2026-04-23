@@ -18,10 +18,16 @@ lc_component_path_planner:
     # Mission Waypoints (X, Y)
     # ---------------------------------------------------------
     start_pos: [5, 5]
-    goal_pos: [206, 438]
+    goal_pos: [200, 200]
 
     # ---------------------------------------------------------
     # Debug & Visualization
     # ---------------------------------------------------------
     debug_mode: true
     enable_path_visualization: true
+
+    # ---------------------------------------------------------
+    # Goal Reached rolerances
+    # ---------------------------------------------------------
+    braking_distance: 4.5    # Start slowing down
+    stop_tolerance: 0.7      # Parking zone radius

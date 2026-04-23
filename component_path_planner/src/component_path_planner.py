@@ -9,6 +9,7 @@ Key Features:
 - Matrix-to-Cartesian coordinate frame transformations.
 - Live Matplotlib telemetry visualization.
 - Deterministic ROS 2 Lifecycle state management (Configure, Activate, Deactivate).
+- System-wide mission status broadcasting (Goal Reached).
 """
 
 import os
@@ -28,6 +29,7 @@ from rclpy.timer import Timer
 
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from std_msgs.msg import Bool  # For broadcasting mission status
 
 # Custom Planner Imports
 from src import global_path_planner
@@ -48,6 +50,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         
         # --- ROS 2 Interfaces ---
         self._pub_cmd_vel: Optional[Publisher] = None
+        self._pub_goal_reached: Optional[Publisher] = None
         self._sub_odom:    Optional[Subscription] = None
         self._control_timer: Optional[Timer] = None
         
@@ -58,6 +61,9 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         # Define robot physical footprint
         self.robot_conf    = robot_config.Robot()
         self.robot_conf._robot_type = 1  # 1 = Rectangular Footprint
+        
+        # Store the absolute max speed so we can restore it after braking
+        self._base_max_speed = self.robot_conf.max_speed
 
         # --- Internal State Tracking ---
         self.robot_pose = None  # [x, y, yaw, linear_vel, angular_vel]
@@ -82,7 +88,9 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 ('lookahead_dist',     7.0),
                 ('goal_pos',           [39, 99]),
                 ('control_rate_hz',    10.0),
-                ('enable_path_visualization', True)
+                ('enable_path_visualization', True),
+                ('braking_distance',   3.0),
+                ('stop_tolerance',     0.5)
             ])
 
         # Initialize interactive plotting if visualization is enabled
@@ -144,7 +152,8 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
     def control_loop_callback(self) -> None:
         """
         High-frequency timer callback managing the DWA local controller.
-        Calculates optimal command velocities to follow the global path.
+        Calculates optimal command velocities to follow the global path,
+        manages smooth deceleration, and prevents goal-state singularities.
         """
         # Abort if sensors haven't provided a valid pose yet
         if self.robot_pose is None:
@@ -157,21 +166,58 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             self._compute_global_path([start_x, start_y])
             return 
 
+        # ---------------------------------------------------------
+        # 1. STATE LATCH: KEEP IT PARKED
+        # If we already reached the goal, continually apply the brakes 
+        # and completely bypass the DWA math.
+        # ---------------------------------------------------------
         if self.goal_reached:
+            self._stop_robot()
             return
 
         goal = self.get_parameter('goal_pos').value
         dist_to_goal = math.hypot(self.robot_pose[0] - goal[0], self.robot_pose[1] - goal[1])
         
-        # Halt execution and secure the robot if the goal threshold is breached
-        if dist_to_goal <= self.robot_conf.robot_radius:
-            if not self.goal_reached:
-                self.get_logger().info("Goal Reached! Securing rover.")
-                self.goal_reached = True
-                self._stop_robot()
+        # ---------------------------------------------------------
+        # 2. HARD STOP & MISSION STATUS
+        # Ensure minimum tolerance of 0.5m to prevent high-speed overshoots
+        # ---------------------------------------------------------
+        base_tolerance = self.get_parameter('stop_tolerance').value
+        stop_tolerance = max(self.robot_conf.robot_radius, base_tolerance) 
+
+        if dist_to_goal <= stop_tolerance:
+            self.get_logger().info(f"Goal {goal} Reached! Securing rover.")
+            self.goal_reached = True
+            
+            # Broadcast to the rest of the ROS 2 system that the rover is parked
+            if self._pub_goal_reached and self._pub_goal_reached.is_activated:
+                status_msg = Bool()
+                status_msg.data = True
+                self._pub_goal_reached.publish(status_msg)
+            
+            self._stop_robot()
+            
+            # One final UI update to show the robot resting on the target
+            if self.get_parameter('enable_path_visualization').value:
+                self._update_live_plot(np.array([self.robot_pose]), goal)
             return
 
-        # Execute Dynamic Window Approach (DWA) for local obstacle avoidance
+        # ---------------------------------------------------------
+        # 3. SMOOTH BRAKING ZONE
+        # Dynamically clamp DWA max linear speed as we approach
+        # ---------------------------------------------------------
+        braking_distance = self.get_parameter('braking_distance').value
+          
+        if dist_to_goal < braking_distance:
+            # Linearly scale speed down, but maintain a minimum crawl (0.2 m/s)
+            scaled_speed = self._base_max_speed * (dist_to_goal / braking_distance)
+            self.robot_conf.max_speed = max(scaled_speed, 0.2)
+        else:
+            self.robot_conf.max_speed = self._base_max_speed
+
+        # ---------------------------------------------------------
+        # 4. EXECUTE DWA AND APPLY YAW DAMPING
+        # ---------------------------------------------------------
         try:
             lookahead = self.get_parameter('lookahead_dist').value
             local_goal = self.local_planner.get_lookahead_point(self.robot_pose, self.global_path, lookahead)
@@ -179,6 +225,17 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             cmd_vel_arr, predicted_trajectory = self.local_planner.dwa_control(
                 self.robot_pose, self.robot_conf, np.array(local_goal), self.obstacles
             )
+
+            # Prevent the "Death Spiral": As the rover brakes near the target, 
+            # dampen the steering authority so it doesn't panic and spin in place.
+            if dist_to_goal < braking_distance:
+                # Smoothly reduce maximum steering authority
+                yaw_damping_factor = dist_to_goal / braking_distance
+                cmd_vel_arr[1] *= yaw_damping_factor
+
+                # Lock the steering straight for the final 1-meter approach
+                if dist_to_goal < (stop_tolerance + 1.0):
+                    cmd_vel_arr[1] = 0.0
 
             # Package and publish velocity commands
             twist_msg = Twist()
@@ -198,6 +255,8 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         """Publishes zero-velocity commands to halt the rover."""
         if self._pub_cmd_vel and self._pub_cmd_vel.is_activated:
             msg = Twist()
+            msg.linear.x = 0.0
+            msg.angular.z = 0.0
             self._pub_cmd_vel.publish(msg)
 
     # =========================================================================
@@ -318,6 +377,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             return TransitionCallbackReturn.FAILURE
 
         self._pub_cmd_vel = self.create_lifecycle_publisher(Twist, 'cmd_vel', 10)
+        self._pub_goal_reached = self.create_lifecycle_publisher(Bool, 'mission_status/goal_reached', 10)
         self._sub_odom    = self.create_subscription(Odometry, 'odom', self.odom_callback, 10)
 
         return TransitionCallbackReturn.SUCCESS
@@ -326,7 +386,14 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         """Engages the control loop timer."""
         self.get_logger().info("Lifecycle state transition: ACTIVE.")
         rate_hz = self.get_parameter('control_rate_hz').value
+        
+        # Reset goal tracking for new activation
         self.goal_reached = False
+        if self._pub_goal_reached and self._pub_goal_reached.is_activated:
+            msg = Bool()
+            msg.data = False
+            self._pub_goal_reached.publish(msg)
+            
         self._control_timer = self.create_timer(1.0 / rate_hz, self.control_loop_callback)
         return super().on_activate(state)
 
@@ -342,6 +409,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         """Tears down interfaces and closes open windows."""
         if self._sub_odom: self.destroy_subscription(self._sub_odom)
         if self._pub_cmd_vel: self.destroy_publisher(self._pub_cmd_vel)
+        if self._pub_goal_reached: self.destroy_publisher(self._pub_goal_reached)
         plt.close('all')
         return TransitionCallbackReturn.SUCCESS
 
@@ -349,6 +417,10 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         """Emergency node termination protocol."""
         if self._control_timer: self._control_timer.cancel()
         self._stop_robot()
+        
+        if self._sub_odom: self.destroy_subscription(self._sub_odom)
+        if self._pub_cmd_vel: self.destroy_publisher(self._pub_cmd_vel)
+        if self._pub_goal_reached: self.destroy_publisher(self._pub_goal_reached)
         plt.close('all')
         return TransitionCallbackReturn.SUCCESS
 
@@ -363,6 +435,8 @@ def main():
     try:
         executor.spin()
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
+        pass
+    finally:
         lc_node.destroy_node()
 
 if __name__ == '__main__':
