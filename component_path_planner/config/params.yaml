@@ -11,8 +11,28 @@ lc_component_path_planner:
     # ---------------------------------------------------------
     # Planning & Control Tuning
     # ---------------------------------------------------------
-    control_rate_hz: 10.0          # The frequency of the DWA control loop
-    lookahead_dist: 2.5            # Distance to look ahead on the global path
+    control_rate_hz: 10.0         # The frequency of the DWA control loop
+    lookahead_dist: 2.5           # Distance to look ahead on the global path
+    max_speed: 2.5                # [m/s]
+    min_speed: 0.0                # [m/s]
+    max_accel: 2.5                # [m/s^2] 
+    max_yaw_rate_deg: 1.5         # Degrees per second
+    max_delta_yaw_rate_deg: 1.5   # Degrees per second squared
+    v_resolution: 0.01
+    yaw_rate_resolution_deg: 0.1
+    
+    # DWA Prediction & Costs
+    dt: 0.1                       # [s]
+    predict_time: 10.0            # [s]
+    to_goal_cost_gain: 1.0
+    speed_cost_gain: 1.0
+    obstacle_cost_gain: 1.0
+    robot_stuck_flag_cons: 0.001
+    
+    # Robot Geometry
+    robot_width: 0.35             # [m]
+    robot_length: 0.35            # [m]
+    robot_radius: 0.35            # [m]
 
     # ---------------------------------------------------------
     # Mission Waypoints (X, Y)

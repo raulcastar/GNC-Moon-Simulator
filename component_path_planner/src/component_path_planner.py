@@ -18,6 +18,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Optional
 import warnings
+from types import SimpleNamespace
 
 from ament_index_python.packages import get_package_share_directory
 
@@ -34,7 +35,6 @@ from std_msgs.msg import Bool  # For broadcasting mission status
 # Custom Planner Imports
 from src import global_path_planner
 from src import local_trajectory_controller
-from src import robot_config
 
 # Suppress Matplotlib GUI warnings during live ROS 2 execution
 warnings.filterwarnings("ignore")
@@ -58,12 +58,9 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         self.path_planner  = global_path_planner.Global_Path_Planner()
         self.local_planner = local_trajectory_controller.Local_Trajectory_Controller()
         
-        # Define robot physical footprint
-        self.robot_conf    = robot_config.Robot()
-        self.robot_conf._robot_type = 1  # 1 = Rectangular Footprint
-        
-        # Store the absolute max speed so we can restore it after braking
-        self._base_max_speed = self.robot_conf.max_speed
+        # Define robot DWA characteristics
+        self.robot_conf      =  SimpleNamespace()
+        self._base_max_speed = 0.0
 
         # --- Internal State Tracking ---
         self.robot_pose = None  # [x, y, yaw, linear_vel, angular_vel]
@@ -90,7 +87,25 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 ('control_rate_hz',    10.0),
                 ('enable_path_visualization', True),
                 ('braking_distance',   3.0),
-                ('stop_tolerance',     0.5)
+                ('stop_tolerance',     0.5),
+
+                # DWA parameters
+                ('max_speed', 2.5),
+                ('min_speed', 0.0),
+                ('max_accel', 2.5),
+                ('max_yaw_rate_deg', 1.5),
+                ('max_delta_yaw_rate_deg', 1.5),
+                ('v_resolution', 0.01),
+                ('yaw_rate_resolution_deg', 0.1),
+                ('dt', 0.1),
+                ('predict_time', 10.0),
+                ('to_goal_cost_gain', 1.0),
+                ('speed_cost_gain', 1.0),
+                ('obstacle_cost_gain', 1.0),
+                ('robot_stuck_flag_cons', 0.001),
+                ('robot_width', 0.35),
+                ('robot_length', 0.35),
+                ('robot_radius', 0.35)
             ])
 
         # Initialize interactive plotting if visualization is enabled
@@ -207,7 +222,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         # Dynamically clamp DWA max linear speed as we approach
         # ---------------------------------------------------------
         braking_distance = self.get_parameter('braking_distance').value
-          
+
         if dist_to_goal < braking_distance:
             # Linearly scale speed down, but maintain a minimum crawl (0.2 m/s)
             scaled_speed = self._base_max_speed * (dist_to_goal / braking_distance)
@@ -347,6 +362,29 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         """Loads files, transforms matrices, and initializes publishers."""
         self.get_logger().info("Lifecycle state transition: CONFIGURED.")
 
+        # ---------------------------------------------------------
+        # DYNAMICALLY BUILD THE ROBOT CONFIGURATION FROM YAML
+        # ---------------------------------------------------------
+        self.robot_conf.max_speed = self.get_parameter('max_speed').value
+        self.robot_conf.min_speed = self.get_parameter('min_speed').value
+        self.robot_conf.max_accel = self.get_parameter('max_accel').value
+        self.robot_conf.max_yaw_rate = math.radians(self.get_parameter('max_yaw_rate_deg').value)
+        self.robot_conf.max_delta_yaw_rate = math.radians(self.get_parameter('max_delta_yaw_rate_deg').value)
+        self.robot_conf.yaw_rate_resolution = math.radians(self.get_parameter('yaw_rate_resolution_deg').value)
+        self.robot_conf.v_resolution = self.get_parameter('v_resolution').value
+        self.robot_conf.dt = self.get_parameter('dt').value
+        self.robot_conf.predict_time = self.get_parameter('predict_time').value
+        self.robot_conf.to_goal_cost_gain = self.get_parameter('to_goal_cost_gain').value
+        self.robot_conf.speed_cost_gain = self.get_parameter('speed_cost_gain').value
+        self.robot_conf.obstacle_cost_gain = self.get_parameter('obstacle_cost_gain').value
+        self.robot_conf.robot_stuck_flag_cons = self.get_parameter('robot_stuck_flag_cons').value
+        self.robot_conf.robot_type = 1 # 1 = Rectangular
+        self.robot_conf.robot_width = self.get_parameter('robot_width').value
+        self.robot_conf.robot_length = self.get_parameter('robot_length').value
+        self.robot_conf.robot_radius = self.get_parameter('robot_radius').value
+        self._base_max_speed = self.robot_conf.max_speed
+
+        # Getting maps
         pkg_share_dir = get_package_share_directory('component_path_planner')
         elev_path = os.path.join(pkg_share_dir, self.get_parameter('elevation_map_path').value)
         soil_path = os.path.join(pkg_share_dir, self.get_parameter('soil_map_path').value)
