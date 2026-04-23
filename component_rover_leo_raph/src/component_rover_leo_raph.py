@@ -23,6 +23,7 @@ from rclpy.subscription import Subscription
 # Standard ROS 2 messages for kinematics and state estimation
 from geometry_msgs.msg import Twist, Quaternion
 from nav_msgs.msg import Odometry
+from std_msgs.msg import Bool
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -48,7 +49,11 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         
         # ROS 2 Interfaces
         self._sub_cmd_vel: Optional[Subscription] = None
+        self._sub_headlights: Optional[Subscription] = None 
         self._pub_odom:    Optional[Publisher] = None
+        
+        # Rover State
+        self.headlights_on: bool = False
         
         # Network Utilities: Transmission
         self.udp_send_socket: Optional[socket.socket] = None
@@ -69,11 +74,12 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self.declare_parameters(
             namespace='',
             parameters=[
-                ('sending_ip',  rclpy.Parameter.Type.STRING),
-                ('sending_port',rclpy.Parameter.Type.INTEGER),
-                ('listen_ip',   rclpy.Parameter.Type.STRING),
-                ('listen_port', rclpy.Parameter.Type.INTEGER),
-                ('rover_width', rclpy.Parameter.Type.DOUBLE),
+                ('sending_ip',   rclpy.Parameter.Type.STRING),
+                ('sending_port', rclpy.Parameter.Type.INTEGER),
+                ('listen_ip',    rclpy.Parameter.Type.STRING),
+                ('listen_port',  rclpy.Parameter.Type.INTEGER),
+                ('rover_width',  rclpy.Parameter.Type.DOUBLE),
+                ('headlights_on', rclpy.Parameter.Type.BOOL),
             ])
 
     # =========================================================================
@@ -83,14 +89,6 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
     def euler_to_quaternion(self, roll_deg: float, pitch_deg: float, yaw_deg: float) -> Quaternion:
         """
         Translates Euler angles (degrees) into a ROS 2 compliant Quaternion.
-
-        Args:
-            roll_deg (float): Roll angle in degrees.
-            pitch_deg (float): Pitch angle in degrees.
-            yaw_deg (float): Yaw angle in degrees.
-
-        Returns:
-            Quaternion: The computed quaternion representation.
         """
         # Convert degrees to radians to satisfy standard trigonometric functions
         roll_rad = math.radians(roll_deg)
@@ -115,13 +113,6 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
     def twist_to_wheels(self, v: float, w: float) -> dict:
         """
         Computes Inverse Kinematics for a 4-wheel skid-steer/differential vehicle.
-
-        Args:
-            v (float): Desired linear velocity in meters per second.
-            w (float): Desired angular velocity in radians per second.
-
-        Returns:
-            dict: JSON-serializable mapping of individual wheel identifiers to required velocities.
         """
         # Compute individual side velocities based on chassis track width
         vel_left  = v - (w * self.rover_width / 2.0)
@@ -132,22 +123,26 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
             "FL": -vel_left,
             "BL": -vel_left,
             "FR": -vel_right,
-            "BR": -vel_right
+            "BR": -vel_right,
+            "headlights_on": self.headlights_on
         }
 
     # =========================================================================
     # Core Callbacks & Background Threads
     # =========================================================================
 
+    def headlights_callback(self, msg: Bool) -> None:
+        """
+        Updates the internal state of the headlights based on incoming ROS 2 commands.
+        """
+        self.headlights_on = msg.data
+        headlights_commands = {"headlights_on": self.headlights_on}
+        self.udp_send_socket.sendto(json.dumps(headlights_commands).encode('utf-8'), (self.target_ip, self.target_port))
+        self.get_logger().info(f"Headlights toggled: {'ON' if self.headlights_on else 'OFF'}")
+
     def cmd_vel_callback(self, msg: Twist) -> None:
         """
         Processes incoming linear/angular velocity commands and dispatches them via UDP.
-
-        Execution drops immediately if the socket is uninitialized or the node is inactive, 
-        preventing hardware faults or runaway logic.
-
-        Args:
-            msg (Twist): Standard ROS 2 velocity command.
         """
         try:
             wheel_commands = self.twist_to_wheels(msg.linear.x, msg.angular.z)
@@ -159,10 +154,6 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
     def _udp_receive_loop(self) -> None:
         """
         Background thread loop for handling incoming UDP telemetry asynchronously.
-
-        Receives JSON payloads, performs Left-Handed (UE) to Right-Handed (ROS) 
-        coordinate transformations, converts Centimeters to Meters, and publishes Odometry.
-        Utilizes socket timeouts to ensure safe thread termination.
         """
         self.get_logger().info(f"Telemetry listener thread initialized on port {self.listen_port}.")
         
@@ -215,7 +206,6 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
     def on_configure(self, state: State) -> TransitionCallbackReturn:
         """
         Transition callback for node configuration.
-        Initializes parameter cache, binds UDP sockets, and allocates ROS 2 interfaces.
         """
         self.get_logger().info("Lifecycle state transition: CONFIGURED.")
 
@@ -224,7 +214,8 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self.listen_ip   = self.get_parameter('listen_ip').value
         self.listen_port = self.get_parameter('listen_port').value
         self.rover_width = self.get_parameter('rover_width').value
-
+        self.headlights_on = self.get_parameter('headlights_on').value
+        
         # Initialize Transmission Socket (Unbound UDP Datagram)
         try:
             self.udp_send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -239,17 +230,24 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         except socket.error as e:
             self.get_logger().error(f"Failed to bind UDP reception socket on port {self.listen_port}: {e}")
             return TransitionCallbackReturn.FAILURE
+        
+        # Send initial commands
+        if self.udp_send_socket:
+            stop_commands = {"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0, "headlights_on": self.headlights_on}
+            self.udp_send_socket.sendto(json.dumps(stop_commands).encode('utf-8'), (self.target_ip, self.target_port))
 
         # Allocate standard pub/sub endpoints
         self._pub_odom    = self.create_lifecycle_publisher(Odometry, 'odom', 10)
         self._sub_cmd_vel = self.create_subscription(Twist, 'cmd_vel', self.cmd_vel_callback, 10)
+        
+        # Allocate headlights subscription
+        self._sub_headlights = self.create_subscription(Bool, 'headlights_cmd', self.headlights_callback, 10)
 
         return TransitionCallbackReturn.SUCCESS
 
     def on_activate(self, state: State) -> TransitionCallbackReturn:
         """
         Transition callback for node activation.
-        Spawns the background telemetry thread and transitions publishers to active status.
         """
         self.get_logger().info("Lifecycle state transition: ACTIVE.")
         
@@ -263,13 +261,12 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
     def on_deactivate(self, state: State) -> TransitionCallbackReturn:
         """
         Transition callback for node deactivation.
-        Halts the physical robot and safely joins the telemetry listening thread.
         """
         self.get_logger().info("Lifecycle state transition: DEACTIVATED.")
         
         # 1. Dispatch absolute zero velocities to enforce a hardware/simulation halt
         if self.udp_send_socket:
-            stop_commands = {"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0}
+            stop_commands = {"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0, "headlights_on": False} # Turn off lights on stop
             self.udp_send_socket.sendto(json.dumps(stop_commands).encode('utf-8'), (self.target_ip, self.target_port))
 
         # 2. Assert thread termination and await its graceful exit (max 1 second block)
@@ -282,12 +279,15 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
     def on_cleanup(self, state: State) -> TransitionCallbackReturn:
         """
         Transition callback for node cleanup.
-        Deallocates ROS 2 interfaces and aggressively releases system network sockets.
         """
         self.get_logger().info('Lifecycle state transition: CLEANING UP.')
         
         if self._sub_cmd_vel:
             self.destroy_subscription(self._sub_cmd_vel)
+            
+        if self._sub_headlights:
+            self.destroy_subscription(self._sub_headlights)
+            
         if self._pub_odom:
             self.destroy_publisher(self._pub_odom)
             
@@ -304,7 +304,6 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
     def on_shutdown(self, state: State) -> TransitionCallbackReturn:
         """
         Transition callback for node shutdown.
-        Ensures thread safety and network closure regardless of current execution state.
         """
         self.get_logger().info('Lifecycle state transition: SHUTTING DOWN.')
         
@@ -315,6 +314,10 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
             
         if self._sub_cmd_vel:
             self.destroy_subscription(self._sub_cmd_vel)
+            
+        if self._sub_headlights:
+            self.destroy_subscription(self._sub_headlights)
+            
         if self._pub_odom:
             self.destroy_publisher(self._pub_odom)
             
@@ -329,9 +332,6 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
 def main():
     """
     Entry point for the executable. 
-    Initializes the ROS 2 system context, registers the node to a SingleThreadedExecutor 
-    (as complex blocking network I/O is safely deferred to native Python threads), 
-    and handles graceful execution spinning.
     """
     rclpy.init()
 

@@ -5,3 +5,4 @@ lc_component_rover_leo_raph:
     listen_ip:                       0.0.0.0
     listen_port:                        3001
     rover_width:                        35.0 # centimeters, distance between left and right wheels
+    headlights_on:                      true
