@@ -1,15 +1,16 @@
 """
 ROS 2 Lifecycle Node: Global Path Planning & DWA Local Trajectory Control
--------------------------------------------------------------------------
+
 This module implements a managed lifecycle node for autonomous rover navigation 
 on procedural lunar terrain. It bridges global A*/Dijkstra pathfinding with a 
-Dynamic Window Approach (DWA) local controller.
+Dynamic Window Approach (DWA) local kinematic controller.
 
-Key Features:
+Key Capabilities:
 - Matrix-to-Cartesian coordinate frame transformations.
-- Live Matplotlib telemetry visualization.
-- Deterministic ROS 2 Lifecycle state management (Configure, Activate, Deactivate).
-- System-wide mission status broadcasting (Goal Reached).
+- Live Matplotlib telemetry and trajectory visualization.
+- Deterministic ROS 2 Lifecycle state management.
+- System-wide mission status broadcasting via state latches.
+- Dynamic asynchronous goal allocation via standard ROS 2 PoseStamped topics.
 """
 
 import os
@@ -17,8 +18,8 @@ import math
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Optional
-import warnings
 from types import SimpleNamespace
+import warnings
 
 from ament_index_python.packages import get_package_share_directory
 
@@ -28,9 +29,9 @@ from rclpy.lifecycle import Publisher, State, TransitionCallbackReturn
 from rclpy.subscription import Subscription
 from rclpy.timer import Timer
 
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, PoseStamped
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Bool  # For broadcasting mission status
+from std_msgs.msg import Bool
 
 # Custom Planner Imports
 from src import global_path_planner
@@ -43,7 +44,7 @@ warnings.filterwarnings("ignore")
 class LifecyclePlannerController(rclpy.lifecycle.Node):
     """
     Lifecycle node managing the high-level routing and low-level kinematics 
-    of the lunar rover.
+    of the rover platform.
     """
     def __init__(self, node_name: str, **kwargs):
         super().__init__(node_name, **kwargs)
@@ -52,18 +53,20 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         self._pub_cmd_vel: Optional[Publisher] = None
         self._pub_goal_reached: Optional[Publisher] = None
         self._sub_odom:    Optional[Subscription] = None
+        self._sub_goal:    Optional[Subscription] = None
         self._control_timer: Optional[Timer] = None
         
         # --- Planner Instances ---
         self.path_planner  = global_path_planner.Global_Path_Planner()
         self.local_planner = local_trajectory_controller.Local_Trajectory_Controller()
         
-        # Define robot DWA characteristics
-        self.robot_conf      =  SimpleNamespace()
+        # Dynamic configuration namespace populated during the on_configure transition
+        self.robot_conf = SimpleNamespace()
         self._base_max_speed = 0.0
 
         # --- Internal State Tracking ---
-        self.robot_pose = None  # [x, y, yaw, linear_vel, angular_vel]
+        self.robot_pose = None      # Vector: [x, y, yaw, linear_vel, angular_vel]
+        self.current_goal = None    # Vector: [x, y]
         self.global_path = None
         self.obstacles = np.array([])
         self.trajectory_history = []
@@ -78,18 +81,23 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         self.declare_parameters(
             namespace='',
             parameters=[
+                # Filepaths and Map configuration
                 ('elevation_map_path', 'maps/generated_elevationMap_40.csv'),
                 ('soil_map_path',      'maps/generated_soilMap_1.csv'),
                 ('global_res',         1.0),
                 ('slope_threshold',    30.0),
                 ('lookahead_dist',     7.0),
                 ('goal_pos',           [39, 99]),
+                
+                # Execution and UI
                 ('control_rate_hz',    10.0),
                 ('enable_path_visualization', True),
+                
+                # Terminal Approach Tolerances
                 ('braking_distance',   3.0),
                 ('stop_tolerance',     0.5),
-
-                # DWA parameters
+                
+                # DWA and Kinematic Constraints
                 ('max_speed', 2.5),
                 ('min_speed', 0.0),
                 ('max_accel', 2.5),
@@ -103,12 +111,13 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 ('speed_cost_gain', 1.0),
                 ('obstacle_cost_gain', 1.0),
                 ('robot_stuck_flag_cons', 0.001),
+                
+                # Physical Footprint
                 ('robot_width', 0.35),
                 ('robot_length', 0.35),
                 ('robot_radius', 0.35)
             ])
 
-        # Initialize interactive plotting if visualization is enabled
         if self.get_parameter('enable_path_visualization').value:
             plt.ion()
 
@@ -117,25 +126,33 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
     # =========================================================================
 
     def yaw_from_quaternion(self, q) -> float:
-        """Converts a ROS geometry_msgs Quaternion into a Euler Yaw angle (radians)."""
+        """
+        Extracts the Euler yaw angle from a geometry_msgs Quaternion.
+        
+        Args:
+            q (Quaternion): The orientation quaternion.
+            
+        Returns:
+            float: Yaw angle in radians.
+        """
         siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
         cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
         return math.atan2(siny_cosp, cosy_cosp)
 
     def odom_callback(self, msg: Odometry) -> None:
         """
-        Processes incoming odometry data and aligns the robot's coordinate 
-        frame with the global Cartesian map frame.
+        Processes telemetry data and maps the local odometry frame to the 
+        global Cartesian environment frame.
         """
         raw_x = msg.pose.pose.position.x
         raw_y = msg.pose.pose.position.y
         raw_yaw = self.yaw_from_quaternion(msg.pose.pose.orientation)
         
-        # Transform logic: Map specific simulator odometry to the algorithm's global frame
-        # (Note: These offsets depend strictly on how the robot spawns in the simulator)
+        # Apply static rotational offset to align the simulation forward vector
+        # with the algorithmic Cartesian grid (North = 0 rad)
         x = raw_x
         y = raw_y
-        yaw_offset = 90.0 * math.pi / 180.0  # Rotate 90 degrees to align North = 0 rad
+        yaw_offset = 90.0 * math.pi / 180.0
         yaw = -raw_yaw - yaw_offset
         
         v = msg.twist.twist.linear.x
@@ -143,68 +160,96 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         
         self.robot_pose = np.array([x, y, yaw, v, omega])
         
-        # Record trajectory history for plotting (downsampled to 0.1m resolution)
+        # Downsample trajectory recording to 0.1m intervals to prevent memory saturation
         if len(self.trajectory_history) == 0 or \
            math.hypot(x - self.trajectory_history[-1][0], y - self.trajectory_history[-1][1]) > 0.1:
             self.trajectory_history.append([x, y])
+
+    def goal_pose_callback(self, msg: PoseStamped) -> None:
+        """
+        Asynchronous callback for dynamic waypoint assignment.
+        Interrupts the active control loop and forces a global path recalculation.
+        """
+        new_x = msg.pose.position.x
+        new_y = msg.pose.position.y
+        
+        self.get_logger().info(f"Waypoint update received: [{new_x:.2f}, {new_y:.2f}]. Suspending kinematics for recalculation.")
+        
+        # Enforce zero-velocity state to prevent drifting during computational blocking
+        self._stop_robot()
+        
+        # Reset tracking states to trigger the routing subroutines
+        self.current_goal = [new_x, new_y]
+        self.global_path = None
+        self.goal_reached = False 
+        
+        # Invalidate the previous mission completion state across the ROS 2 network
+        if self._pub_goal_reached and self._pub_goal_reached.is_activated:
+            status_msg = Bool()
+            status_msg.data = False
+            self._pub_goal_reached.publish(status_msg)
 
     # =========================================================================
     # CORE CONTROL LOOP & PATHING
     # =========================================================================
 
-    def _compute_global_path(self, start_pos: list):
-        """Calculates the optimal global route using the generated costmaps."""
-        goal_pos = self.get_parameter('goal_pos').value
-        self.get_logger().info(f"Computing Global Path from {start_pos} to {goal_pos}...")
+    def _compute_global_path(self, start_pos: list) -> None:
+        """
+        Generates the optimal global route bridging the starting coordinate 
+        to the target coordinate using the processed costmap matrices.
+        """
+        if self.current_goal is None:
+            return
+
+        # Ensure target coordinates are integers to prevent NumPy matrix indexing faults
+        goal_x = int(round(self.current_goal[0]))
+        goal_y = int(round(self.current_goal[1]))
+        grid_goal = [goal_x, goal_y]
+
+        self.get_logger().info(f"Computing global trajectory from {start_pos} to {grid_goal}...")
 
         try:
-            Tmap = self.path_planner.computeTmap(self.costMap, self.obstacleMap, goal_pos, start_pos)
-            self.global_path = self.path_planner.getPathGDM(Tmap, np.asarray(start_pos), np.asarray(goal_pos), 0.4)
-            self.get_logger().info("Global Path successfully computed!")
+            Tmap = self.path_planner.computeTmap(self.costMap, self.obstacleMap, grid_goal, start_pos)
+            self.global_path = self.path_planner.getPathGDM(Tmap, np.asarray(start_pos), np.asarray(grid_goal), 0.4)
+            self.get_logger().info("Global trajectory resolved. Resuming kinematic control.")
         except Exception as e:
-            self.get_logger().error(f"Failed to generate Global Path: {e}")
+            self.get_logger().error(f"Global path generation fault: {e}")
 
     def control_loop_callback(self) -> None:
         """
-        High-frequency timer callback managing the DWA local controller.
-        Calculates optimal command velocities to follow the global path,
-        manages smooth deceleration, and prevents goal-state singularities.
+        High-frequency timer callback executing the DWA local controller.
+        Calculates actuator commands, manages terminal deceleration, and handles 
+        singularity avoidance near the goal coordinate.
         """
-        # Abort if sensors haven't provided a valid pose yet
-        if self.robot_pose is None:
+        # Suspend execution if spatial context is unavailable
+        if self.robot_pose is None or self.current_goal is None:
             return 
 
-        # Generate the initial route if one does not exist
+        # Halt kinematics and defer to the global planner if no valid route exists
         if self.global_path is None:
+            self._stop_robot()
             start_x = int(round(self.robot_pose[0]))
             start_y = int(round(self.robot_pose[1]))
             self._compute_global_path([start_x, start_y])
             return 
 
-        # ---------------------------------------------------------
-        # 1. STATE LATCH: KEEP IT PARKED
-        # If we already reached the goal, continually apply the brakes 
-        # and completely bypass the DWA math.
-        # ---------------------------------------------------------
+        # 1. State Latch: Prevent odometry drift from re-triggering the controller post-arrival
         if self.goal_reached:
             self._stop_robot()
             return
 
-        goal = self.get_parameter('goal_pos').value
-        dist_to_goal = math.hypot(self.robot_pose[0] - goal[0], self.robot_pose[1] - goal[1])
+        dist_to_goal = math.hypot(self.robot_pose[0] - self.current_goal[0], self.robot_pose[1] - self.current_goal[1])
         
         # ---------------------------------------------------------
-        # 2. HARD STOP & MISSION STATUS
-        # Ensure minimum tolerance of 0.5m to prevent high-speed overshoots
+        # Terminal Stopping Condition & Network Broadcasting
         # ---------------------------------------------------------
         base_tolerance = self.get_parameter('stop_tolerance').value
         stop_tolerance = max(self.robot_conf.robot_radius, base_tolerance) 
 
         if dist_to_goal <= stop_tolerance:
-            self.get_logger().info(f"Goal {goal} Reached! Securing rover.")
+            self.get_logger().info(f"Target {self.current_goal} achieved. Engaging parking brake.")
             self.goal_reached = True
             
-            # Broadcast to the rest of the ROS 2 system that the rover is parked
             if self._pub_goal_reached and self._pub_goal_reached.is_activated:
                 status_msg = Bool()
                 status_msg.data = True
@@ -212,26 +257,24 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             
             self._stop_robot()
             
-            # One final UI update to show the robot resting on the target
             if self.get_parameter('enable_path_visualization').value:
-                self._update_live_plot(np.array([self.robot_pose]), goal)
+                self._update_live_plot(np.array([self.robot_pose]), self.current_goal)
             return
 
         # ---------------------------------------------------------
-        # 3. SMOOTH BRAKING ZONE
-        # Dynamically clamp DWA max linear speed as we approach
+        # Kinematic Deceleration Profile
         # ---------------------------------------------------------
         braking_distance = self.get_parameter('braking_distance').value
-
+          
         if dist_to_goal < braking_distance:
-            # Linearly scale speed down, but maintain a minimum crawl (0.2 m/s)
+            # Linearly attenuate maximum velocity to prevent target overshoot
             scaled_speed = self._base_max_speed * (dist_to_goal / braking_distance)
             self.robot_conf.max_speed = max(scaled_speed, 0.2)
         else:
             self.robot_conf.max_speed = self._base_max_speed
 
         # ---------------------------------------------------------
-        # 4. EXECUTE DWA AND APPLY YAW DAMPING
+        # Trajectory Optimization & Singularity Avoidance
         # ---------------------------------------------------------
         try:
             lookahead = self.get_parameter('lookahead_dist').value
@@ -241,33 +284,30 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 self.robot_pose, self.robot_conf, np.array(local_goal), self.obstacles
             )
 
-            # Prevent the "Death Spiral": As the rover brakes near the target, 
-            # dampen the steering authority so it doesn't panic and spin in place.
+            # Prevent angular oscillation ("Death Spiral") caused by DWA resolving
+            # atan2 boundaries when directly over the target coordinate.
             if dist_to_goal < braking_distance:
-                # Smoothly reduce maximum steering authority
                 yaw_damping_factor = dist_to_goal / braking_distance
                 cmd_vel_arr[1] *= yaw_damping_factor
-
-                # Lock the steering straight for the final 1-meter approach
+                
+                # Lock steering actuator vector for the final approach segment
                 if dist_to_goal < (stop_tolerance + 1.0):
                     cmd_vel_arr[1] = 0.0
 
-            # Package and publish velocity commands
             twist_msg = Twist()
             twist_msg.linear.x = float(cmd_vel_arr[0])
             twist_msg.angular.z = float(cmd_vel_arr[1])
             self._pub_cmd_vel.publish(twist_msg)
 
-            # Refresh live UI
             if self.get_parameter('enable_path_visualization').value:
-                self._update_live_plot(predicted_trajectory, goal)
+                self._update_live_plot(predicted_trajectory, self.current_goal)
 
         except Exception as e:
-            self.get_logger().error(f"Error in local control loop: {e}")
+            self.get_logger().error(f"DWA algorithmic fault: {e}")
             self._stop_robot()
 
-    def _stop_robot(self):
-        """Publishes zero-velocity commands to halt the rover."""
+    def _stop_robot(self) -> None:
+        """Transmits absolute zero-velocity limits to the hardware/simulation actuators."""
         if self._pub_cmd_vel and self._pub_cmd_vel.is_activated:
             msg = Twist()
             msg.linear.x = 0.0
@@ -278,53 +318,51 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
     # VISUALIZATION TELEMETRY
     # =========================================================================
 
-    def _preview_full_maps(self):
+    def _preview_full_maps(self) -> None:
         """
-        Renders a static, blocking preview of the parsed cost and elevation maps
-        to verify matrix alignment before engaging the control loops.
+        Renders a static topological preview of the parsed cost and elevation maps
+        to verify matrix alignment prior to kinematic activation.
         """
-        self.get_logger().info("Rendering full map alignment preview...")
+        self.get_logger().info("Rendering topological matrix alignment preview...")
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
         
-        # Elevation Map
         im1 = ax1.imshow(self.elevationMap, origin='lower', cmap='viridis')
         ax1.set_title("Full Elevation Map (Cartesian Aligned)")
         ax1.set_xlabel("X (Cols)")
         ax1.set_ylabel("Y (Rows)")
         fig.colorbar(im1, ax=ax1, label="Elevation (Meters)")
         
-        # Cost Map
         im2 = ax2.imshow(self.costMap, origin='lower', cmap='hot')
         ax2.set_title("Full Cost Map (Obstacles & Slopes)")
         ax2.set_xlabel("X (Cols)")
         ax2.set_ylabel("Y (Rows)")
         fig.colorbar(im2, ax=ax2, label="Cost Penalty")
         
-        goal = self.get_parameter('goal_pos').value
-        ax1.plot(goal[0], goal[1], 'xb', markersize=12, markeredgewidth=3, label="Goal")
-        ax2.plot(goal[0], goal[1], 'xb', markersize=12, markeredgewidth=3, label="Goal")
+        if self.current_goal is not None:
+            ax1.plot(self.current_goal[0], self.current_goal[1], 'xb', markersize=12, markeredgewidth=3, label="Goal")
+            ax2.plot(self.current_goal[0], self.current_goal[1], 'xb', markersize=12, markeredgewidth=3, label="Goal")
         
         ax1.legend()
         ax2.legend()
         
         plt.tight_layout()
         plt.show(block=False)
-        plt.pause(3.0)  # Hold on screen momentarily to allow visual inspection
+        plt.pause(3.0)
 
-    def _update_live_plot(self, predicted_trajectory, goal):
-        """Refreshes the live matplotlib window with the current environment state."""
+    def _update_live_plot(self, predicted_trajectory: np.ndarray, goal: list) -> None:
+        """
+        Refreshes the live matplotlib UI with localized trajectory telemetry.
+        """
         plt.cla()
         
-        # Bind ESC key to cleanly kill the simulation
+        # Bind ESC key to allow clean termination of the blocking UI thread
         plt.gcf().canvas.mpl_connect(
             'key_release_event',
             lambda event: [exit(0) if event.key == 'escape' else None])
 
-        # Plot Environmental Matrix
         if self.elevationMap is not None:
             plt.contourf(self.elevationMap, levels=20, cmap='viridis', alpha=0.5, origin='lower')
 
-        # Plot Global & Local Routes
         if self.global_path is not None and len(self.global_path) > 0:
              plt.plot(self.global_path[:,0], self.global_path[:,1], "-r", linewidth=2, label="Global Path")
 
@@ -335,9 +373,9 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             hist = np.array(self.trajectory_history)
             plt.plot(hist[:, 0], hist[:, 1], "-b", label="Actual Trajectory")
 
-        # Plot Entity Markers
         plt.plot(self.robot_pose[0], self.robot_pose[1], "xr")
-        plt.plot(goal[0], goal[1], "xb", markersize=10, label="Target Goal")
+        if goal is not None:
+            plt.plot(goal[0], goal[1], "xb", markersize=10, label="Target Goal")
         
         if len(self.obstacles) > 0:
             plt.plot(self.obstacles[:, 0], self.obstacles[:, 1], "sk")
@@ -345,7 +383,6 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         self.local_planner.plot_robot(self.robot_pose[0], self.robot_pose[1], self.robot_pose[2], self.robot_conf)
         self.local_planner.plot_arrow(self.robot_pose[0], self.robot_pose[1], self.robot_pose[2])
 
-        # Enforce full-map viewing constraints (zoom disabled)
         if self.elevationMap is not None:
             plt.xlim(0, self.elevationMap.shape[1])
             plt.ylim(0, self.elevationMap.shape[0])
@@ -359,18 +396,23 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
     # =========================================================================
 
     def on_configure(self, state: State) -> TransitionCallbackReturn:
-        """Loads files, transforms matrices, and initializes publishers."""
-        self.get_logger().info("Lifecycle state transition: CONFIGURED.")
+        """
+        Handles the Unconfigured -> Inactive transition.
+        Resolves parameters, instantiates the configuration namespace, and generates costmaps.
+        """
+        self.get_logger().info("Lifecycle transition: CONFIGURED.")
 
-        # ---------------------------------------------------------
-        # DYNAMICALLY BUILD THE ROBOT CONFIGURATION FROM YAML
-        # ---------------------------------------------------------
+        self.current_goal = self.get_parameter('goal_pos').value
+
+        # Build kinematic configuration structure from YAML parameters
         self.robot_conf.max_speed = self.get_parameter('max_speed').value
         self.robot_conf.min_speed = self.get_parameter('min_speed').value
         self.robot_conf.max_accel = self.get_parameter('max_accel').value
+        
         self.robot_conf.max_yaw_rate = math.radians(self.get_parameter('max_yaw_rate_deg').value)
         self.robot_conf.max_delta_yaw_rate = math.radians(self.get_parameter('max_delta_yaw_rate_deg').value)
         self.robot_conf.yaw_rate_resolution = math.radians(self.get_parameter('yaw_rate_resolution_deg').value)
+        
         self.robot_conf.v_resolution = self.get_parameter('v_resolution').value
         self.robot_conf.dt = self.get_parameter('dt').value
         self.robot_conf.predict_time = self.get_parameter('predict_time').value
@@ -378,13 +420,14 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         self.robot_conf.speed_cost_gain = self.get_parameter('speed_cost_gain').value
         self.robot_conf.obstacle_cost_gain = self.get_parameter('obstacle_cost_gain').value
         self.robot_conf.robot_stuck_flag_cons = self.get_parameter('robot_stuck_flag_cons').value
-        self.robot_conf.robot_type = 1 # 1 = Rectangular
+        
+        self.robot_conf.robot_type = 1 
         self.robot_conf.robot_width = self.get_parameter('robot_width').value
         self.robot_conf.robot_length = self.get_parameter('robot_length').value
         self.robot_conf.robot_radius = self.get_parameter('robot_radius').value
+
         self._base_max_speed = self.robot_conf.max_speed
 
-        # Getting maps
         pkg_share_dir = get_package_share_directory('component_path_planner')
         elev_path = os.path.join(pkg_share_dir, self.get_parameter('elevation_map_path').value)
         soil_path = os.path.join(pkg_share_dir, self.get_parameter('soil_map_path').value)
@@ -396,36 +439,38 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             self.elevationMap = np.loadtxt(open(elev_path, "rb"), delimiter=" ", skiprows=0)
             soilMap = np.loadtxt(open(soil_path, "rb"), delimiter=" ", skiprows=0)
             
-            # Generate navigational costmaps using the properly aligned matrices
             self.costMap, self.obstacleMap, _ = self.path_planner.getCostMap(
                 self.elevationMap, soilMap, global_res, slope_thresh
             )
             
-            # Hardcoded test obstacles
+            # Static boundary testing array
             self.obstacles = np.array([
                 [90, y] for y in range(66, 86)
             ])
 
-            # Trigger visual validation
             if self.get_parameter('enable_path_visualization').value:
                 self._preview_full_maps()
 
         except Exception as e:
-            self.get_logger().error(f"Failed to load Maps/Costmaps: {e}")
+            self.get_logger().error(f"Matrix parsing failure: {e}")
             return TransitionCallbackReturn.FAILURE
 
         self._pub_cmd_vel = self.create_lifecycle_publisher(Twist, 'cmd_vel', 10)
         self._pub_goal_reached = self.create_lifecycle_publisher(Bool, 'mission_status/goal_reached', 10)
-        self._sub_odom    = self.create_subscription(Odometry, 'odom', self.odom_callback, 10)
+        
+        self._sub_odom = self.create_subscription(Odometry, 'odom', self.odom_callback, 10)
+        self._sub_goal = self.create_subscription(PoseStamped, 'goal_pose', self.goal_pose_callback, 10)
 
         return TransitionCallbackReturn.SUCCESS
 
     def on_activate(self, state: State) -> TransitionCallbackReturn:
-        """Engages the control loop timer."""
-        self.get_logger().info("Lifecycle state transition: ACTIVE.")
+        """
+        Handles the Inactive -> Active transition.
+        Activates interfaces and ignites the high-frequency control loop.
+        """
+        self.get_logger().info("Lifecycle transition: ACTIVE.")
         rate_hz = self.get_parameter('control_rate_hz').value
         
-        # Reset goal tracking for new activation
         self.goal_reached = False
         if self._pub_goal_reached and self._pub_goal_reached.is_activated:
             msg = Bool()
@@ -436,7 +481,10 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         return super().on_activate(state)
 
     def on_deactivate(self, state: State) -> TransitionCallbackReturn:
-        """Halts the control loop and stops the rover."""
+        """
+        Handles the Active -> Inactive transition.
+        Suspends the control loop and transmits halt commands.
+        """
         if self._control_timer:
             self.destroy_timer(self._control_timer)
             self._control_timer = None
@@ -444,8 +492,12 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         return super().on_deactivate(state)
 
     def on_cleanup(self, state: State) -> TransitionCallbackReturn:
-        """Tears down interfaces and closes open windows."""
+        """
+        Handles the Inactive -> Unconfigured transition.
+        Deallocates UI threads and ROS 2 interfaces.
+        """
         if self._sub_odom: self.destroy_subscription(self._sub_odom)
+        if self._sub_goal: self.destroy_subscription(self._sub_goal)
         if self._pub_cmd_vel: self.destroy_publisher(self._pub_cmd_vel)
         if self._pub_goal_reached: self.destroy_publisher(self._pub_goal_reached)
         plt.close('all')
@@ -457,6 +509,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         self._stop_robot()
         
         if self._sub_odom: self.destroy_subscription(self._sub_odom)
+        if self._sub_goal: self.destroy_subscription(self._sub_goal)
         if self._pub_cmd_vel: self.destroy_publisher(self._pub_cmd_vel)
         if self._pub_goal_reached: self.destroy_publisher(self._pub_goal_reached)
         plt.close('all')
@@ -464,7 +517,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
 
 
 def main():
-    """Entry point for the ROS 2 executable."""
+    """Application entry point."""
     rclpy.init()
     executor = rclpy.executors.SingleThreadedExecutor()
     lc_node  = LifecyclePlannerController('lc_component_path_planner')
