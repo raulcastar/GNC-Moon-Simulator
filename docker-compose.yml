@@ -83,6 +83,7 @@ services:
       QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
     volumes:
       - ./component_path_planner:/opt/ros/jazzy/src/component_path_planner
+      - ./custom_map_interfaces:/opt/ros/jazzy/src/custom_map_interfaces
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
 
 
@@ -107,6 +108,7 @@ services:
       QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
     volumes:
       - ./mission_control_dashboard:/opt/ros/jazzy/src/mission_control_dashboard
+      - ./custom_map_interfaces:/opt/ros/jazzy/src/custom_map_interfaces
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       
   debug_cli:

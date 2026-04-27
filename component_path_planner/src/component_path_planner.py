@@ -10,7 +10,7 @@ Key Capabilities:
 - Deterministic ROS 2 Lifecycle state management.
 - System-wide mission status broadcasting via state latches.
 - Dynamic asynchronous goal allocation via standard ROS 2 PoseStamped topics.
-- High-fidelity Network Visualization (Raw 2D MultiArray matrices).
+- High-fidelity Network Visualization (ROS 2 Services for Map UI).
 """
 
 import os
@@ -29,11 +29,12 @@ from rclpy.lifecycle import Publisher, State, TransitionCallbackReturn
 from rclpy.subscription import Subscription
 from rclpy.timer import Timer
 
-from rclpy.qos import QoSProfile, DurabilityPolicy, HistoryPolicy
-
 from geometry_msgs.msg import Twist, PoseStamped
 from nav_msgs.msg import Odometry, Path
 from std_msgs.msg import Bool, Float32MultiArray, MultiArrayDimension
+
+# --- Custom Service Import ---
+from custom_map_interfaces.srv import GetMatrices
 
 # Custom Planner Imports
 from src import global_path_planner
@@ -53,7 +54,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         2. Listening to kinematic telemetry (Odometry).
         3. Listening to asynchronous goal dispatches (PoseStamped).
         4. Transmitting local velocity commands (Twist).
-        5. Broadcasting raw map arrays for external custom UIs (Float32MultiArray).
+        5. Acting as a Service Server to provide raw map arrays for UIs.
     """
     def __init__(self, node_name: str, **kwargs):
         """
@@ -71,11 +72,10 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         self._sub_odom:    Optional[Subscription] = None
         self._sub_goal:    Optional[Subscription] = None
         
-        # --- ROS 2 Interfaces: Telemetry & UI Matrices ---
-        self._pub_cost_map: Optional[Publisher] = None
-        self._pub_elevation_map: Optional[Publisher] = None
+        # --- ROS 2 Interfaces: Telemetry & Services ---
         self._pub_global_path: Optional[Publisher] = None
         self._pub_trajectory: Optional[Publisher] = None
+        self._srv_get_maps = None
         
         self._control_timer: Optional[Timer] = None
         
@@ -89,8 +89,6 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
 
         # --- Internal State Tracking ---
         self.robot_pose = None      # Vector: [x, y, yaw, linear_vel, angular_vel]
-        
-        # Start completely idle. Wait for UI dispatches.
         self.current_goal = None    # Vector: [x, y]
         self.global_path = None
         self.obstacles = np.array([])
@@ -150,12 +148,6 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
     def yaw_from_quaternion(self, q) -> float:
         """
         Extracts the Euler yaw angle from a geometry_msgs Quaternion.
-        
-        Args:
-            q (Quaternion): The orientation quaternion.
-            
-        Returns:
-            float: Yaw angle in radians.
         """
         siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
         cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
@@ -165,9 +157,6 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         """
         Processes telemetry data and maps the local odometry frame to the 
         global Cartesian environment frame.
-        
-        Args:
-            msg (Odometry): The kinematic telemetry payload.
         """
         raw_x = msg.pose.pose.position.x
         raw_y = msg.pose.pose.position.y
@@ -194,9 +183,6 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         """
         Asynchronous callback for dynamic waypoint assignment via external GUIs.
         Interrupts the active control loop and forces a global path recalculation.
-        
-        Args:
-            msg (PoseStamped): The target spatial coordinate.
         """
         new_x = msg.pose.position.x
         new_y = msg.pose.position.y
@@ -225,9 +211,6 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         """
         Generates the optimal global route bridging the starting coordinate 
         to the target coordinate using the processed costmap matrices.
-        
-        Args:
-            start_pos (list): The starting [X, Y] integer coordinates.
         """
         if self.current_goal is None:
             return
@@ -246,13 +229,11 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             # --- Path Validation Safety Check ---
             if self.global_path is None or len(self.global_path) < 2:
                 self.get_logger().warn(f"Pathfinding failed! Coordinates {grid_goal} are unreachable or inside an obstacle.")
-                self.current_goal = None  # Clear the goal so the robot idles securely
+                self.current_goal = None
                 self.global_path = None
                 return
                 
             self.get_logger().info(f"Global trajectory resolved with {len(self.global_path)} waypoints. Resuming kinematic control.")
-            
-            # Broadcast the new route to UI clients
             self._broadcast_paths()
             
         except Exception as e:
@@ -306,7 +287,6 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             if self.get_parameter('enable_path_visualization').value:
                 self._update_live_plot(np.array([self.robot_pose]), self.current_goal)
             
-            # Clear the goal upon successful arrival so the controller sleeps until the next UI click
             self.current_goal = None
             return
 
@@ -366,19 +346,13 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             self._pub_cmd_vel.publish(msg)
 
     # =========================================================================
-    # HEADLESS NETWORK VISUALIZATION (RAW MATRICES)
+    # SERVICE HANDLERS & NETWORK BROADCASTING
     # =========================================================================
 
     def _pack_numpy_to_multiarray(self, matrix: np.ndarray) -> Float32MultiArray:
         """
         Helper function to package a 2D NumPy array into a Float32MultiArray 
         while preserving dimensional data.
-        
-        Args:
-            matrix (np.ndarray): The 2D floating-point matrix to serialize.
-            
-        Returns:
-            Float32MultiArray: The serialized ROS 2 message.
         """
         msg = Float32MultiArray()
         
@@ -395,28 +369,26 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         dim_width.stride = matrix.shape[1]
         
         msg.layout.dim = [dim_height, dim_width]
-        
-        # Serialize the array into a flat 1D list for transmission
         msg.data = matrix.flatten().tolist()
         return msg
 
-    def _broadcast_maps(self) -> None:
+    def get_matrices_callback(self, request, response):
         """
-        Publishes the raw floating-point Cost and Elevation matrices.
-        Infinite obstacle values are safely replaced with 9999.0 to ensure 
-        proper IEEE float serialization over the ROS 2 network.
+        Answers the service call by packing and returning the current matrices.
+        This guarantees the UI only receives the map when it explicitly asks for it.
         """
-        if self._pub_cost_map and self._pub_cost_map.is_activated and self.costMap is not None:
-            # Ensure Infinity values are serialized safely for downstream clients
+        self.get_logger().info("Map Service called. Packaging matrices for UI.")
+        
+        if self.costMap is not None:
+            # Safely serialize infinite obstacles for IEEE float compliance
             safe_cost_map = np.copy(self.costMap)
             safe_cost_map[np.isinf(safe_cost_map)] = 9999.0 
+            response.cost_map = self._pack_numpy_to_multiarray(safe_cost_map)
             
-            msg = self._pack_numpy_to_multiarray(safe_cost_map)
-            self._pub_cost_map.publish(msg)
-
-        if self._pub_elevation_map and self._pub_elevation_map.is_activated and self.elevationMap is not None:
-            msg = self._pack_numpy_to_multiarray(self.elevationMap)
-            self._pub_elevation_map.publish(msg)
+        if self.elevationMap is not None:
+            response.elevation_map = self._pack_numpy_to_multiarray(self.elevationMap)
+            
+        return response
 
     def _broadcast_paths(self) -> None:
         """
@@ -455,7 +427,10 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 
             self._pub_trajectory.publish(hist_msg)
 
-    
+    # =========================================================================
+    # DEBUG MATPLOTLIB
+    # =========================================================================
+
     def _preview_full_maps(self) -> None:
         """
         Renders a static topological preview of the parsed cost and elevation maps
@@ -538,10 +513,9 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         Handles the Unconfigured -> Inactive transition.
         Resolves parameters, instantiates the configuration namespace, and generates matrices.
         """
-        self.get_logger().info("Lifecycle transition: CONFIGURED. Standing by for coordinates.")
+        self.get_logger().info("Lifecycle transition: CONFIGURED. Standing by for UI coordinates.")
 
         # --- Enforce Idle Start State ---
-        # We purposely do not load 'goal_pos' from parameters here so the robot waits for the UI.
         self.current_goal = None
 
         # Build kinematic configuration structure from dynamic parameters
@@ -592,23 +566,14 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             self.get_logger().error(f"Matrix parsing failure: {e}")
             return TransitionCallbackReturn.FAILURE
 
-        # Ensure multiarray maps are latched to accommodate late-joining UI subscribers
-        latching_qos = QoSProfile(
-            history=HistoryPolicy.KEEP_LAST,
-            depth=1,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL
-        )
-
         self._pub_cmd_vel = self.create_lifecycle_publisher(Twist, 'cmd_vel', 10)
         self._pub_goal_reached = self.create_lifecycle_publisher(Bool, 'mission_status/goal_reached', 10)
         
-        # MultiArray Publishers for Raw Matrices
-        self._pub_cost_map = self.create_lifecycle_publisher(Float32MultiArray, 'cost_map_matrix', latching_qos)
-        self._pub_elevation_map = self.create_lifecycle_publisher(Float32MultiArray, 'elevation_map_matrix', latching_qos)
-        
-        # Path Publishers
         self._pub_global_path = self.create_lifecycle_publisher(Path, 'global_path', 10)
         self._pub_trajectory = self.create_lifecycle_publisher(Path, 'driven_trajectory', 10)
+        
+        # --- Create Service Server ---
+        self._srv_get_maps = self.create_service(GetMatrices, 'get_matrices', self.get_matrices_callback)
         
         self._sub_odom = self.create_subscription(Odometry, 'odom', self.odom_callback, 10)
         self._sub_goal = self.create_subscription(PoseStamped, 'goal_pose', self.goal_pose_callback, 10)
@@ -620,7 +585,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         Handles the Inactive -> Active transition.
         Activates interfaces and ignites the high-frequency control loop.
         """
-        self.get_logger().info("Lifecycle transition: ACTIVE. Listening for goals.")
+        self.get_logger().info("Lifecycle transition: ACTIVE. Listening for UI goals.")
         rate_hz = self.get_parameter('control_rate_hz').value
         
         self.goal_reached = False
@@ -629,9 +594,6 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             msg.data = False
             self._pub_goal_reached.publish(msg)
             
-        # Transmit the raw mathematical matrices to the UI upon activation
-        self._broadcast_maps()
-        
         self._control_timer = self.create_timer(1.0 / rate_hz, self.control_loop_callback)
         return super().on_activate(state)
 
@@ -655,10 +617,9 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         if self._sub_goal: self.destroy_subscription(self._sub_goal)
         if self._pub_cmd_vel: self.destroy_publisher(self._pub_cmd_vel)
         if self._pub_goal_reached: self.destroy_publisher(self._pub_goal_reached)
-        if self._pub_cost_map: self.destroy_publisher(self._pub_cost_map)
-        if self._pub_elevation_map: self.destroy_publisher(self._pub_elevation_map)
         if self._pub_global_path: self.destroy_publisher(self._pub_global_path)
         if self._pub_trajectory: self.destroy_publisher(self._pub_trajectory)
+        if self._srv_get_maps: self.destroy_service(self._srv_get_maps)
         plt.close('all')
         return TransitionCallbackReturn.SUCCESS
 

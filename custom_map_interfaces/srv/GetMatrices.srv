@@ -1,0 +1,5 @@
+# Request (Empty)
+---
+# Response
+std_msgs/Float32MultiArray cost_map
+std_msgs/Float32MultiArray elevation_map

@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Lunar Rover Mission Control</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #1e1e1e; color: #fff; text-align: center; margin: 0; padding: 20px;}
+        
+        h2, p { margin-top: 0; }
+
+        /* Flexbox to hold the map and colorbar side-by-side */
+        .dashboard-layout {
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            gap: 20px;
+            margin-top: 10px;
+        }
+
+        #canvas-container { position: relative; border: 2px solid #555; background-color: black; }
+        canvas.layer { position: absolute; top: 0; left: 0; cursor: crosshair; }
+        #mapCanvas { z-index: 1; }
+        #odomCanvas { z-index: 2; }
+        
+        /* The Colorbar container */
+        #colorbar-container { display: none; text-align: left; }
+    </style>
+</head>
+<body>
+    <h2>Mission Control Dashboard</h2>
+    <p>Click anywhere on the topographical map to dispatch the rover.</p>
+
+    <div class="dashboard-layout">
+        <div id="canvas-container" style="width: 800px; height: 800px;">
+            <canvas id="mapCanvas" class="layer"></canvas>
+            <canvas id="odomCanvas" class="layer"></canvas>
+        </div>
+        
+        <div id="colorbar-container" style="height: 800px;">
+            <div style="margin-bottom: 5px; font-weight: bold; color: white;">Elevation</div>
+            <canvas id="colorbarCanvas" width="80" height="800"></canvas>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        
+        const mapCanvas = document.getElementById('mapCanvas');
+        const mapCtx = mapCanvas.getContext('2d');
+        const odomCanvas = document.getElementById('odomCanvas');
+        const odomCtx = odomCanvas.getContext('2d');
+        
+        const cbCanvas = document.getElementById('colorbarCanvas');
+        const cbCtx = cbCanvas.getContext('2d');
+
+        // Core variables populated by the map update
+        let mapRes = 1.0;
+        let mapWidth = 0;
+        let mapHeight = 0;
+
+        // Overlay State Variables
+        let currentPose = null;
+        let globalPath = [];
+        let actualTrajectory = [];
+
+        // Dynamic limits for colorbar labels
+        let minHeightLabel = "0.0m";
+        let maxHeightLabel = "0.0m";
+
+        // --- Pyplot 'Viridis' Colormap Interpolator ---
+        function getViridisColor(t) {
+            t = Math.max(0.0, Math.min(1.0, t)); // Clamp between 0 and 1
+            const stops = [
+                { t: 0.00, r: 68,  g: 1,   b: 84  },  // Dark Purple
+                { t: 0.25, r: 59,  g: 82,  b: 139 },  // Blue
+                { t: 0.50, r: 33,  g: 145, b: 140 },  // Teal
+                { t: 0.75, r: 94,  g: 201, b: 98  },  // Green
+                { t: 1.00, r: 253, g: 231, b: 37  }   // Yellow
+            ];
+            for (let i = 0; i < stops.length - 1; i++) {
+                if (t >= stops[i].t && t <= stops[i+1].t) {
+                    const range = stops[i+1].t - stops[i].t;
+                    const local_t = (t - stops[i].t) / range;
+                    const r = Math.round(stops[i].r + local_t * (stops[i+1].r - stops[i].r));
+                    const g = Math.round(stops[i].g + local_t * (stops[i+1].g - stops[i].g));
+                    const b = Math.round(stops[i].b + local_t * (stops[i+1].b - stops[i].b));
+                    return [r, g, b];
+                }
+            }
+            return [253, 231, 37]; 
+        }
+
+        // --- Master Draw Function for the Overlay (Grid + Paths + Rover) ---
+        function drawOverlay() {
+            if (mapWidth === 0 || mapHeight === 0) return;
+            odomCtx.clearRect(0, 0, odomCanvas.width, odomCanvas.height);
+
+            // -------------------------------------------------------------
+            // THE FIX: Draw the Cartesian Grid (Matching Engineering Plot)
+            // -------------------------------------------------------------
+            odomCtx.save(); // Save current state
+            odomCtx.beginPath();
+            odomCtx.lineWidth = 1;
+            odomCtx.strokeStyle = 'rgba(100, 100, 100, 0.6)'; // Light gray dashed lines
+            odomCtx.setLineDash([8, 8]); // Dashed pattern [line length, gap length]
+            
+            // Step size (every 200 pixels)
+            const gridIntervalPixels = 200;
+
+            // Draw vertical grid lines (along X axis)
+            for (let x = gridIntervalPixels; x < mapWidth; x += gridIntervalPixels) {
+                odomCtx.moveTo(x, 0);
+                odomCtx.lineTo(x, mapHeight);
+            }
+
+            // Draw horizontal grid lines (along inverted Y axis)
+            for (let y = gridIntervalPixels; y < mapHeight; y += gridIntervalPixels) {
+                odomCtx.moveTo(0, y);
+                odomCtx.lineTo(mapWidth, y);
+            }
+            odomCtx.stroke();
+            odomCtx.restore(); // Restore to solid lines for everything else
+            // -------------------------------------------------------------
+
+            // Draw Global Path (Red Line)
+            if (globalPath.length > 0) {
+                odomCtx.beginPath();
+                odomCtx.strokeStyle = 'red';
+                odomCtx.lineWidth = 3;
+                for (let i = 0; i < globalPath.length; i++) {
+                    let pxX = globalPath[i].x / mapRes;
+                    let pxY = mapHeight - (globalPath[i].y / mapRes);
+                    if (i === 0) odomCtx.moveTo(pxX, pxY);
+                    else odomCtx.lineTo(pxX, pxY);
+                }
+                odomCtx.stroke();
+            }
+
+            // Draw Driven Trajectory (Blue Line)
+            if (actualTrajectory.length > 0) {
+                odomCtx.beginPath();
+                odomCtx.strokeStyle = 'blue';
+                odomCtx.lineWidth = 3;
+                for (let i = 0; i < actualTrajectory.length; i++) {
+                    let pxX = actualTrajectory[i].x / mapRes;
+                    let pxY = mapHeight - (actualTrajectory[i].y / mapRes);
+                    if (i === 0) odomCtx.moveTo(pxX, pxY);
+                    else odomCtx.lineTo(pxX, pxY);
+                }
+                odomCtx.stroke();
+            }
+
+            // Draw Rover Position (Cyan Dot)
+            if (currentPose) {
+                let pxX = currentPose.x / mapRes;
+                let pxY = mapHeight - (currentPose.y / mapRes);
+                odomCtx.beginPath();
+                odomCtx.arc(pxX, pxY, 6, 0, 2 * Math.PI, false);
+                odomCtx.fillStyle = 'cyan';
+                odomCtx.fill();
+                odomCtx.lineWidth = 2;
+                odomCtx.strokeStyle = 'white';
+                odomCtx.stroke();
+            }
+        }
+
+        // --- Master Draw Function for the Colorbar (Engineering Style) ---
+        function drawColorbar(rangeExists) {
+            if (!rangeExists) return;
+            document.getElementById('colorbar-container').style.display = 'block';
+            
+            // Clean slate
+            cbCtx.clearRect(0, 0, cbCanvas.width, cbCanvas.height);
+            
+            const numContourLevels = 20;
+            const blockHeight = cbCanvas.height / numContourLevels;
+            
+            for(let i = 0; i < numContourLevels; i++) {
+                // Determine the 'norm' value for this specific block (Top is max, Bottom is min)
+                // Normalize index i from [0, 19] to drawNorm [1.0, 0.0]
+                let drawNorm = (numContourLevels - 1 - i) / (numContourLevels - 1); 
+                
+                // Align with the specific contour bands used on the main map
+                let contour_t = Math.floor(drawNorm * numContourLevels) / numContourLevels;
+                let color = getViridisColor(contour_t);
+                
+                cbCtx.fillStyle = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+                cbCtx.fillRect(0, i * blockHeight, 30, Math.ceil(blockHeight));
+            }
+            
+            // -------------------------------------------------------------
+            // THE FIX: Adjust the Colorbar Labels
+            // -------------------------------------------------------------
+            cbCtx.fillStyle = 'white';
+            cbCtx.font = '12px "Courier New", monospace'; // Small monospaced font for clean labels
+            cbCtx.textAlign = 'left';
+            cbCtx.textBaseline = 'middle';
+            
+            // Add 'm' units to the labels
+            cbCtx.fillText(maxHeightLabel + "m", 35, 10);
+            cbCtx.fillText(minHeightLabel + "m", 35, cbCanvas.height - 10);
+            // -------------------------------------------------------------
+        }
+
+        // --- WebSocket Listeners ---
+        socket.on('global_path_update', function(msg) {
+            globalPath = msg.path;
+            drawOverlay();
+        });
+
+        socket.on('trajectory_update', function(msg) {
+            actualTrajectory = msg.path;
+            drawOverlay();
+        });
+
+        socket.on('odom_update', function(msg) {
+            currentPose = msg;
+            drawOverlay();
+        });
+
+        // --- Map Rendering & Parameter Sync ---
+        socket.on('map_update', function(msg) {
+            mapWidth = msg.width;
+            mapHeight = msg.height;
+            mapRes = msg.resolution;
+
+            // 1. Sync all canvases to the exact dimensions of the incoming matrix
+            mapCanvas.width = mapWidth;
+            mapCanvas.height = mapHeight;
+            odomCanvas.width = mapWidth;
+            odomCanvas.height = mapHeight;
+
+            // Ensure the main outer container stretches to match
+            document.getElementById('canvas-container').style.width = mapWidth + 'px';
+            document.getElementById('canvas-container').style.height = mapHeight + 'px';
+            
+            // Scale the height of the colorbar container to match the map height
+            document.getElementById('colorbar-container').style.height = mapHeight + 'px';
+            cbCanvas.height = mapHeight; // Resize colorbar canvas internally to match
+
+            const imgData = mapCtx.createImageData(mapWidth, mapHeight);
+            const data = imgData.data;
+
+            // Safe Min/Max Calculation (avoids MemoryStack errors with large arrays)
+            let cMin = Infinity;
+            let cMax = -Infinity;
+            for (let i = 0; i < msg.data.length; i++) {
+                let val = msg.data[i];
+                if (val < 9999.0) {
+                    if (val < cMin) cMin = val;
+                    if (val > cMax) cMax = val;
+                }
+            }
+            let heightRange = cMax - cMin;
+            
+            // Check if we have valid terrain data (min should be less than max)
+            let validRangeExists = (cMax !== -Infinity && cMin !== Infinity);
+            if (validRangeExists) {
+                if (heightRange === 0) heightRange = 1.0; // Flat terrain safety
+
+                // Store formatted strings for colorbar drawing function
+                minHeightLabel = cMin.toFixed(1);
+                maxHeightLabel = cMax.toFixed(1);
+            }
+
+            for (let i = 0; i < msg.data.length; i++) {
+                let val = msg.data[i];
+                
+                // --- Topographical Mapping logic ---
+                // Identify the pixel X,Y in the flat ROS matrix
+                let x = i % mapWidth;
+                let y = Math.floor(i / mapWidth);
+                
+                // Vertical invert (ROS is bottom-left, Canvas is top-left)
+                let canvasY = (mapHeight - 1) - y;
+                
+                // Exact pixel index in the flat RGBA [r,g,b,a, r,g,b,a, ...] image buffer
+                let pxIndex = (canvasY * mapWidth + x) * 4;
+
+                if (val >= 9999.0) {
+                    // Lethal Obstacle: Draw as solid Black
+                    data[pxIndex] = 0;     // R
+                    data[pxIndex+1] = 0;   // G
+                    data[pxIndex+2] = 0;   // B
+                    data[pxIndex+3] = 255; // Alpha
+                } else if (validRangeExists) {
+                    // Passable Terrain: Compute color based on normalized height
+                    let smooth_t = (val - cMin) / heightRange;
+                    
+                    // --- REPLICATE MATPLOTLIB CONTOURF ---
+                    // Snap continuous gradient into 20 specific topographical contour bands
+                    const numContourLevels = 20.0;
+                    let contour_t = Math.floor(smooth_t * numContourLevels) / numContourLevels;
+                    
+                    let viridisColor = getViridisColor(contour_t);
+                    
+                    // Assign pixel color to buffer
+                    data[pxIndex] = viridisColor[0];     // R
+                    data[pxIndex+1] = viridisColor[1];   // G
+                    data[pxIndex+2] = viridisColor[2];   // B
+                    data[pxIndex+3] = 255;              // Alpha
+                }
+            }
+            
+            // Apply the computed pixel buffer to the map canvas
+            mapCtx.putImageData(imgData, 0, 0);
+
+            // Re-render the colorbar and overlay with the new synchronized dimensions
+            drawColorbar(validRangeExists);
+            drawOverlay(); // Grid will now draw to correct size
+        });
+
+        // --- Click-to-Dispatch Logic ---
+        odomCanvas.addEventListener('mousedown', function(e) {
+            const rect = odomCanvas.getBoundingClientRect();
+            let pixelX = e.clientX - rect.left;
+            let pixelY = e.clientY - rect.top;
+
+            // Translate browser HTML pixel coordinates back into physical ROS meters
+            // Using mapRes to convert pixels -> meters, and inverting Y axis back
+            let targetMetersX = pixelX * mapRes;
+            let targetMetersY = (mapHeight - pixelY) * mapRes;
+
+            // Transmit target waypoint to the Flask Python Server
+            socket.emit('send_goal', { x: targetMetersX, y: targetMetersY });
+        });
+    </script>
+</body>
+</html>
