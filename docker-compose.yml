@@ -52,6 +52,29 @@ services:
     network_mode: host
     ipc: host
     restart: unless-stopped
+    entrypoint: >
+      bash -lc "/entrypoint.sh"
+    privileged: true
+    environment:
+      ROS_DOMAIN_ID: 0
+      ROBOT_NAMESPACE: ""
+      LAUNCH_ARGS: ""
+      RCUTILS_COLORIZED_OUTPUT: 1
+      DISPLAY: ${DISPLAY}
+      QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
+    volumes:
+      - ./component_path_planner:/opt/ros/jazzy/src/component_path_planner
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+
+
+  mission_control_dashboard:
+    build:
+      context: ./mission_control_dashboard
+      dockerfile: Dockerfile
+    image: gnc_moon_simulator/mission_control_dashboard:dev
+    network_mode: host
+    ipc: host
+    restart: unless-stopped
     entrypoint: ["/bin/bash", "-c", "source /opt/ros/jazzy/setup.bash && exec /bin/bash"]    
     privileged: true
     stdin_open: true # Equivalent to -i
@@ -64,9 +87,9 @@ services:
       DISPLAY: ${DISPLAY}
       QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
     volumes:
-      - ./component_path_planner:/opt/ros/jazzy/src/component_path_planner
+      - ./mission_control_dashboard:/opt/ros/jazzy/src/mission_control_dashboard
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-
+      
   debug_cli:
     build:
       context: ./docker
