@@ -45,6 +45,10 @@ fi
 
 echo "Workspace initialized successfully. Launching Rover Component..."
 
+# Kill leftover ROS processes (if any)
+pkill -9 -f ros2 || true
+ros2 daemon stop || true
+
 # ------------------------------------------------------------------------------
 # 5. Execute the Primary ROS 2 Launch Process
 # ------------------------------------------------------------------------------

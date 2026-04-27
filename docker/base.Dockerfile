@@ -48,6 +48,12 @@ RUN apt-get update && apt-get install -y \
     nano \
  && rm -rf /var/lib/apt/lists/*
 
+ # Installation of Zenoh RMW Middleware
+RUN apt-get update && apt-get install -y \ 
+    ros-jazzy-rmw-zenoh-cpp \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*rm 
+
 WORKDIR /opt/ros/jazzy/src
 RUN rm -rf ./*
 

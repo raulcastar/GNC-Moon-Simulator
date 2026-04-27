@@ -1,5 +1,24 @@
 # docker-compose.yml
 services:
+  zenoh_router:
+    build:
+      context: ./docker
+      dockerfile: base.Dockerfile
+    image: gnc_moon_simulator/zenoh_router:dev
+    network_mode: host
+    ipc: host
+    restart: unless-stopped
+    privileged: true
+    environment:
+      ROS_DOMAIN_ID: 0
+      ROBOT_NAMESPACE: ""
+      LAUNCH_ARGS: ""
+      RCUTILS_COLORIZED_OUTPUT: 1
+      DISPLAY: ${DISPLAY}
+      QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
+    command: >
+      bash -lc "source /opt/ros/jazzy/setup.bash && ros2 run rmw_zenoh_cpp rmw_zenohd"
+
   component_cameras:
     build:
       context: ./component_cameras

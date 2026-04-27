@@ -46,6 +46,14 @@ fi
 echo "Workspace initialized successfully. Launching Rover Component..."
 
 # ------------------------------------------------------------------------------
+# PRE-LAUNCH CLEANUP
+# Append || true so 'set -e' doesn't kill the script if no processes are found
+# ------------------------------------------------------------------------------
+pkill -9 -f ros2 || true
+ros2 daemon stop || true
+
+# ------------------------------------------------------------------------------
 # 5. Execute the Primary ROS 2 Launch Process
 # ------------------------------------------------------------------------------
+# Use 'exec' here so the launch file takes over PID 1, allowing clean Docker stops
 exec ros2 launch component_rover_leo_raph lc_component_rover_leo_raph.launch.py
