@@ -35,16 +35,10 @@ lc_component_path_planner:
     robot_radius: 0.35            # [m]
 
     # ---------------------------------------------------------
-    # Mission Waypoints (X, Y)
-    # ---------------------------------------------------------
-    start_pos: [5, 5]
-    goal_pos: [200, 200]
-
-    # ---------------------------------------------------------
     # Debug & Visualization
     # ---------------------------------------------------------
     debug_mode: true
-    enable_path_visualization: true
+    enable_path_visualization: false
 
     # ---------------------------------------------------------
     # Goal Reached rolerances

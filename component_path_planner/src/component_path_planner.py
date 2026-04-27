@@ -89,6 +89,8 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
 
         # --- Internal State Tracking ---
         self.robot_pose = None      # Vector: [x, y, yaw, linear_vel, angular_vel]
+        
+        # Start completely idle. Wait for UI dispatches.
         self.current_goal = None    # Vector: [x, y]
         self.global_path = None
         self.obstacles = np.array([])
@@ -110,7 +112,6 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 ('global_res',         1.0),
                 ('slope_threshold',    30.0),
                 ('lookahead_dist',     7.0),
-                ('goal_pos',           [39, 99]),
                 
                 # Execution and UI
                 ('control_rate_hz',    10.0),
@@ -138,8 +139,10 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 ('robot_length', 0.35),
                 ('robot_radius', 0.35)
             ])
+            
         if self.get_parameter('enable_path_visualization').value:
             plt.ion()
+
     # =========================================================================
     # KINEMATICS & SENSORY CALLBACKS
     # =========================================================================
@@ -239,13 +242,23 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         try:
             Tmap = self.path_planner.computeTmap(self.costMap, self.obstacleMap, grid_goal, start_pos)
             self.global_path = self.path_planner.getPathGDM(Tmap, np.asarray(start_pos), np.asarray(grid_goal), 0.4)
-            self.get_logger().info("Global trajectory resolved. Resuming kinematic control.")
+            
+            # --- Path Validation Safety Check ---
+            if self.global_path is None or len(self.global_path) < 2:
+                self.get_logger().warn(f"Pathfinding failed! Coordinates {grid_goal} are unreachable or inside an obstacle.")
+                self.current_goal = None  # Clear the goal so the robot idles securely
+                self.global_path = None
+                return
+                
+            self.get_logger().info(f"Global trajectory resolved with {len(self.global_path)} waypoints. Resuming kinematic control.")
             
             # Broadcast the new route to UI clients
             self._broadcast_paths()
             
         except Exception as e:
             self.get_logger().error(f"Global path generation fault: {e}")
+            self.current_goal = None
+            self.global_path = None
 
     def control_loop_callback(self) -> None:
         """
@@ -253,7 +266,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         Calculates actuator commands, manages terminal deceleration, and handles 
         singularity avoidance near the goal coordinate.
         """
-        # Suspend execution if spatial context is unavailable
+        # Suspend execution if spatial context is unavailable OR if we have no active mission
         if self.robot_pose is None or self.current_goal is None:
             return 
 
@@ -289,8 +302,12 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             
             self._stop_robot()
             self._broadcast_paths()  # Ensure UI reflects the final resting position
+            
             if self.get_parameter('enable_path_visualization').value:
                 self._update_live_plot(np.array([self.robot_pose]), self.current_goal)
+            
+            # Clear the goal upon successful arrival so the controller sleeps until the next UI click
+            self.current_goal = None
             return
 
         # ---------------------------------------------------------
@@ -511,6 +528,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         plt.grid(True)
         plt.legend(loc='upper right')
         plt.pause(0.001)
+
     # =========================================================================
     # ROS 2 LIFECYCLE MANAGEMENT
     # =========================================================================
@@ -520,9 +538,11 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         Handles the Unconfigured -> Inactive transition.
         Resolves parameters, instantiates the configuration namespace, and generates matrices.
         """
-        self.get_logger().info("Lifecycle transition: CONFIGURED.")
+        self.get_logger().info("Lifecycle transition: CONFIGURED. Standing by for coordinates.")
 
-        self.current_goal = self.get_parameter('goal_pos').value
+        # --- Enforce Idle Start State ---
+        # We purposely do not load 'goal_pos' from parameters here so the robot waits for the UI.
+        self.current_goal = None
 
         # Build kinematic configuration structure from dynamic parameters
         self.robot_conf.max_speed = self.get_parameter('max_speed').value
@@ -600,7 +620,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         Handles the Inactive -> Active transition.
         Activates interfaces and ignites the high-frequency control loop.
         """
-        self.get_logger().info("Lifecycle transition: ACTIVE.")
+        self.get_logger().info("Lifecycle transition: ACTIVE. Listening for goals.")
         rate_hz = self.get_parameter('control_rate_hz').value
         
         self.goal_reached = False
