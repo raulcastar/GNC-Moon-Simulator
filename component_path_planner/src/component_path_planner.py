@@ -7,10 +7,10 @@ Dynamic Window Approach (DWA) local kinematic controller.
 
 Key Capabilities:
 - Matrix-to-Cartesian coordinate frame transformations.
-- Live Matplotlib telemetry and trajectory visualization.
 - Deterministic ROS 2 Lifecycle state management.
 - System-wide mission status broadcasting via state latches.
 - Dynamic asynchronous goal allocation via standard ROS 2 PoseStamped topics.
+- High-fidelity Network Visualization (Raw 2D MultiArray matrices).
 """
 
 import os
@@ -29,9 +29,11 @@ from rclpy.lifecycle import Publisher, State, TransitionCallbackReturn
 from rclpy.subscription import Subscription
 from rclpy.timer import Timer
 
+from rclpy.qos import QoSProfile, DurabilityPolicy, HistoryPolicy
+
 from geometry_msgs.msg import Twist, PoseStamped
-from nav_msgs.msg import Odometry
-from std_msgs.msg import Bool
+from nav_msgs.msg import Odometry, Path
+from std_msgs.msg import Bool, Float32MultiArray, MultiArrayDimension
 
 # Custom Planner Imports
 from src import global_path_planner
@@ -45,15 +47,36 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
     """
     Lifecycle node managing the high-level routing and low-level kinematics 
     of the rover platform.
+    
+    This class handles:
+        1. Ingesting topological and cost matrices.
+        2. Listening to kinematic telemetry (Odometry).
+        3. Listening to asynchronous goal dispatches (PoseStamped).
+        4. Transmitting local velocity commands (Twist).
+        5. Broadcasting raw map arrays for external custom UIs (Float32MultiArray).
     """
     def __init__(self, node_name: str, **kwargs):
+        """
+        Initializes the LifecyclePlannerController node and declares dynamic parameters.
+
+        Args:
+            node_name (str): The designated identifier for the ROS 2 node.
+            **kwargs: Additional keyword arguments passed to the parent LifecycleNode.
+        """
         super().__init__(node_name, **kwargs)
         
-        # --- ROS 2 Interfaces ---
+        # --- ROS 2 Interfaces: Actuators & Status ---
         self._pub_cmd_vel: Optional[Publisher] = None
         self._pub_goal_reached: Optional[Publisher] = None
         self._sub_odom:    Optional[Subscription] = None
         self._sub_goal:    Optional[Subscription] = None
+        
+        # --- ROS 2 Interfaces: Telemetry & UI Matrices ---
+        self._pub_cost_map: Optional[Publisher] = None
+        self._pub_elevation_map: Optional[Publisher] = None
+        self._pub_global_path: Optional[Publisher] = None
+        self._pub_trajectory: Optional[Publisher] = None
+        
         self._control_timer: Optional[Timer] = None
         
         # --- Planner Instances ---
@@ -72,12 +95,12 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         self.trajectory_history = []
         self.goal_reached = False
         
-        # --- Environmental Data ---
+        # --- Environmental Matrices ---
         self.elevationMap = None
         self.costMap = None
         self.obstacleMap = None
 
-        # --- ROS 2 Parameters ---
+        # --- Parameter Declarations for Runtime Mutability ---
         self.declare_parameters(
             namespace='',
             parameters=[
@@ -92,8 +115,6 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 # Execution and UI
                 ('control_rate_hz',    10.0),
                 ('enable_path_visualization', True),
-                
-                # Terminal Approach Tolerances
                 ('braking_distance',   3.0),
                 ('stop_tolerance',     0.5),
                 
@@ -117,10 +138,8 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 ('robot_length', 0.35),
                 ('robot_radius', 0.35)
             ])
-
         if self.get_parameter('enable_path_visualization').value:
             plt.ion()
-
     # =========================================================================
     # KINEMATICS & SENSORY CALLBACKS
     # =========================================================================
@@ -143,6 +162,9 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         """
         Processes telemetry data and maps the local odometry frame to the 
         global Cartesian environment frame.
+        
+        Args:
+            msg (Odometry): The kinematic telemetry payload.
         """
         raw_x = msg.pose.pose.position.x
         raw_y = msg.pose.pose.position.y
@@ -167,13 +189,16 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
 
     def goal_pose_callback(self, msg: PoseStamped) -> None:
         """
-        Asynchronous callback for dynamic waypoint assignment.
+        Asynchronous callback for dynamic waypoint assignment via external GUIs.
         Interrupts the active control loop and forces a global path recalculation.
+        
+        Args:
+            msg (PoseStamped): The target spatial coordinate.
         """
         new_x = msg.pose.position.x
         new_y = msg.pose.position.y
         
-        self.get_logger().info(f"Waypoint update received: [{new_x:.2f}, {new_y:.2f}]. Suspending kinematics for recalculation.")
+        self.get_logger().info(f"Waypoint update received: [{new_x:.2f}, {new_y:.2f}]. Suspending kinematics.")
         
         # Enforce zero-velocity state to prevent drifting during computational blocking
         self._stop_robot()
@@ -197,6 +222,9 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         """
         Generates the optimal global route bridging the starting coordinate 
         to the target coordinate using the processed costmap matrices.
+        
+        Args:
+            start_pos (list): The starting [X, Y] integer coordinates.
         """
         if self.current_goal is None:
             return
@@ -212,6 +240,10 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             Tmap = self.path_planner.computeTmap(self.costMap, self.obstacleMap, grid_goal, start_pos)
             self.global_path = self.path_planner.getPathGDM(Tmap, np.asarray(start_pos), np.asarray(grid_goal), 0.4)
             self.get_logger().info("Global trajectory resolved. Resuming kinematic control.")
+            
+            # Broadcast the new route to UI clients
+            self._broadcast_paths()
+            
         except Exception as e:
             self.get_logger().error(f"Global path generation fault: {e}")
 
@@ -233,7 +265,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             self._compute_global_path([start_x, start_y])
             return 
 
-        # 1. State Latch: Prevent odometry drift from re-triggering the controller post-arrival
+        # State Latch: Prevent odometry drift from re-triggering the controller post-arrival
         if self.goal_reached:
             self._stop_robot()
             return
@@ -256,7 +288,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 self._pub_goal_reached.publish(status_msg)
             
             self._stop_robot()
-            
+            self._broadcast_paths()  # Ensure UI reflects the final resting position
             if self.get_parameter('enable_path_visualization').value:
                 self._update_live_plot(np.array([self.robot_pose]), self.current_goal)
             return
@@ -299,6 +331,8 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             twist_msg.angular.z = float(cmd_vel_arr[1])
             self._pub_cmd_vel.publish(twist_msg)
 
+            # Periodically stream the actual driven trajectory to the UI
+            self._broadcast_paths()
             if self.get_parameter('enable_path_visualization').value:
                 self._update_live_plot(predicted_trajectory, self.current_goal)
 
@@ -315,9 +349,96 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             self._pub_cmd_vel.publish(msg)
 
     # =========================================================================
-    # VISUALIZATION TELEMETRY
+    # HEADLESS NETWORK VISUALIZATION (RAW MATRICES)
     # =========================================================================
 
+    def _pack_numpy_to_multiarray(self, matrix: np.ndarray) -> Float32MultiArray:
+        """
+        Helper function to package a 2D NumPy array into a Float32MultiArray 
+        while preserving dimensional data.
+        
+        Args:
+            matrix (np.ndarray): The 2D floating-point matrix to serialize.
+            
+        Returns:
+            Float32MultiArray: The serialized ROS 2 message.
+        """
+        msg = Float32MultiArray()
+        
+        # Define matrix rows (height)
+        dim_height = MultiArrayDimension()
+        dim_height.label = "height"
+        dim_height.size = matrix.shape[0]
+        dim_height.stride = matrix.shape[0] * matrix.shape[1]
+        
+        # Define matrix columns (width)
+        dim_width = MultiArrayDimension()
+        dim_width.label = "width"
+        dim_width.size = matrix.shape[1]
+        dim_width.stride = matrix.shape[1]
+        
+        msg.layout.dim = [dim_height, dim_width]
+        
+        # Serialize the array into a flat 1D list for transmission
+        msg.data = matrix.flatten().tolist()
+        return msg
+
+    def _broadcast_maps(self) -> None:
+        """
+        Publishes the raw floating-point Cost and Elevation matrices.
+        Infinite obstacle values are safely replaced with 9999.0 to ensure 
+        proper IEEE float serialization over the ROS 2 network.
+        """
+        if self._pub_cost_map and self._pub_cost_map.is_activated and self.costMap is not None:
+            # Ensure Infinity values are serialized safely for downstream clients
+            safe_cost_map = np.copy(self.costMap)
+            safe_cost_map[np.isinf(safe_cost_map)] = 9999.0 
+            
+            msg = self._pack_numpy_to_multiarray(safe_cost_map)
+            self._pub_cost_map.publish(msg)
+
+        if self._pub_elevation_map and self._pub_elevation_map.is_activated and self.elevationMap is not None:
+            msg = self._pack_numpy_to_multiarray(self.elevationMap)
+            self._pub_elevation_map.publish(msg)
+
+    def _broadcast_paths(self) -> None:
+        """
+        Translates the Global Path and Historical Trajectory arrays into 
+        standard ROS 2 Path messages for visualizer consumption.
+        """
+        timestamp = self.get_clock().now().to_msg()
+        
+        # Broadcast the intended Global Path
+        if self._pub_global_path and self._pub_global_path.is_activated and self.global_path is not None:
+            global_msg = Path()
+            global_msg.header.frame_id = 'map'
+            global_msg.header.stamp = timestamp
+            
+            for pt in self.global_path:
+                ps = PoseStamped()
+                ps.header = global_msg.header
+                ps.pose.position.x = float(pt[0])
+                ps.pose.position.y = float(pt[1])
+                global_msg.poses.append(ps)
+                
+            self._pub_global_path.publish(global_msg)
+            
+        # Broadcast the driven Trajectory History
+        if self._pub_trajectory and self._pub_trajectory.is_activated and len(self.trajectory_history) > 0:
+            hist_msg = Path()
+            hist_msg.header.frame_id = 'map'
+            hist_msg.header.stamp = timestamp
+            
+            for pt in self.trajectory_history:
+                ps = PoseStamped()
+                ps.header = hist_msg.header
+                ps.pose.position.x = float(pt[0])
+                ps.pose.position.y = float(pt[1])
+                hist_msg.poses.append(ps)
+                
+            self._pub_trajectory.publish(hist_msg)
+
+    
     def _preview_full_maps(self) -> None:
         """
         Renders a static topological preview of the parsed cost and elevation maps
@@ -390,7 +511,6 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         plt.grid(True)
         plt.legend(loc='upper right')
         plt.pause(0.001)
-
     # =========================================================================
     # ROS 2 LIFECYCLE MANAGEMENT
     # =========================================================================
@@ -398,21 +518,19 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
     def on_configure(self, state: State) -> TransitionCallbackReturn:
         """
         Handles the Unconfigured -> Inactive transition.
-        Resolves parameters, instantiates the configuration namespace, and generates costmaps.
+        Resolves parameters, instantiates the configuration namespace, and generates matrices.
         """
         self.get_logger().info("Lifecycle transition: CONFIGURED.")
 
         self.current_goal = self.get_parameter('goal_pos').value
 
-        # Build kinematic configuration structure from YAML parameters
+        # Build kinematic configuration structure from dynamic parameters
         self.robot_conf.max_speed = self.get_parameter('max_speed').value
         self.robot_conf.min_speed = self.get_parameter('min_speed').value
         self.robot_conf.max_accel = self.get_parameter('max_accel').value
-        
         self.robot_conf.max_yaw_rate = math.radians(self.get_parameter('max_yaw_rate_deg').value)
         self.robot_conf.max_delta_yaw_rate = math.radians(self.get_parameter('max_delta_yaw_rate_deg').value)
         self.robot_conf.yaw_rate_resolution = math.radians(self.get_parameter('yaw_rate_resolution_deg').value)
-        
         self.robot_conf.v_resolution = self.get_parameter('v_resolution').value
         self.robot_conf.dt = self.get_parameter('dt').value
         self.robot_conf.predict_time = self.get_parameter('predict_time').value
@@ -420,7 +538,6 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         self.robot_conf.speed_cost_gain = self.get_parameter('speed_cost_gain').value
         self.robot_conf.obstacle_cost_gain = self.get_parameter('obstacle_cost_gain').value
         self.robot_conf.robot_stuck_flag_cons = self.get_parameter('robot_stuck_flag_cons').value
-        
         self.robot_conf.robot_type = 1 
         self.robot_conf.robot_width = self.get_parameter('robot_width').value
         self.robot_conf.robot_length = self.get_parameter('robot_length').value
@@ -443,20 +560,35 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 self.elevationMap, soilMap, global_res, slope_thresh
             )
             
-            # Static boundary testing array
+            # Temporary static boundary testing array
             self.obstacles = np.array([
                 [90, y] for y in range(66, 86)
             ])
-
+            
             if self.get_parameter('enable_path_visualization').value:
                 self._preview_full_maps()
-
+            
         except Exception as e:
             self.get_logger().error(f"Matrix parsing failure: {e}")
             return TransitionCallbackReturn.FAILURE
 
+        # Ensure multiarray maps are latched to accommodate late-joining UI subscribers
+        latching_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL
+        )
+
         self._pub_cmd_vel = self.create_lifecycle_publisher(Twist, 'cmd_vel', 10)
         self._pub_goal_reached = self.create_lifecycle_publisher(Bool, 'mission_status/goal_reached', 10)
+        
+        # MultiArray Publishers for Raw Matrices
+        self._pub_cost_map = self.create_lifecycle_publisher(Float32MultiArray, 'cost_map_matrix', latching_qos)
+        self._pub_elevation_map = self.create_lifecycle_publisher(Float32MultiArray, 'elevation_map_matrix', latching_qos)
+        
+        # Path Publishers
+        self._pub_global_path = self.create_lifecycle_publisher(Path, 'global_path', 10)
+        self._pub_trajectory = self.create_lifecycle_publisher(Path, 'driven_trajectory', 10)
         
         self._sub_odom = self.create_subscription(Odometry, 'odom', self.odom_callback, 10)
         self._sub_goal = self.create_subscription(PoseStamped, 'goal_pose', self.goal_pose_callback, 10)
@@ -477,6 +609,9 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             msg.data = False
             self._pub_goal_reached.publish(msg)
             
+        # Transmit the raw mathematical matrices to the UI upon activation
+        self._broadcast_maps()
+        
         self._control_timer = self.create_timer(1.0 / rate_hz, self.control_loop_callback)
         return super().on_activate(state)
 
@@ -494,12 +629,16 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
     def on_cleanup(self, state: State) -> TransitionCallbackReturn:
         """
         Handles the Inactive -> Unconfigured transition.
-        Deallocates UI threads and ROS 2 interfaces.
+        Deallocates UI topics and ROS 2 interfaces.
         """
         if self._sub_odom: self.destroy_subscription(self._sub_odom)
         if self._sub_goal: self.destroy_subscription(self._sub_goal)
         if self._pub_cmd_vel: self.destroy_publisher(self._pub_cmd_vel)
         if self._pub_goal_reached: self.destroy_publisher(self._pub_goal_reached)
+        if self._pub_cost_map: self.destroy_publisher(self._pub_cost_map)
+        if self._pub_elevation_map: self.destroy_publisher(self._pub_elevation_map)
+        if self._pub_global_path: self.destroy_publisher(self._pub_global_path)
+        if self._pub_trajectory: self.destroy_publisher(self._pub_trajectory)
         plt.close('all')
         return TransitionCallbackReturn.SUCCESS
 
@@ -507,11 +646,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         """Emergency node termination protocol."""
         if self._control_timer: self._control_timer.cancel()
         self._stop_robot()
-        
-        if self._sub_odom: self.destroy_subscription(self._sub_odom)
-        if self._sub_goal: self.destroy_subscription(self._sub_goal)
-        if self._pub_cmd_vel: self.destroy_publisher(self._pub_cmd_vel)
-        if self._pub_goal_reached: self.destroy_publisher(self._pub_goal_reached)
+        self.on_cleanup(state)
         plt.close('all')
         return TransitionCallbackReturn.SUCCESS
 
