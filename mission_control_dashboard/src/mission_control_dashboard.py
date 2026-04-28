@@ -1,9 +1,13 @@
 """
-ROS 2 Lifecycle Web Mission Control Interface (2D Canvas Edition)
+ROS 2 Lifecycle Web Mission Control Interface (2D Canvas & Video Streaming)
 """
 
 import os
 import threading
+import base64
+import cv2
+import numpy as np
+
 from ament_index_python.packages import get_package_share_directory
 
 import rclpy
@@ -12,9 +16,12 @@ from rclpy.lifecycle import State, TransitionCallbackReturn
 from rclpy.executors import SingleThreadedExecutor
 
 from std_msgs.msg import Float32MultiArray
-# --- Added Path to the imports ---
 from nav_msgs.msg import Odometry, Path
 from geometry_msgs.msg import PoseStamped
+
+# --- Camera Imports ---
+from sensor_msgs.msg import CompressedImage, Image
+from cv_bridge import CvBridge
 
 from custom_map_interfaces.srv import GetMatrices
 
@@ -36,9 +43,16 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
     def __init__(self, node_name: str, **kwargs):
         super().__init__(node_name, **kwargs)
         
+        # Core Subscriptions
         self._sub_odom = None
         self._sub_global_path = None
         self._sub_trajectory = None
+        
+        # Camera Subscriptions
+        self._sub_color = None
+        self._sub_depth = None
+        self.bridge = CvBridge()
+        
         self._pub_goal = None
         self._cli_get_maps = None
         
@@ -52,10 +66,15 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         self._cli_get_maps = self.create_client(GetMatrices, 'get_matrices')
             
         self._sub_odom = self.create_subscription(Odometry, 'odom', self.odom_callback, 10)
-        
-        # --- NEW: Subscribe to the Path Topics ---
         self._sub_global_path = self.create_subscription(Path, 'global_path', self.global_path_callback, 10)
         self._sub_trajectory = self.create_subscription(Path, 'driven_trajectory', self.trajectory_callback, 10)
+
+        # --- NEW: Camera Subscriptions ---
+        self._sub_color = self.create_subscription(
+            CompressedImage, '/unreal/camera0/image_color/compressed', self.color_callback, 10)
+            
+        self._sub_depth = self.create_subscription(
+            Image, '/unreal/camera0/image_depth', self.depth_callback, 10)
 
         return TransitionCallbackReturn.SUCCESS
 
@@ -71,9 +90,15 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         if self._sub_odom: self.destroy_subscription(self._sub_odom)
         if self._sub_global_path: self.destroy_subscription(self._sub_global_path)
         if self._sub_trajectory: self.destroy_subscription(self._sub_trajectory)
+        if self._sub_color: self.destroy_subscription(self._sub_color)
+        if self._sub_depth: self.destroy_subscription(self._sub_depth)
         if self._pub_goal: self.destroy_publisher(self._pub_goal)
         if self._cli_get_maps: self.destroy_client(self._cli_get_maps)
         return TransitionCallbackReturn.SUCCESS
+
+    # =========================================================================
+    # MAP & PATHING CALLBACKS
+    # =========================================================================
 
     def fetch_maps(self) -> None:
         if self._cli_get_maps is None:
@@ -104,10 +129,8 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         except Exception as e:
             self.get_logger().error(f"Service call failed: {e}")
 
-    # --- NEW: Path Formatting Callbacks ---
     def global_path_callback(self, msg: Path) -> None:
         if not self._is_active(): return
-        # Extract X/Y coordinates into a lightweight JSON array
         coords = [{'x': p.pose.position.x, 'y': p.pose.position.y} for p in msg.poses]
         socketio.emit('global_path_update', {'path': coords})
 
@@ -115,7 +138,6 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         if not self._is_active(): return
         coords = [{'x': p.pose.position.x, 'y': p.pose.position.y} for p in msg.poses]
         socketio.emit('trajectory_update', {'path': coords})
-    # --------------------------------------
 
     def odom_callback(self, msg: Odometry) -> None:
         if not self._is_active(): return
@@ -124,18 +146,75 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
             'y': msg.pose.pose.position.y
         })
 
+    # =========================================================================
+    # CAMERA STREAMING CALLBACKS
+    # =========================================================================
+
+    def color_callback(self, msg: CompressedImage) -> None:
+        if not self._is_active(): return
+        # Pass the compressed JPEG bytes directly to the browser
+        b64_img = base64.b64encode(msg.data).decode('utf-8')
+        socketio.emit('color_frame', {'image': b64_img})
+
+    def depth_callback(self, msg: Image) -> None:
+        if not self._is_active(): return
+        try:
+            # 1. Convert raw ROS 32FC1 Image to an OpenCV float matrix
+            cv_img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+            cv_img = np.array(cv_img, dtype=np.float32)
+            
+            # 2. Find the sky value (since your publisher clamps posinf to max_distance, 
+            # the sky is guaranteed to be the absolute highest value in this array)
+            sky_val = np.max(cv_img)
+            
+            # 3. Normalize the raw float depths to 0-255 for the colormap
+            if sky_val > 0.0:
+                norm_img = (cv_img / sky_val * 255.0).astype(np.uint8)
+            else:
+                norm_img = cv_img.astype(np.uint8)
+
+            # 4. Apply the JET colormap (Close = Dark Blue, Far = Dark Red)
+            color_img = cv2.applyColorMap(norm_img, cv2.COLORMAP_JET)
+
+            # 5. Mask the sky! Any pixel that equals the max distance becomes pure black.
+            # (We subtract 0.001 as a tiny safety margin for 32-bit float rounding errors)
+            sky_mask = (cv_img >= sky_val - 0.001)
+            color_img[sky_mask] = [0, 0, 0]
+
+            # 6. Compress to JPEG and send to the web browser
+            _, buffer = cv2.imencode('.jpg', color_img)
+            b64_img = base64.b64encode(buffer).decode('utf-8')
+            socketio.emit('depth_frame', {'image': b64_img})
+            
+        except Exception as e:
+            self.get_logger().error(f"Depth conversion fault: {e}")
+
+    # =========================================================================
+    # UI DISPATCH
+    # =========================================================================
+
     def dispatch_goal(self, x: float, y: float) -> None:
         if self._pub_goal and self._pub_goal.is_activated:
             goal_msg = PoseStamped()
             goal_msg.header.stamp = self.get_clock().now().to_msg()
             goal_msg.header.frame_id = 'map'
-            goal_msg.pose.position.x = x
-            goal_msg.pose.position.y = y
+            
+            # Explicit float casts to prevent C-bridge Assertion PyFloat_Check failure
+            goal_msg.pose.position.x = float(x)
+            goal_msg.pose.position.y = float(y)
             goal_msg.pose.position.z = 0.0
+            
             self._pub_goal.publish(goal_msg)
+        else:
+            self.get_logger().warn("Goal dispatch rejected: Node not in ACTIVE state.")
 
     def _is_active(self) -> bool:
         return self._state_machine.current_state[1] == 'active'
+
+
+# =========================================================================
+# FLASK APPLICATION ROUTING
+# =========================================================================
 
 @app.route('/')
 def index():
@@ -158,8 +237,10 @@ def main(args=None):
     ros_node = LifecycleMissionControlUI('mission_control_dashboard')
     executor = SingleThreadedExecutor()
     executor.add_node(ros_node)
+    
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
+    
     try:
         socketio.run(app, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
     except KeyboardInterrupt:
