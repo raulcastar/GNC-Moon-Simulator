@@ -2,7 +2,7 @@ lc_component_cameras:
   ros__parameters:
     debug_mode:                           true
     port:                                 9000
-    ip:                                 0.0.0.0
+    ip:                                0.0.0.0
     image_reading_hz_rate:                 1.0
     enable_object_mask:                   false
     depth_max_distance:                   10.0 #meters

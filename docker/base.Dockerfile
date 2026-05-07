@@ -48,11 +48,18 @@ RUN apt-get update && apt-get install -y \
     nano \
  && rm -rf /var/lib/apt/lists/*
 
- # Installation of Zenoh RMW Middleware
+# Installation of Zenoh RMW Middleware
 RUN apt-get update && apt-get install -y \ 
     ros-jazzy-rmw-zenoh-cpp \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*rm 
+
+# Installation of Velodyne ROS 2 packages
+RUN apt-get update && apt-get install -y \
+    python3-pip \
+    ros-jazzy-velodyne \
+    ros-jazzy-velodyne-driver \
+    ros-jazzy-velodyne-pointcloud
 
 WORKDIR /opt/ros/jazzy/src
 RUN rm -rf ./*

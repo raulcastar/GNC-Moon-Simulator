@@ -1,0 +1,4 @@
+lc_component_lidar:
+  ros__parameters:
+    lidar_ip: "0.0.0.0"
+    lidar_port: 2368

@@ -19,6 +19,29 @@ services:
     command: >
       bash -lc "source /opt/ros/jazzy/setup.bash && ros2 run rmw_zenoh_cpp rmw_zenohd"
 
+  component_lidar:
+    build:
+      context: ./component_lidar
+      dockerfile: Dockerfile
+    image: gnc_moon_simulator/component_lidar:dev
+    network_mode: host
+    ipc: host
+    restart: unless-stopped
+    entrypoint: >
+      bash -lc "/entrypoint.sh"
+    privileged: true
+    environment:
+      ROS_DOMAIN_ID: 0
+      ROBOT_NAMESPACE: ""
+      LAUNCH_ARGS: ""
+      RMW_IMPLEMENTATION: rmw_zenoh_cpp
+      RCUTILS_COLORIZED_OUTPUT: 1
+      DISPLAY: ${DISPLAY}
+      QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
+    volumes:
+      - ./component_lidar:/opt/ros/jazzy/src/component_lidar
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+
   component_cameras:
     build:
       context: ./component_cameras
@@ -34,6 +57,7 @@ services:
       ROS_DOMAIN_ID: 0
       ROBOT_NAMESPACE: ""
       LAUNCH_ARGS: ""
+      RMW_IMPLEMENTATION: rmw_zenoh_cpp
       RCUTILS_COLORIZED_OUTPUT: 1
       DISPLAY: ${DISPLAY}
       QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
@@ -55,6 +79,7 @@ services:
     environment:
       ROS_DOMAIN_ID: 0
       ROBOT_NAMESPACE: ""
+      RMW_IMPLEMENTATION: rmw_zenoh_cpp
       LAUNCH_ARGS: ""
       RCUTILS_COLORIZED_OUTPUT: 1
       DISPLAY: ${DISPLAY}
@@ -76,6 +101,7 @@ services:
     privileged: true
     environment:
       ROS_DOMAIN_ID: 0
+      RMW_IMPLEMENTATION: rmw_zenoh_cpp
       ROBOT_NAMESPACE: ""
       LAUNCH_ARGS: ""
       RCUTILS_COLORIZED_OUTPUT: 1
@@ -103,6 +129,7 @@ services:
       ROS_DOMAIN_ID: 0
       ROBOT_NAMESPACE: ""
       LAUNCH_ARGS: ""
+      RMW_IMPLEMENTATION: rmw_zenoh_cpp
       RCUTILS_COLORIZED_OUTPUT: 1
       DISPLAY: ${DISPLAY}
       QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
@@ -126,6 +153,7 @@ services:
       ROS_DOMAIN_ID: 0
       ROBOT_NAMESPACE: ""
       LAUNCH_ARGS: ""
+      RMW_IMPLEMENTATION: rmw_zenoh_cpp
       RCUTILS_COLORIZED_OUTPUT: 1
       DISPLAY: ${DISPLAY}
       QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
