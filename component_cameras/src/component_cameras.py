@@ -54,6 +54,7 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
         self._pub_rgb:            Optional[Publisher] = None
         self._pub_rgb_compressed: Optional[Publisher] = None
         self._pub_depth:          Optional[Publisher] = None
+        self._pub_depth_vis:      Optional[Publisher] = None
         
         # Semantic segmentation publishers
         self._pub_mask:           Optional[Publisher] = None
@@ -194,8 +195,9 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
             if res_depth:
                 depth_np = read_npy(res_depth)
                 
-                # Sanitize invalid depth values and clamp to the user-defined maximum distance parameter
-                depth_np = np.nan_to_num(depth_np, posinf=self.depth_max_distance, nan=0.0, neginf=0.0)
+                # UnrealCV returns depth in centimeters; convert to meters for ROS standard
+                depth_np = np.nan_to_num(depth_np, nan=0.0, posinf=self.depth_max_distance * 100.0, neginf=0.0)
+                depth_np = depth_np / 100.0
                 depth_np = np.clip(depth_np, 0.0, self.depth_max_distance)
                 
                 # Cast to 32-bit floating point for standard 32FC1 ROS depth map encoding
@@ -205,6 +207,16 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
                 msg_depth.header.stamp = current_time
                 msg_depth.header.frame_id = frame_id
                 self._pub_depth.publish(msg_depth)
+
+                # Colourised visualisation — JET colormap so RViz shows a readable
+                # gradient without manual min/max tuning. Near = blue, far = red.
+                depth_norm = (depth_np / self.depth_max_distance * 255).astype(np.uint8)
+                depth_coloured = cv2.applyColorMap(depth_norm, cv2.COLORMAP_JET)
+                depth_coloured = np.ascontiguousarray(depth_coloured)
+                msg_depth_vis = self.cv_bridge.cv2_to_imgmsg(depth_coloured, encoding="bgr8")
+                msg_depth_vis.header.stamp = current_time
+                msg_depth_vis.header.frame_id = frame_id
+                self._pub_depth_vis.publish(msg_depth_vis)
 
             # ---------------------------------------------------------
             # Camera: Semantic Object Mask & JSON Mapping (Conditional)
@@ -264,6 +276,7 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
         self._pub_rgb            = self.create_lifecycle_publisher(RosImage, f'{topic_base}/image_color', 10)
         self._pub_rgb_compressed = self.create_lifecycle_publisher(CompressedImage, f'{topic_base}/image_color/compressed', 10)
         self._pub_depth          = self.create_lifecycle_publisher(RosImage, f'{topic_base}/image_depth', 10)
+        self._pub_depth_vis      = self.create_lifecycle_publisher(RosImage, f'{topic_base}/image_depth/visualization', 10)
 
         # 2. Conditionally allocate Object Mask resources
         if self.enable_object_mask:
@@ -305,7 +318,9 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
             self.destroy_publisher(self._pub_rgb_compressed)
         if self._pub_depth:
             self.destroy_publisher(self._pub_depth)
-            
+        if self._pub_depth_vis:
+            self.destroy_publisher(self._pub_depth_vis)
+
         # Conditionally destroy mask publishers
         if self._pub_mask:
             self.destroy_publisher(self._pub_mask)
@@ -334,7 +349,9 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
             self.destroy_publisher(self._pub_rgb_compressed)
         if self._pub_depth:
             self.destroy_publisher(self._pub_depth)
-            
+        if self._pub_depth_vis:
+            self.destroy_publisher(self._pub_depth_vis)
+
         if self._pub_mask:
             self.destroy_publisher(self._pub_mask)
         if self._pub_mask_mapping:

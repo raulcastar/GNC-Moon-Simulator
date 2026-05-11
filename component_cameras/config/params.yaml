@@ -5,5 +5,5 @@ lc_component_cameras:
     ip:                                0.0.0.0
     image_reading_hz_rate:                 1.0
     enable_object_mask:                   false
-    depth_max_distance:                   10.0 #meters
+    depth_max_distance:                   50.0 # metres
     camera_id:                               0 #Navcam_Sensor
