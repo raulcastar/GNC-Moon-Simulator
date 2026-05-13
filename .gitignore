@@ -3,3 +3,5 @@ install/
 log/
 share/
 __pycache__
+.claude/
+component_path_planner/maps

@@ -1,0 +1,64 @@
+lc_component_local_mapping:
+  ros__parameters:
+    # Which camera to subscribe to (matches camera_id in component_cameras)
+    camera_id: 0
+
+    # ── Pinhole camera intrinsics (pixels) ────────────────────────────────────
+    # Unreal camera running at 640×480.
+    # Principal point is always at the image centre: cx = width/2, cy = height/2.
+    # Focal length: fx = fy = (width/2) / tan(HFOV/2)
+    #   640-px image, 90° HFOV  →  fx = fy = 320.0
+    #   640-px image, 60° HFOV  →  fx = fy = 554.3
+    # Check your Unreal scene camera HFOV and adjust fx/fy accordingly.
+    # cx/cy are correct for any 640×480 camera.
+    camera_fx: 320.0
+    camera_fy: 320.0
+    camera_cx: 320.0   # Cu in reference — image centre x  (= width  / 2)
+    camera_cy: 240.0   # Cv in reference — image centre y  (= height / 2)
+
+    # ── Physical camera mounting ───────────────────────────────────────────────
+    # camera_height_m: distance from the ground plane to the camera optical
+    #   centre (= physical_height in CameraTransform). Used by rotateRefSystem
+    #   to set the absolute elevation of z_w = 0 at the ground.
+    camera_height_m: 0.40   # metres (reference example: 0.40 m)
+
+    # camera_angle: tilt of the camera from horizontal in degrees.
+    #   0   = camera looking straight ahead (horizontal)
+    #   +ve = tilted up    (looking above horizon)
+    #   -ve = tilted down  (nadir-ish, looking at ground ahead)
+    camera_angle: 0.0
+
+    # camera_roll: lateral (sideways) tilt of the camera mounting in degrees.
+    #   0   = camera level (no lateral tilt)
+    #   +ve = camera tilted right (right side up)
+    #   -ve = camera tilted left
+    # This is the fixed mechanical mounting offset; live rover roll comes from /odom.
+    camera_roll: 0.0
+
+    # ── DEM computation parameters ────────────────────────────────────────────
+    # map_resolution: size of one DEM cell in metres (= 1/resolution_multiplier
+    #   in reference code).  0.01 = 1 cm/cell, 0.05 = 5 cm/cell.
+    map_resolution: 0.05   # metres per cell
+
+    # distance_limit: maximum x_w (lateral) and y_w (forward) distance in metres.
+    #   Points beyond this are discarded before building the grid — matches the
+    #   distance_limit argument of MergedImage.computeDEM.
+    distance_limit: 3.0   # metres — set to cover the full observed depth range
+
+    # ── Depth pixel validity window (metres) ──────────────────────────────────
+    # min_valid_depth: reject pixels closer than this (noise / self-occlusion).
+    # The upper bound is distance_limit — one parameter controls both the raw
+    # pixel filter and the world-frame distance gate.
+    min_valid_depth: 0.1
+
+    # depth_scale: multiply raw depth values (from component_cameras) by this
+    # factor to obtain true metres.
+    #   1.0  → depth already in metres  (Unreal 1 UU = 1 cm, component_cameras /100 ✓)
+    #   0.1  → depth arrives in decimetres  (Unreal 1 UU = 1 mm, /100 gives dm not m)
+    # Check the log line "[DEM diag] depth range" — if objects 1 m away show
+    # as ~10 m, set depth_scale: 0.1
+    depth_scale: 1.0
+
+    # ── Debug DEM visualisation ───────────────────────────────────────────────
+    debug_mode: true
+    debug_save_path: /opt/ros/jazzy/src/component_local_mapping/debug_dem.png

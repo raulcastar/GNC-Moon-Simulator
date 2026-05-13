@@ -113,6 +113,30 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
 
 
+  component_local_mapping:
+    build:
+      context: ./component_local_mapping
+      dockerfile: Dockerfile
+    image: gnc_moon_simulator/component_local_mapping:dev
+    network_mode: host
+    ipc: host
+    restart: unless-stopped
+    entrypoint: ["/bin/bash", "-c", "source /opt/ros/jazzy/setup.bash && exec /bin/bash"]
+    privileged: true
+    stdin_open: true # Equivalent to -i
+    tty: true        # Equivalent to -t
+    environment:
+      ROS_DOMAIN_ID: 0
+      ROBOT_NAMESPACE: ""
+      LAUNCH_ARGS: ""
+      RMW_IMPLEMENTATION: rmw_zenoh_cpp
+      RCUTILS_COLORIZED_OUTPUT: 1
+      DISPLAY: ${DISPLAY}
+      QT_X11_NO_MITSHM: 1
+    volumes:
+      - ./component_local_mapping:/opt/ros/jazzy/src/component_local_mapping
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+
   mission_control_dashboard:
     build:
       context: ./mission_control_dashboard
