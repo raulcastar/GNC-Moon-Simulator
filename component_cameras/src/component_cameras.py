@@ -195,9 +195,13 @@ class LifecycleUnrealCameras(rclpy.lifecycle.Node):
             if res_depth:
                 depth_np = read_npy(res_depth)
                 
-                # UnrealCV returns depth in centimeters; convert to meters for ROS standard
-                depth_np = np.nan_to_num(depth_np, nan=0.0, posinf=self.depth_max_distance * 100.0, neginf=0.0)
-                depth_np = depth_np / 100.0
+                # UnrealCV vget /camera/depth npy returns depth in millimetres
+                # (float16 values; 65504 = float16 max, used for background/sky).
+                # Convert mm → m and clamp to the configured maximum range.
+                depth_np = np.nan_to_num(depth_np, nan=0.0,
+                                         posinf=self.depth_max_distance * 1000.0,
+                                         neginf=0.0)
+                depth_np = depth_np / 1000.0
                 depth_np = np.clip(depth_np, 0.0, self.depth_max_distance)
                 
                 # Cast to 32-bit floating point for standard 32FC1 ROS depth map encoding
