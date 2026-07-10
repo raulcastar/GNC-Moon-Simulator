@@ -78,8 +78,7 @@ path reads it.
 
 SGBM assumes epipolar lines are image rows. That holds only when the two eyes
 share a rotation and are offset purely along the left camera's right axis. At
-configure time the node reads all three poses from Unreal inside one
-`vset /action/game/pause` window, and checks:
+configure time the node reads all three poses and checks:
 
 - left and right rotations match, and the baseline is purely lateral
 - the central camera lies on the line between the eyes, near its midpoint
@@ -95,6 +94,31 @@ python utils/list_unreal_cameras.py
 
 It prints every camera's location, rotation, FOV and resolution, then evaluates
 each ordered pair as a stereo candidate.
+
+### Simultaneity without pausing
+
+A stereo pair is only rigid if both eyes see the same world state. The node sends
+all its grabs as **one batched UnrealCV request**, so the server answers them
+back to back and normally within a single game tick. The world advances on ticks
+rather than wall-clock, so that is simultaneous however long the wire took.
+
+Every batch is bracketed by a `vget /camera/N/location` probe. If the two replies
+differ, the batch spanned ticks and the node says by how much, as a fraction of
+the baseline:
+
+```
+Capture: the rig moved 5.00 cm mid-batch (25% of the baseline) — the grabs span
+game ticks and are not simultaneous.
+```
+
+`pause_game_during_capture` guarantees simultaneity but freezes the simulation
+for every other component, so it is **off by default**. Turn it on only if the
+drift warning shows the batch spanning ticks and an exact baseline matters more
+than uninterrupted rover dynamics.
+
+The configure-time geometry snapshot uses the same batch and probe, retrying a
+few times to catch the rig within one tick. Measure the rig with the rover
+stationary if you want an exact baseline.
 
 ### Geometry that governs the result
 

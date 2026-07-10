@@ -26,10 +26,18 @@ lc_component_stereo_depth:
     right_topic:                  navcam/right
     center_topic:               navcam/central
 
-    # Each vget is a separate TCP round-trip. Pausing freezes the world so all
-    # three grabs come from the same instant; without it the rover moves between
-    # them and the baseline no longer describes the pair.
-    pause_game_during_capture:            true
+    # Freeze the game while grabbing. Off by default: pausing stops the
+    # simulation for every other component.
+    #
+    # Not usually needed. All grabs go out as one batched request, so the server
+    # answers them back to back and normally within a single game tick — and the
+    # world only advances on ticks, so that is simultaneous however long the wire
+    # took. Every batch is bracketed by a location probe; if the rig moved, the
+    # node logs by how much, as a fraction of the baseline.
+    #
+    # Turn it on when an exact baseline matters more than uninterrupted rover
+    # dynamics, or if the drift warning shows the batch spanning ticks.
+    pause_game_during_capture:           false
 
     # ── Rig geometry ──────────────────────────────────────────────────────────
     # Both are auto-solved from the running Unreal instance when <= 0:

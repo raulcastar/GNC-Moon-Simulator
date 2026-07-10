@@ -24,19 +24,22 @@ Unreal's exact depth buffer is published on depth_gt, for scoring it. Disparity
 has no separate visualisation: it is a monotonic function of depth, so it would
 just render image_depth/visualization inverted.
 
-This node must own the UnrealCV socket and serve every camera:
+This node must own the UnrealCV socket and serve every camera: the server accepts
+one client connection at a time.
 
-  * The server accepts one client connection at a time.
-  * Each vget is a separate TCP round-trip. The rover moves between the left and
-    right grabs unless the process issuing them brackets the whole capture with
-    "vset /action/game/pause". All three cameras are read inside one pause
-    window, so the sensor suite shares a single instant of world state.
+A stereo pair is only rigid if both eyes see the same world state. All grabs go
+out as one batched request, so the server answers them back to back and usually
+within a single game tick — the world advances on ticks, not on wall-clock, so
+that is enough. A location probe brackets each batch and reports the rig's drift
+when it is not. Pausing the game guarantees simultaneity but freezes the
+simulation for every other component, so it is opt-in.
 
 Rig geometry (baseline, focal length, rectification) is read from the running
 Unreal instance at configure time and validated.
 """
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
+import contextlib
 import math
 import time
 import re
@@ -61,6 +64,9 @@ from unrealcv.util import read_png, read_npy
 
 # float16 max — UnrealCV writes this into the depth buffer for sky/background.
 _FLOAT16_MAX = 65504.0
+
+# Attempts to catch the rig within one game tick before giving up.
+_GEOMETRY_SNAPSHOT_TRIES = 5
 
 
 def _frame_id(topic: str) -> str:
@@ -185,6 +191,28 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
     # UnrealCV connection and rig solving
     # =========================================================================
 
+    @contextlib.contextmanager
+    def _paused(self):
+        """
+        Freeze the game for the duration of the block, if configured to.
+
+        Off by default: pausing stops the simulation for every other component.
+        Batched grabs usually land inside one game tick without it, and the drift
+        probe reports when they do not. Turn it on when an exact baseline matters
+        more than uninterrupted rover dynamics.
+        """
+        paused = False
+        if self.pause_game_during_capture:
+            paused = self.unreal_client.request('vset /action/game/pause') == 'ok'
+            if not paused:
+                self.get_logger().warn('Could not pause the game.',
+                                       throttle_duration_sec=10.0)
+        try:
+            yield
+        finally:
+            if paused:
+                self.unreal_client.request('vset /action/game/resume')
+
     def _connect_unrealcv(self, ip: str, port: int) -> None:
         self.get_logger().info(f'Attempting connection to UnrealCV at {ip}:{port}...')
         self.unreal_client = Client((ip, port), 'inet')
@@ -222,16 +250,70 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
             res = res.decode('utf-8', 'replace')
         return res
 
-    def _get_vec3(self, cam_id: int, what: str) -> np.ndarray:
-        cmd = f'vget /camera/{cam_id}/{what}'
-        res = self._request(cmd)
+    def _request_batch(self, cmds: List[str], retries: int = 2) -> List:
+        """
+        Send every command in one burst, then read the replies in order.
+
+        A sequential vget costs a full round-trip each; the rover keeps driving
+        through all of them. A batch leaves one round-trip for the whole set, so
+        the server sees the commands back to back and is far more likely to
+        answer them from a single game tick. Replies come back in send order and
+        keep their type (str for text, bytes for image payloads).
+        """
+        for _ in range(retries):
+            res = self.unreal_client.request(list(cmds))
+            if res is None or len(res) != len(cmds) or any(r is None for r in res):
+                continue
+            for cmd, r in zip(cmds, res):
+                err = (r.lower().startswith('error') if isinstance(r, str)
+                       else r[:5].lower() == b'error')
+                if err:
+                    raise RuntimeError(f'UnrealCV rejected "{cmd}": {r[:120]!r}')
+            return res
+        raise RuntimeError(
+            f'UnrealCV gave no usable reply to a batch of {len(cmds)} commands')
+
+    @staticmethod
+    def _parse_vec3(cmd: str, res) -> np.ndarray:
+        if isinstance(res, bytes):
+            res = res.decode('utf-8', 'replace')
         try:
             vals = [float(v) for v in res.split()]
-        except ValueError:
+        except (AttributeError, ValueError):
             raise RuntimeError(f'Could not parse "{cmd}" reply as 3 floats: {res!r}')
         if len(vals) != 3:
             raise RuntimeError(f'"{cmd}" returned {len(vals)} values, expected 3: {res!r}')
         return np.array(vals)
+
+    def _get_vec3(self, cam_id: int, what: str) -> np.ndarray:
+        cmd = f'vget /camera/{cam_id}/{what}'
+        return self._parse_vec3(cmd, self._request(cmd))
+
+    def _drift_probe(self) -> str:
+        """Cheap command whose reply changes if the rover moves mid-batch."""
+        return f'vget /camera/{self.left_camera_id}/location'
+
+    def _check_drift(self, cmd: str, first, last, what: str) -> float:
+        """
+        Metres the rig moved between the first and last reply of a batch.
+
+        The world only advances on a game tick, so a batch answered within one
+        tick returns identical poses however long it took on the wire. A nonzero
+        drift means the batch spanned ticks and the images are not a rigid pair.
+        """
+        drift = float(np.linalg.norm(self._parse_vec3(cmd, last) -
+                                     self._parse_vec3(cmd, first))) / self.uu_per_metre
+        tol = max(0.01 * self._baseline_m, 1e-4) if self._baseline_m else 1e-3
+        if drift > tol:
+            self.get_logger().warn(
+                f'{what}: the rig moved {drift * 100:.2f} cm mid-batch '
+                f'({drift / self._baseline_m * 100:.0f}% of the baseline) — the '
+                f'grabs span game ticks and are not simultaneous. Slow the rover, '
+                f'lower image_reading_hz_rate, or set pause_game_during_capture.'
+                if self._baseline_m else
+                f'{what}: the rig moved {drift * 100:.2f} cm mid-batch.',
+                throttle_duration_sec=10.0)
+        return drift
 
     def _build_color_mapping(self) -> str:
         """
@@ -295,26 +377,45 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         """
         Read all three camera poses inside one pause window.
 
-        Each vget is a separate TCP round-trip and the rover keeps driving
-        between them. Sampling the left eye and the centre camera 0.3 s apart
-        subtracts two different world states: cameras bolted to the same bar
-        come back non-collinear and mutually rotated.
+        Sampling the left eye and the centre camera at different game ticks
+        subtracts two different world states: cameras bolted to the same bar come
+        back non-collinear and mutually rotated. All six queries go out as one
+        batch, and the probe that brackets it says whether they landed in the
+        same tick. A drifting snapshot is retried rather than trusted.
         """
         cams = [self.left_camera_id, self.right_camera_id, self.center_camera_id]
-        paused = False
-        if self.pause_game_during_capture:
-            paused = self.unreal_client.request('vset /action/game/pause') == 'ok'
-        if not paused:
+        probe = self._drift_probe()
+        cmds = [probe]
+        for c in cams:
+            cmds += [f'vget /camera/{c}/location', f'vget /camera/{c}/rotation']
+        cmds.append(probe)
+
+        best, best_drift = None, float('inf')
+        for attempt in range(_GEOMETRY_SNAPSHOT_TRIES):
+            with self._paused():
+                res = self._request_batch(cmds)
+            drift = float(np.linalg.norm(self._parse_vec3(probe, res[-1]) -
+                                         self._parse_vec3(probe, res[0])))
+            if drift < best_drift:
+                best, best_drift = res, drift
+            if drift == 0.0:
+                break
+            time.sleep(0.2)
+
+        drift_m = best_drift / self.uu_per_metre
+        if best_drift > 0.0:
             self.get_logger().warn(
-                'Geometry snapshot taken with the game running: the measured '
-                'baseline and camera offsets will include the rover\'s own '
-                'motion between queries.')
-        try:
-            self._geom = {c: (self._get_vec3(c, 'location'),
-                              self._get_vec3(c, 'rotation')) for c in cams}
-        finally:
-            if paused:
-                self.unreal_client.request('vset /action/game/resume')
+                f'Rig moved {drift_m * 100:.2f} cm during the geometry snapshot, '
+                f'over {_GEOMETRY_SNAPSHOT_TRIES} attempts. Measure it with the '
+                f'rover stationary for an exact baseline.')
+        else:
+            self.get_logger().info('Geometry snapshot taken within one game tick.')
+
+        self._geom = {
+            c: (self._parse_vec3(cmds[1 + 2 * i], best[1 + 2 * i]),
+                self._parse_vec3(cmds[2 + 2 * i], best[2 + 2 * i]))
+            for i, c in enumerate(cams)
+        }
 
     def _solve_rig(self) -> None:
         """
@@ -596,10 +697,10 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
     # Capture
     # =========================================================================
 
-    def _grab_rgb(self, cam_id: int, viewmode: str = 'lit') -> np.ndarray:
+    @staticmethod
+    def _decode_rgb(cmd: str, payload) -> np.ndarray:
         """PNG payload -> contiguous uint8 RGB, alpha dropped."""
-        cmd = f'vget /camera/{cam_id}/{viewmode} png'
-        img = read_png(self._request_raw(cmd))
+        img = read_png(payload)
         if img is None:
             raise RuntimeError(
                 f'read_png could not decode the reply to "{cmd}". The payload '
@@ -609,43 +710,59 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
             img = img[:, :, :3]
         return np.ascontiguousarray(img)
 
-    def _grab_depth(self, cam_id: int) -> np.ndarray:
+    @staticmethod
+    def _decode_depth(cmd: str, payload) -> np.ndarray:
         """NPY payload -> float depth buffer, still in Unreal's radial units."""
-        cmd = f'vget /camera/{cam_id}/depth npy'
-        depth = read_npy(self._request_raw(cmd))
+        depth = read_npy(payload)
         if depth is None:
             raise RuntimeError(f'read_npy could not decode the reply to "{cmd}".')
         return depth
 
+    def _grab_rgb(self, cam_id: int, viewmode: str = 'lit') -> np.ndarray:
+        cmd = f'vget /camera/{cam_id}/{viewmode} png'
+        return self._decode_rgb(cmd, self._request_raw(cmd))
+
+    def _grab_depth(self, cam_id: int) -> np.ndarray:
+        cmd = f'vget /camera/{cam_id}/depth npy'
+        return self._decode_depth(cmd, self._request_raw(cmd))
+
     def _capture_all(self):
         """
-        Grab all three navcams as one instant, pausing the game so the TCP
-        round-trips describe the same world state.
+        Grab all three navcams as one batch.
+
+        A stereo pair is only rigid if both eyes see the same world state. The
+        world advances on game ticks, not wall-clock, so a batch answered inside
+        one tick is simultaneous however long it took on the wire. The probe that
+        brackets the batch reports whether that held; it is not enforced, so a
+        moving rover degrades the baseline instead of freezing the simulation.
         """
-        paused = False
-        if self.pause_game_during_capture:
-            paused = self.unreal_client.request('vset /action/game/pause') == 'ok'
-            if not paused:
-                self.get_logger().warn(
-                    'Could not pause the game; the stereo pair will be captured '
-                    'at slightly different times and the baseline will not hold.',
-                    throttle_duration_sec=10.0)
-        try:
-            left = self._grab_rgb(self.left_camera_id)
-            right = self._grab_rgb(self.right_camera_id)
-            center = self._grab_rgb(self.center_camera_id)
+        probe = self._drift_probe()
+        cmds = [probe,
+                f'vget /camera/{self.left_camera_id}/lit png',
+                f'vget /camera/{self.right_camera_id}/lit png',
+                f'vget /camera/{self.center_camera_id}/lit png']
+        if self.validate_against_ground_truth:
+            cmds.append(f'vget /camera/{self.center_camera_id}/depth npy')
+        if self.enable_object_mask:
+            cmds.append(f'vget /camera/{self.center_camera_id}/object_mask png')
+        cmds.append(probe)
 
-            center_depth_gt = None
-            if self.validate_against_ground_truth:
-                center_depth_gt = self._grab_depth(self.center_camera_id)
+        with self._paused():
+            res = self._request_batch(cmds)
 
-            center_mask = None
-            if self.enable_object_mask:
-                center_mask = self._grab_rgb(self.center_camera_id,
-                                             viewmode='object_mask')
-        finally:
-            if paused:
-                self.unreal_client.request('vset /action/game/resume')
+        self._check_drift(probe, res[0], res[-1], 'Capture')
+
+        left = self._decode_rgb(cmds[1], res[1])
+        right = self._decode_rgb(cmds[2], res[2])
+        center = self._decode_rgb(cmds[3], res[3])
+
+        i = 4
+        center_depth_gt = None
+        if self.validate_against_ground_truth:
+            center_depth_gt = self._decode_depth(cmds[i], res[i]); i += 1
+        center_mask = None
+        if self.enable_object_mask:
+            center_mask = self._decode_rgb(cmds[i], res[i])
 
         if self._swap_lr:
             left, right = right, left
