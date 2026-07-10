@@ -1,0 +1,113 @@
+lc_component_stereo_depth:
+  ros__parameters:
+    debug_mode:                           true
+    ip:                                0.0.0.0
+    port:                                 9000
+    image_reading_hz_rate:                 1.0
+
+    # ── The three navcams ─────────────────────────────────────────────────────
+    # left/right form the stereo pair. The stereo depth is reprojected onto the
+    # central camera's pixel grid, so its depth, disparity, object mask and RGB
+    # all overlay one another.
+    #
+    # Verify the ids with `python utils/list_unreal_cameras.py`, which prints
+    # every camera's pose. On startup this node logs where the central camera
+    # sits along the baseline: expect ~50%, ~0 cm off the eye-to-eye line.
+    #
+    # This node owns the single UnrealCV client connection and serves all three;
+    # nothing else may hold the socket.
+    left_camera_id:                          1
+    right_camera_id:                         2
+    center_camera_id:                        0   # Navcam_Sensor
+
+    # Hierarchical topic namespaces. TF frame names are derived by flattening
+    # them ('navcam/central' -> 'navcam_central'), since tf2 forbids '/'.
+    left_topic:                    navcam/left
+    right_topic:                  navcam/right
+    center_topic:               navcam/central
+
+    # Each vget is a separate TCP round-trip. Pausing freezes the world so all
+    # three grabs come from the same instant; without it the rover moves between
+    # them and the baseline no longer describes the pair.
+    pause_game_during_capture:            true
+
+    # ── Rig geometry ──────────────────────────────────────────────────────────
+    # Both are auto-solved from the running Unreal instance when <= 0:
+    #   baseline_m  camera locations projected on the left camera's right axis,
+    #               checked for a purely lateral offset
+    #   hfov_deg    vget /camera/N/fov
+    # The central camera's FOV is always read from Unreal: it may differ from
+    # the pair's, and the reprojection uses its real intrinsics.
+    baseline_m:                            0.0   # metres; 0 = solve from Unreal
+    hfov_deg:                              0.0   # degrees; 0 = query Unreal
+
+    # Unreal Units per metre. Scales the baseline and the ground-truth depth
+    # identically, so a wrong value shifts absolute metres but leaves the
+    # stereo/ground-truth error ratio untouched.
+    uu_per_metre:                       1000.0
+
+    # ── Matching window ───────────────────────────────────────────────────────
+    # num_disparities is the width of the SGBM search window, hence also of the
+    # unmatched left border. Positive multiple of 16, capped at 256. Everything
+    # else follows from it:
+    #
+    #   nearest resolvable surface   near = fx*B / num_disparities
+    #   left border cost             num_disparities columns (see fill_left_border)
+    #   matching time                linear in it
+    #
+    # Depth nearer than the derived near limit is rejected; the node logs it.
+    # Surfaces closer still alias into the search range as plausible garbage —
+    # the near-field audit at startup reports how much of the view that is.
+    #
+    # With fx*B = 64 (20 cm baseline, 90°, 640 px):
+    #   64  -> near 1.00 m, border 10% of the image
+    #   128 -> near 0.50 m, border 20%
+    #   224 -> near 0.29 m, border 35%
+    num_disparities:                        64
+
+    max_depth_m:                           6.0
+
+    block_size:                              5   # forced odd; 3-11 is sensible
+    uniqueness_ratio:                       10
+    speckle_window_size:                   100
+    speckle_range:                          32
+
+    # Recover the left border. OpenCV blanks every column u < numDisparities,
+    # where the widest search window does not fit. The true constraint is
+    # per-pixel: a left pixel at column u with disparity d matches right pixel
+    # u - d, so it is recoverable whenever d <= u.
+    #
+    # Both images are padded by numDisparities before matching and cropped back,
+    # then `u - d >= 0` is enforced exactly. A surface at max_depth_m becomes
+    # matchable from column fx*B/max_depth_m onward. Costs ~numDisparities/width
+    # extra matching time.
+    #
+    # What stays blank is what the right camera cannot see: near surfaces at the
+    # far left.
+    fill_left_border:                     true
+
+    # CLAHE on both images before matching. Recovers texture from near-clipped
+    # pixels, but not from a fully saturated highlight. Leave false to measure
+    # the raw glare penalty; true to see what a real pipeline could claw back.
+    equalize_for_glare:                  false
+
+    # ── Central camera products ───────────────────────────────────────────────
+    # Clamp and colormap range for image_depth / image_depth/visualization.
+    depth_max_distance:                    6.0   # metres
+
+    # Publishes navcam/central/object_mask (rgb8) and object_mask_mapping (JSON
+    # object -> colour, downloaded once at configure time). Costs one extra vget
+    # per frame, inside the pause window.
+    enable_object_mask:                   true
+
+    # ── Glare study ───────────────────────────────────────────────────────────
+    # A channel at or above this level has clipped. Measured on the central
+    # image, so it aligns with the depth it explains. Partitions the per-frame
+    # error statistics; not published as a topic.
+    saturation_level:                      250
+
+    # Publishes navcam/central/depth_gt (Unreal's exact depth buffer, converted
+    # to planar metres) and logs, per frame, the matching hole rate and |dZ|/Z
+    # inside vs outside the glare. Both live in the central camera's frame, so
+    # the comparison is pixel-aligned. Costs one extra vget.
+    validate_against_ground_truth:        true

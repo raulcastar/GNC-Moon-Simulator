@@ -1,15 +1,18 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>component_cameras</name>
+  <name>component_stereo_depth</name>
   <version>0.0.0</version>
-  <description>Unreal Cameras</description>
+  <description>Stereo disparity and depth from a simulated UnrealCV stereo rig for the GNC Moon Simulator.</description>
   <maintainer email="raul.castilla@uni.lu">Raul Castilla-Arquillo</maintainer>
   <license>MIT License</license>
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>lifecycle_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>stereo_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

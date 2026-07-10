@@ -24,7 +24,7 @@ import rclpy
 import rclpy.lifecycle
 from rclpy.lifecycle import Publisher, State, TransitionCallbackReturn
 
-from sensor_msgs.msg import Image as RosImage, PointCloud2, PointField
+from sensor_msgs.msg import Image as RosImage, CameraInfo, PointCloud2, PointField
 from sensor_msgs_py import point_cloud2
 from nav_msgs.msg import OccupancyGrid, Odometry
 from std_msgs.msg import Header, Float32MultiArray, MultiArrayDimension, MultiArrayLayout
@@ -62,8 +62,7 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
     Pipeline per depth frame
     ------------------------
     1. projectCameraCoord (vectorised)
-       UnrealCV vget /camera/depth gives radial (Euclidean) distance.
-       Convert to planar Z-depth:  z_cam = d / √(1 + px² + py²)
+       The depth topic carries planar Z-depth in metres.  z_cam = d
        x_cam = px · z_cam   [lateral,  right +]   px = (u - cx)/fx
        y_cam = py · z_cam   [vertical, down  +]   py = (v - cy)/fy
 
@@ -95,6 +94,7 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         self._sub_depth = None
         self._sub_color = None
         self._sub_odom  = None
+        self._sub_info  = None
         self._is_active: bool = False
 
         # Latest colour image — written by _color_callback, read by _depth_callback.
@@ -113,7 +113,10 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         self.declare_parameters(
             namespace='',
             parameters=[
-                ('camera_id',        rclpy.Parameter.Type.INTEGER),
+                ('camera_topic',     rclpy.Parameter.Type.STRING),
+                # camera_fx/fy/cx/cy are fallbacks, used until camera_info
+                # arrives, or for ever when use_camera_info is false.
+                ('use_camera_info',  rclpy.Parameter.Type.BOOL),
                 ('camera_fx',        rclpy.Parameter.Type.DOUBLE),
                 ('camera_fy',        rclpy.Parameter.Type.DOUBLE),
                 ('camera_cx',        rclpy.Parameter.Type.DOUBLE),  # = Cu in reference
@@ -150,6 +153,28 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
                 self._latest_color_img = img.astype(np.float32) / 255.0
         except Exception as exc:
             self.get_logger().warn(f"Colour decode failed: {exc}", throttle_duration_sec=5.0)
+
+    def _camera_info_callback(self, msg: CameraInfo) -> None:
+        """
+        Take intrinsics from the publisher rather than a YAML file.
+
+        A DEM built with the wrong fx is uniformly stretched or squashed in
+        range, and nothing in the output announces it.
+        """
+        fx, cx, cy = msg.k[0], msg.k[2], msg.k[5]
+        fy = msg.k[4] or fx
+        if fx <= 0.0:
+            return
+        changed = (fx, fy, cx, cy) != (self.camera_fx, self.camera_fy,
+                                       self.camera_cx, self.camera_cy)
+        if changed:
+            self.camera_fx, self.camera_fy = fx, fy
+            self.camera_cx, self.camera_cy = cx, cy
+            self._pixel_x = None          # force the direction grids to rebuild
+            self._pixel_y = None
+            self.get_logger().info(
+                f"Intrinsics from camera_info: fx={fx:.2f} fy={fy:.2f} "
+                f"cx={cx:.2f} cy={cy:.2f}")
 
     # =========================================================================
     # Pixel direction grids
@@ -233,18 +258,11 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
             return None, None, None, None, None, None
 
         # ── 2. projectCameraCoord (vectorised) ───────────────────────────────
-        # UnrealCV vget /camera/depth returns **radial** (Euclidean) distance —
-        # the straight-line distance from the camera centre to the surface point.
-        # The pinhole back-projection needs the **planar** (Z-axis) component:
-        #
-        #   d_planar = d_radial · cos(θ)   where cos(θ) = 1 / √(1 + px² + py²)
-        #
-        # Equivalently:  z_cam = d_radial / √(1 + px² + py²)
-        #
-        # Without this, off-centre pixels are placed too far forward because the
-        # radial length is longer than the true Z-depth along the optical axis.
-        scale = np.sqrt(1.0 + px**2 + py**2)   # radial ray length per unit Z-depth
-        z_cam = d / scale       # planar Z-depth  (forward along optical axis)
+        # The depth topic carries planar Z depth: component_stereo_depth already
+        # converted UnrealCV's radial buffer. Do not reintroduce a
+        # `/ sqrt(1 + px² + py²)` divide — on already-planar depth it pulls
+        # off-centre points toward the camera by 60% in the corners at 90° HFOV.
+        z_cam = d               # planar Z-depth  (forward along optical axis)
         x_cam = px * z_cam      # lateral  (right +)
         y_cam = py * z_cam      # vertical (down  +)
 
@@ -663,7 +681,8 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
     def on_configure(self, state: State) -> TransitionCallbackReturn:
         self.get_logger().info("Lifecycle: CONFIGURED.")
 
-        self.camera_id       = self.get_parameter('camera_id').value
+        self.camera_topic    = self.get_parameter('camera_topic').value
+        self.use_camera_info = self.get_parameter('use_camera_info').value
         self.camera_fx       = self.get_parameter('camera_fx').value
         self.camera_fy       = self.get_parameter('camera_fy').value
         self.camera_cx       = self.get_parameter('camera_cx').value
@@ -685,13 +704,21 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         if self.debug_mode:
             plt.ion()
 
-        depth_topic = f'unreal/camera{self.camera_id}/image_depth'
-        color_topic = f'unreal/camera{self.camera_id}/image_color'
+        depth_topic = f'{self.camera_topic}/image_depth'
+        color_topic = f'{self.camera_topic}/image_color'
+        info_topic  = f'{self.camera_topic}/camera_info'
         self.get_logger().info(
             f"Subscribing to '{depth_topic}' and '{color_topic}' | "
             f"camera_angle={camera_angle_deg}° camera_roll={camera_roll_deg}° "
             f"camera_height={self.camera_height_m} m | "
             f"resolution={self.map_resolution} m/cell distance_limit={self.distance_limit} m"
+        )
+        # Stereo depth: sparse, with occlusion holes and range-dependent
+        # quantisation. Cells with no valid point stay unknown in the DEM.
+        self.get_logger().info(
+            f"Depth source is stereo, not ground truth — expect holes."
+            + (f" Intrinsics will follow '{info_topic}'." if self.use_camera_info
+               else f" Using YAML intrinsics fx={self.camera_fx}.")
         )
 
         self._pub_elevation_raw  = self.create_lifecycle_publisher(
@@ -707,6 +734,9 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
             RosImage, depth_topic, self._depth_callback, _DEPTH_QOS)
         self._sub_color = self.create_subscription(
             RosImage, color_topic, self._color_callback, _DEPTH_QOS)
+        if self.use_camera_info:
+            self._sub_info = self.create_subscription(
+                CameraInfo, info_topic, self._camera_info_callback, 10)
 
         return TransitionCallbackReturn.SUCCESS
 
@@ -726,12 +756,13 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         self._pixel_x = None
         self._pixel_y = None
 
-        for sub in (self._sub_depth, self._sub_color, self._sub_odom):
+        for sub in (self._sub_depth, self._sub_color, self._sub_odom, self._sub_info):
             if sub:
                 self.destroy_subscription(sub)
         self._sub_depth = None
         self._sub_color = None
         self._sub_odom  = None
+        self._sub_info  = None
         with self._color_lock:
             self._latest_color_img = None
 

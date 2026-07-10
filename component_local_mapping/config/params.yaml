@@ -1,16 +1,21 @@
 lc_component_local_mapping:
   ros__parameters:
-    # Which camera to subscribe to (matches camera_id in component_cameras)
-    camera_id: 0
+    # Camera namespace served by component_stereo_depth. Subscribes to
+    # <camera_topic>/image_depth, /image_color and /camera_info.
+    #
+    # image_depth is the stereo result reprojected into the central camera, not
+    # Unreal's depth buffer: sparse, with occlusion holes, accuracy degrading as
+    # Z²/(fx·B). navcam/central/depth_gt carries the exact buffer.
+    camera_topic: navcam/central
 
     # ── Pinhole camera intrinsics (pixels) ────────────────────────────────────
-    # Unreal camera running at 640×480.
-    # Principal point is always at the image centre: cx = width/2, cy = height/2.
-    # Focal length: fx = fy = (width/2) / tan(HFOV/2)
+    # Prefer camera_info: the publisher derives fx from the FOV it reads out of
+    # Unreal, so an editor change cannot silently stretch the DEM in range.
+    use_camera_info: true
+
+    # Fallback until the first camera_info: fx = fy = (width/2) / tan(HFOV/2)
     #   640-px image, 90° HFOV  →  fx = fy = 320.0
     #   640-px image, 60° HFOV  →  fx = fy = 554.3
-    # Check your Unreal scene camera HFOV and adjust fx/fy accordingly.
-    # cx/cy are correct for any 640×480 camera.
     camera_fx: 320.0
     camera_fy: 320.0
     camera_cx: 320.0   # Cu in reference — image centre x  (= width  / 2)
@@ -51,12 +56,12 @@ lc_component_local_mapping:
     # pixel filter and the world-frame distance gate.
     min_valid_depth: 0.1
 
-    # depth_scale: multiply raw depth values (from component_cameras) by this
-    # factor to obtain true metres.
-    #   1.0  → depth already in metres  (Unreal 1 UU = 1 cm, component_cameras /100 ✓)
-    #   0.1  → depth arrives in decimetres  (Unreal 1 UU = 1 mm, /100 gives dm not m)
-    # Check the log line "[DEM diag] depth range" — if objects 1 m away show
-    # as ~10 m, set depth_scale: 0.1
+    # The depth topic carries planar Z depth in metres; component_stereo_depth
+    # converts UnrealCV's radial buffer exactly once, so do not convert again.
+    #
+    # depth_scale: multiply the incoming depth by this to obtain true metres.
+    # Check the log line "[DEM diag] depth range" — if objects 1 m away show as
+    # ~10 m, the publisher's unit assumption is wrong; fix it there.
     depth_scale: 1.0
 
     # ── Debug DEM visualisation ───────────────────────────────────────────────

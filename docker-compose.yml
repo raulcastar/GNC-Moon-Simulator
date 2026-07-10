@@ -42,11 +42,15 @@ services:
       - ./component_lidar:/opt/ros/jazzy/src/component_lidar
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
 
-  component_cameras:
+  # Owns the single UnrealCV client connection and serves all three navcams:
+  # navcam_left/* and navcam_right/* (colour), navcam_central/* (colour, planar
+  # depth, disparity, object mask). Replaced component_cameras, which was
+  # deleted — UnrealCV allows one client at a time, so nothing else may connect.
+  component_stereo_depth:
     build:
-      context: ./component_cameras
+      context: ./component_stereo_depth
       dockerfile: Dockerfile
-    image: gnc_moon_simulator/component_cameras:dev
+    image: gnc_moon_simulator/component_stereo_depth:dev
     network_mode: host
     ipc: host
     restart: unless-stopped
@@ -62,9 +66,9 @@ services:
       DISPLAY: ${DISPLAY}
       QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
     volumes:
-      - ./component_cameras:/opt/ros/jazzy/src/component_cameras
+      - ./component_stereo_depth:/opt/ros/jazzy/src/component_stereo_depth
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-    
+
   component_rover_leo_raph:
     build:
       context: ./component_rover_leo_raph
