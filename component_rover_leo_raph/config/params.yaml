@@ -1,7 +1,36 @@
 lc_component_rover_leo_raph:
   ros__parameters:
+    # udp | tcp
+    #
+    # tcp carries commands and telemetry on one bidirectional connection. Replies
+    # come back the way they came, so neither side needs the other's address —
+    # which removes every failure mode the UDP path has under WSL2 mirrored
+    # networking. Frames are newline-delimited JSON.
+    #
+    # udp keeps the original two-socket scheme (sending_port out, listen_port in).
+    transport:                           tcp
+
+    # Who dials. Unreal's TCP component connects out, so this side listens.
+    #   server  we listen on tcp_port; Unreal connects to us
+    #   client  we connect to a listening Unreal at sending_ip:tcp_port
+    tcp_role:                         server
+    tcp_port:                            3003
+
+    # Where Unreal's UDP plugin listens for drive commands.
+    #
+    # 127.0.0.1 is correct under WSL2 mirrored networking: datagrams sent there
+    # from the container reach the Unreal process on the Windows host. Verified
+    # by counters — Windows logs the datagrams as received on a listening port.
+    # Do not use the host's LAN address: mirrored networking makes it ambiguous
+    # between Windows and WSL, and packets are lost.
+    #
+    # 0.0.0.0 means autodetect (take Unreal's address from the source of its
+    # telemetry). It only works once Unreal actually sends telemetry, so it is
+    # not the default.
+    sending_ip:                    127.0.0.1
     sending_port:                       3002
-    sending_ip:                      0.0.0.0
+
+    # Wildcard here is correct: accept telemetry on every interface.
     listen_ip:                       0.0.0.0
     listen_port:                        3001
     rover_width:                        35.0 # centimeters, distance between left and right wheels

@@ -65,5 +65,7 @@ lc_component_local_mapping:
     depth_scale: 1.0
 
     # ── Debug DEM visualisation ───────────────────────────────────────────────
-    debug_mode: true
+    # Off: the container runs headless and the mission control dashboard now
+    # renders local_mapping/elevation_grid live, replacing the matplotlib view.
+    debug_mode: false
     debug_save_path: /opt/ros/jazzy/src/component_local_mapping/debug_dem.png

@@ -12,6 +12,7 @@ from typing import Optional
 import json
 import socket
 import threading
+import time
 import math
 import re
 
@@ -62,6 +63,14 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self.udp_recv_socket: Optional[socket.socket] = None
         self._listen_thread:  Optional[threading.Thread] = None
         self._keep_listening: bool = False
+
+        # TCP transport: one bidirectional connection, so no address to guess.
+        self.transport: str = "udp"
+        self.tcp_role: str = "server"
+        self.tcp_socket: Optional[socket.socket] = None
+        self.tcp_server: Optional[socket.socket] = None
+        self.tcp_port: int = 3003
+        self._decoder = json.JSONDecoder()
         
         # Runtime configuration defaults
         self.target_ip: str = "127.0.0.1"
@@ -69,6 +78,11 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self.listen_ip: str = "0.0.0.0"
         self.listen_port: int = 3001
         self.rover_width: float = 1.0
+
+        # When sending_ip is a wildcard, Unreal's address is learned from the
+        # source of its telemetry instead. See _resolve_target.
+        self._autodetect_target: bool = False
+        self._target_learned: bool = False
 
         # Declare ROS 2 Parameters for dynamic configuration
         self.declare_parameters(
@@ -80,6 +94,9 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
                 ('listen_port',  rclpy.Parameter.Type.INTEGER),
                 ('rover_width',  rclpy.Parameter.Type.DOUBLE),
                 ('headlights_on', rclpy.Parameter.Type.BOOL),
+                ('transport',    rclpy.Parameter.Type.STRING),
+                ('tcp_role',     rclpy.Parameter.Type.STRING),
+                ('tcp_port',     rclpy.Parameter.Type.INTEGER),
             ])
 
     # =========================================================================
@@ -128,6 +145,68 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         }
 
     # =========================================================================
+    # UDP Transmission
+    # =========================================================================
+
+    def _resolve_target(self, sending_ip: str) -> None:
+        """
+        Decide where drive commands are sent.
+
+        A wildcard address is a valid bind target but not a valid destination:
+        the kernel rewrites a datagram addressed to 0.0.0.0 into one addressed to
+        127.0.0.1, so it stops on this container's own loopback and never reaches
+        Unreal on the Windows host. WSL2 masks this for UnrealCV, whose localhost
+        relay forwards TCP to Windows listeners but does not carry UDP.
+
+        So a wildcard means autodetect: Unreal's address is taken from the source
+        of the telemetry it sends us, which is by definition reachable. An
+        explicit address is honoured as given.
+        """
+        self._autodetect_target = sending_ip in ('', '0.0.0.0', '::')
+        self._target_learned = False
+
+        if self._autodetect_target:
+            self.target_ip = "127.0.0.1"
+            self.get_logger().info(
+                f"sending_ip is '{sending_ip}', which is a bind address, not a destination. "
+                f"Unreal's address will be taken from its telemetry on port {self.listen_port}; "
+                f"until the first packet arrives, commands go to 127.0.0.1.")
+        else:
+            self.target_ip = sending_ip
+
+    def _send(self, payload: dict, what: str) -> None:
+        """Dispatch one JSON command to Unreal over the configured transport."""
+        if self.transport == 'tcp':
+            if self.tcp_socket is None:
+                self.get_logger().warn(
+                    f"Dropped {what}: no TCP connection to Unreal.",
+                    throttle_duration_sec=10.0)
+                return
+            try:
+                # Newline-delimited so Unreal can frame the stream.
+                self.tcp_socket.sendall(json.dumps(payload).encode('utf-8') + b'\n')
+            except OSError as e:
+                self.get_logger().error(f"Failed to transmit {what} over TCP: {e}")
+                self._close_tcp()
+            return
+
+        if not self.udp_send_socket:
+            return
+        try:
+            self.udp_send_socket.sendto(
+                json.dumps(payload).encode('utf-8'), (self.target_ip, self.target_port))
+        except Exception as e:
+            self.get_logger().error(f"Failed to transmit {what} UDP packet: {e}")
+            return
+
+        if self._autodetect_target and not self._target_learned:
+            self.get_logger().warn(
+                f"Sent {what} to 127.0.0.1:{self.target_port} — no telemetry has arrived yet, "
+                f"so Unreal's address is still unknown. If the rover does not move, Unreal is "
+                f"not sending on port {self.listen_port}; set sending_ip to the host's address.",
+                throttle_duration_sec=10.0)
+
+    # =========================================================================
     # Core Callbacks & Background Threads
     # =========================================================================
 
@@ -136,20 +215,14 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         Updates the internal state of the headlights based on incoming ROS 2 commands.
         """
         self.headlights_on = msg.data
-        headlights_commands = {"headlights_on": self.headlights_on}
-        self.udp_send_socket.sendto(json.dumps(headlights_commands).encode('utf-8'), (self.target_ip, self.target_port))
+        self._send({"headlights_on": self.headlights_on}, "headlights")
         self.get_logger().info(f"Headlights toggled: {'ON' if self.headlights_on else 'OFF'}")
 
     def cmd_vel_callback(self, msg: Twist) -> None:
         """
         Processes incoming linear/angular velocity commands and dispatches them via UDP.
         """
-        try:
-            wheel_commands = self.twist_to_wheels(msg.linear.x, msg.angular.z)
-            json_string = json.dumps(wheel_commands)
-            self.udp_send_socket.sendto(json_string.encode('utf-8'), (self.target_ip, self.target_port))
-        except Exception as e:
-            self.get_logger().error(f"Failed to transmit cmd_vel UDP packet: {e}")
+        self._send(self.twist_to_wheels(msg.linear.x, msg.angular.z), "cmd_vel")
 
     def _udp_receive_loop(self) -> None:
         """
@@ -162,42 +235,201 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
                 # 0.5s timeout prevents blocking indefinitely, allowing the thread 
                 # to regularly check the `_keep_listening` termination flag.
                 self.udp_recv_socket.settimeout(0.5)
-                data, _ = self.udp_recv_socket.recvfrom(1024)
-                                    
-                # Decode and strip whitespace/null characters
-                message = data.decode('utf-8').strip().rstrip('\x00')
-                
-                # This regex looks for a digit, a comma, and another digit, and removes the comma.
-                message = re.sub(r'(\d),(\d)', r'\1\2', message)
-                transform = json.loads(message)
+                data, addr = self.udp_recv_socket.recvfrom(1024)
 
-                # Initialize Odometry payload
-                odom_msg = Odometry()
-                odom_msg.header.stamp = self.get_clock().now().to_msg()
-                odom_msg.header.frame_id = "odom"
-                odom_msg.child_frame_id = "base_link"
-
-                # ---------------------------------------------------------
-                # Position Translation: Unreal Engine (cm) -> ROS 2 (m)
-                odom_msg.pose.pose.position.x = -transform['x'] / 100.0
-                odom_msg.pose.pose.position.y = transform['y'] / 100.0
-                odom_msg.pose.pose.position.z = transform['z'] / 100.0
-
-                q = self.euler_to_quaternion(transform['roll'], transform['pitch'], transform['yaw'])
-                odom_msg.pose.pose.orientation = q
-
-                self._pub_odom.publish(odom_msg)
+                # Telemetry proves where Unreal is and that the route back is
+                # open. Its source port is ephemeral, so keep the configured one.
+                if addr[0] != self.target_ip:
+                    if self._autodetect_target:
+                        self.get_logger().info(
+                            f"Unreal is at {addr[0]}; drive commands now go to "
+                            f"{addr[0]}:{self.target_port}.")
+                        self.target_ip = addr[0]
+                    else:
+                        self.get_logger().warn(
+                            f"Telemetry arrives from {addr[0]} but sending_ip is "
+                            f"{self.target_ip}. Commands are going somewhere else than "
+                            f"Unreal is.", throttle_duration_sec=30.0)
+                self._target_learned = True
+                self._publish_telemetry(data)
 
             except socket.timeout:
                 # Expected timeout; loop repeats to evaluate `_keep_listening`
                 continue
-            except json.JSONDecodeError:
-                self.get_logger().warn(f"Received non-JSON data: {repr(message)}")
             except Exception as e:
                 if self._keep_listening:
                     self.get_logger().error(f"Telemetry thread fault: {e}")
-                    
+
         self.get_logger().info("Telemetry listener thread cleanly terminated.")
+
+    def _drain_frames(self, buf: str) -> str:
+        """
+        Pull every complete JSON object out of a TCP byte stream.
+
+        TCP has no message boundaries and Unreal delimits nothing: objects arrive
+        bare, and may be split across reads or coalesced into one. So scan for
+        objects rather than for a separator, publishing each and keeping whatever
+        trailing fragment is still incomplete. Whitespace and NULs between objects
+        are skipped; a newline delimiter, if present, costs nothing.
+        """
+        while True:
+            buf = buf.lstrip(' \r\n\t\x00')
+            if not buf:
+                return ''
+            try:
+                transform, end = self._decoder.raw_decode(buf)
+            except ValueError:
+                # An incomplete object: keep it and wait for the rest. A stream
+                # that never parses would grow without bound, so cap it.
+                if len(buf) > 65536:
+                    self.get_logger().warn(
+                        "Discarding 64 KB of unparseable telemetry; is Unreal "
+                        "sending JSON?", throttle_duration_sec=30.0)
+                    return ''
+                return buf
+            self._publish_transform(transform)
+            buf = buf[end:]
+
+    def _publish_telemetry(self, data: bytes) -> None:
+        """Turn one raw UDP telemetry datagram into Odometry."""
+        message = self._clean(data)
+        if not message:
+            return
+        try:
+            self._publish_transform(json.loads(message))
+        except json.JSONDecodeError:
+            self.get_logger().warn(f"Received non-JSON data: {repr(message)}")
+
+    @staticmethod
+    def _clean(data: bytes) -> str:
+        """Decode a payload and repair Unreal's locale-formatted numbers."""
+        text = data.decode('utf-8', 'replace').strip().rstrip('\x00')
+        # Unreal writes thousands separators; strip the comma between two digits.
+        return re.sub(r'(\d),(\d)', r'\1\2', text)
+
+    def _publish_transform(self, transform: dict) -> None:
+        """Publish one Unreal pose as Odometry. Transport agnostic."""
+        odom_msg = Odometry()
+        odom_msg.header.stamp = self.get_clock().now().to_msg()
+        odom_msg.header.frame_id = "odom"
+        odom_msg.child_frame_id = "base_link"
+
+        # Position Translation: Unreal Engine (cm) -> ROS 2 (m)
+        odom_msg.pose.pose.position.x = -transform['x'] / 100.0
+        odom_msg.pose.pose.position.y = transform['y'] / 100.0
+        odom_msg.pose.pose.position.z = transform['z'] / 100.0
+
+        odom_msg.pose.pose.orientation = self.euler_to_quaternion(
+            transform['roll'], transform['pitch'], transform['yaw'])
+
+        self._pub_odom.publish(odom_msg)
+
+    # =========================================================================
+    # TCP Transport
+    # =========================================================================
+
+    def _tcp_accept(self) -> None:
+        """
+        Wait for Unreal to connect. Used when tcp_role is 'server'.
+
+        Unreal's TCP component dials out, so this side listens. Whoever connects
+        owns the link until it drops; the listening socket stays up to catch the
+        reconnection after a Play/Stop cycle.
+        """
+        if self.tcp_server is None:
+            self.tcp_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.tcp_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.tcp_server.bind((self.listen_ip, self.tcp_port))
+            self.tcp_server.listen(1)
+            self.tcp_server.settimeout(0.5)
+            self.get_logger().info(
+                f"Listening for Unreal on TCP {self.listen_ip}:{self.tcp_port}.")
+        try:
+            conn, addr = self.tcp_server.accept()
+            conn.settimeout(0.5)
+            self.tcp_socket = conn
+            self.get_logger().info(f"Unreal connected from {addr[0]}:{addr[1]}.")
+        except socket.timeout:
+            pass
+
+    def _tcp_connect(self) -> None:
+        """Dial Unreal. Used when tcp_role is 'client' (Unreal listens)."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(3.0)
+            s.connect((self.target_ip, self.tcp_port))
+            s.settimeout(0.5)
+            self.tcp_socket = s
+            self.get_logger().info(
+                f"TCP connected to Unreal at {self.target_ip}:{self.tcp_port}.")
+        except OSError as e:
+            self.get_logger().warn(
+                f"TCP connect to {self.target_ip}:{self.tcp_port} failed ({e}). "
+                f"Is the Unreal TCP component listening?",
+                throttle_duration_sec=10.0)
+            time.sleep(2.0)
+
+    def _tcp_loop(self) -> None:
+        """
+        Hold one TCP link to Unreal, carrying commands out and telemetry back.
+
+        TCP needs no send address: replies come back on the established
+        connection, so neither side has to know the other's IP. That removes the
+        whole class of failure the UDP path suffers under WSL2 mirrored
+        networking. Frames are newline-delimited JSON.
+
+        tcp_role decides who dials: 'server' (we listen, Unreal connects) or
+        'client' (we connect to a listening Unreal).
+        """
+        buf = ''
+        while self._keep_listening:
+            if self.tcp_socket is None:
+                buf = ''
+                if self.tcp_role == 'server':
+                    self._tcp_accept()
+                else:
+                    self._tcp_connect()
+                continue
+
+            try:
+                chunk = self.tcp_socket.recv(4096)
+                if not chunk:
+                    raise ConnectionError("Unreal closed the connection")
+                # Repair the whole buffer, not the chunk: a number like 1,205 can
+                # straddle a read boundary.
+                buf = self._drain_frames(
+                    self._clean(buf.encode() + chunk))
+            except socket.timeout:
+                continue
+            except OSError as e:
+                if self._keep_listening:
+                    self.get_logger().warn(
+                        f"TCP link lost ({e}); waiting for Unreal to come back."
+                        if self.tcp_role == 'server' else
+                        f"TCP link lost ({e}); reconnecting.")
+                self._close_tcp()
+                time.sleep(1.0)
+
+        self._close_tcp()
+        self._close_tcp_server()
+        self.get_logger().info("TCP telemetry thread cleanly terminated.")
+
+    def _close_tcp(self) -> None:
+        """Drop the link, keeping the listening socket so Unreal can reconnect."""
+        if self.tcp_socket:
+            try:
+                self.tcp_socket.close()
+            except OSError:
+                pass
+            self.tcp_socket = None
+
+    def _close_tcp_server(self) -> None:
+        if self.tcp_server:
+            try:
+                self.tcp_server.close()
+            except OSError:
+                pass
+            self.tcp_server = None
 
     # =========================================================================
     # Lifecycle Transition Callbacks
@@ -209,32 +441,54 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         """
         self.get_logger().info("Lifecycle state transition: CONFIGURED.")
 
-        self.target_ip   = self.get_parameter('sending_ip').value
         self.target_port = self.get_parameter('sending_port').value
         self.listen_ip   = self.get_parameter('listen_ip').value
         self.listen_port = self.get_parameter('listen_port').value
         self.rover_width = self.get_parameter('rover_width').value
         self.headlights_on = self.get_parameter('headlights_on').value
-        
-        # Initialize Transmission Socket (Unbound UDP Datagram)
-        try:
-            self.udp_send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        except socket.error as e:
-            self.get_logger().error(f"Failed to allocate UDP transmission socket: {e}")
+        self.transport   = self.get_parameter('transport').value.strip().lower()
+        self.tcp_role    = self.get_parameter('tcp_role').value.strip().lower()
+        self.tcp_port    = self.get_parameter('tcp_port').value
+        self._resolve_target(self.get_parameter('sending_ip').value)
+
+        if self.transport not in ('udp', 'tcp'):
+            self.get_logger().error(
+                f"transport must be 'udp' or 'tcp', not '{self.transport}'.")
+            return TransitionCallbackReturn.FAILURE
+        if self.tcp_role not in ('server', 'client'):
+            self.get_logger().error(
+                f"tcp_role must be 'server' or 'client', not '{self.tcp_role}'.")
             return TransitionCallbackReturn.FAILURE
 
-        # Initialize Reception Socket (Bound to targeted listening port)
-        try:
-            self.udp_recv_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.udp_recv_socket.bind((self.listen_ip, self.listen_port))
-        except socket.error as e:
-            self.get_logger().error(f"Failed to bind UDP reception socket on port {self.listen_port}: {e}")
-            return TransitionCallbackReturn.FAILURE
-        
+        if self.transport == 'tcp':
+            # One connection carries both directions. The link is established by
+            # the thread started on activate.
+            where = (f"listening on {self.listen_ip}:{self.tcp_port} for Unreal"
+                     if self.tcp_role == 'server'
+                     else f"dialling Unreal at {self.target_ip}:{self.tcp_port}")
+            self.get_logger().info(
+                f"Transport: TCP, {where}. Telemetry returns on the same "
+                f"connection, so no send address is needed.")
+        else:
+            # Initialize Transmission Socket (Unbound UDP Datagram)
+            try:
+                self.udp_send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            except socket.error as e:
+                self.get_logger().error(f"Failed to allocate UDP transmission socket: {e}")
+                return TransitionCallbackReturn.FAILURE
+
+            # Initialize Reception Socket (Bound to targeted listening port)
+            try:
+                self.udp_recv_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                self.udp_recv_socket.bind((self.listen_ip, self.listen_port))
+            except socket.error as e:
+                self.get_logger().error(
+                    f"Failed to bind UDP reception socket on port {self.listen_port}: {e}")
+                return TransitionCallbackReturn.FAILURE
+
         # Send initial commands
-        if self.udp_send_socket:
-            stop_commands = {"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0, "headlights_on": self.headlights_on}
-            self.udp_send_socket.sendto(json.dumps(stop_commands).encode('utf-8'), (self.target_ip, self.target_port))
+        self._send({"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0,
+                    "headlights_on": self.headlights_on}, "initial stop")
 
         # Allocate standard pub/sub endpoints
         self._pub_odom    = self.create_lifecycle_publisher(Odometry, 'odom', 10)
@@ -253,9 +507,10 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         
         # Ignite the background listening thread natively
         self._keep_listening = True
-        self._listen_thread = threading.Thread(target=self._udp_receive_loop, daemon=True)
+        loop = self._tcp_loop if self.transport == 'tcp' else self._udp_receive_loop
+        self._listen_thread = threading.Thread(target=loop, daemon=True)
         self._listen_thread.start()
-        
+
         return super().on_activate(state)
 
     def on_deactivate(self, state: State) -> TransitionCallbackReturn:
@@ -265,9 +520,8 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self.get_logger().info("Lifecycle state transition: DEACTIVATED.")
         
         # 1. Dispatch absolute zero velocities to enforce a hardware/simulation halt
-        if self.udp_send_socket:
-            stop_commands = {"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0, "headlights_on": False} # Turn off lights on stop
-            self.udp_send_socket.sendto(json.dumps(stop_commands).encode('utf-8'), (self.target_ip, self.target_port))
+        self._send({"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0,
+                    "headlights_on": False}, "stop")
 
         # 2. Assert thread termination and await its graceful exit (max 1 second block)
         self._keep_listening = False
@@ -294,11 +548,13 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         if self.udp_send_socket:
             self.udp_send_socket.close()
             self.udp_send_socket = None
-            
+
         if self.udp_recv_socket:
             self.udp_recv_socket.close()
             self.udp_recv_socket = None
-            
+
+        self._close_tcp()
+
         return TransitionCallbackReturn.SUCCESS
 
     def on_shutdown(self, state: State) -> TransitionCallbackReturn:
@@ -325,7 +581,8 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
             self.udp_send_socket.close()
         if self.udp_recv_socket:
             self.udp_recv_socket.close()
-            
+        self._close_tcp()
+
         return TransitionCallbackReturn.SUCCESS
 
 

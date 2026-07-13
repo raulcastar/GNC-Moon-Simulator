@@ -220,6 +220,26 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
             self.unreal_client.connect()
             time.sleep(1.0)
         self.get_logger().info('UnrealCV TCP connection established.')
+        self._resume_if_paused()
+
+    def _resume_if_paused(self) -> None:
+        """
+        Unfreeze a game left paused by a previous run.
+
+        `vset /action/game/pause` outlives the process that sent it. A node killed
+        between pause and resume leaves the simulation stopped: no physics, no
+        odometry, and cmd_vel moves nothing.
+        """
+        try:
+            paused = self._request('vget /action/game/is_paused').strip().lower()
+        except RuntimeError as exc:
+            self.get_logger().warn(f'Could not read the pause state ({exc}).')
+            return
+        if paused == 'true':
+            self.get_logger().warn(
+                'Unreal was left paused by a previous run; resuming. Physics and '
+                'odometry were stopped, so cmd_vel would not have moved the rover.')
+            self.unreal_client.request('vset /action/game/resume')
 
     def _request_raw(self, cmd: str, retries: int = 3):
         """

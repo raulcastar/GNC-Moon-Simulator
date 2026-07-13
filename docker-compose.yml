@@ -117,6 +117,8 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
 
 
+  # Builds the local DEM from stereo depth — starts automatically; the mission
+  # control dashboard renders its elevation_grid live.
   component_local_mapping:
     build:
       context: ./component_local_mapping
@@ -125,10 +127,9 @@ services:
     network_mode: host
     ipc: host
     restart: unless-stopped
-    entrypoint: ["/bin/bash", "-c", "source /opt/ros/jazzy/setup.bash && exec /bin/bash"]
+    entrypoint: >
+      bash -lc "/entrypoint.sh"
     privileged: true
-    stdin_open: true # Equivalent to -i
-    tty: true        # Equivalent to -t
     environment:
       ROS_DOMAIN_ID: 0
       ROBOT_NAMESPACE: ""
@@ -141,6 +142,7 @@ services:
       - ./component_local_mapping:/opt/ros/jazzy/src/component_local_mapping
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
 
+  # Web mission control on http://localhost:5000 — starts automatically.
   mission_control_dashboard:
     build:
       context: ./mission_control_dashboard
@@ -149,10 +151,9 @@ services:
     network_mode: host
     ipc: host
     restart: unless-stopped
-    entrypoint: ["/bin/bash", "-c", "source /opt/ros/jazzy/setup.bash && exec /bin/bash"]    
+    entrypoint: >
+      bash -lc "/entrypoint.sh"
     privileged: true
-    stdin_open: true # Equivalent to -i
-    tty: true        # Equivalent to -t
     environment:
       ROS_DOMAIN_ID: 0
       ROBOT_NAMESPACE: ""

@@ -74,6 +74,21 @@ def main():
         sys.exit("Could not connect. Is another component holding the socket?")
 
     try:
+        # A pause outlives the process that sent it: a node killed mid-capture
+        # leaves the simulation stopped, and cmd_vel then moves nothing.
+        paused = ask(client, 'vget /action/game/is_paused')
+        if paused is not None:
+            print(f"game paused: {paused}")
+            if paused.strip().lower() == 'true':
+                if '--resume' in sys.argv:
+                    ask(client, 'vset /action/game/resume')
+                    print("  resumed.\n")
+                else:
+                    print("  the simulation is frozen: no physics, no odometry, "
+                          "cmd_vel does nothing.\n  Re-run with --resume to clear it.\n")
+            else:
+                print()
+
         raw = ask(client, 'vget /cameras')
         if raw is None:
             sys.exit("Server does not support 'vget /cameras'.")
