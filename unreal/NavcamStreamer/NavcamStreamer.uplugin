@@ -1,0 +1,20 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "Navcam Streamer",
+	"Description": "Streams navcam frames to the ROS stereo node over TCP with asynchronous GPU readback - no game-thread stalls, unlike UnrealCV's render-on-demand.",
+	"Category": "Other",
+	"CreatedBy": "GNC Moon Simulator",
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"Installed": false,
+	"EnabledByDefault": true,
+	"Modules": [
+		{
+			"Name": "NavcamStreamer",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}
