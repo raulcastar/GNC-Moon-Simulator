@@ -43,8 +43,10 @@ void UNavcamStreamer::BeginPlay()
 	ResolveCapture(RightCaptureName, RightCamId);
 	ResolveCapture(CenterCaptureName, CenterCamId);
 
-	// The sender thread runs regardless; the tick loop (re)dials the node
-	// every few seconds, so the start order of Unreal and ROS is irrelevant.
+	Stream = MakeShared<FNavcamStreamState, ESPMode::ThreadSafe>();
+
+	// The sender thread runs regardless; it (re)dials the node every few
+	// seconds, so the start order of Unreal and ROS is irrelevant.
 	bStopSender = false;
 	SenderThread = FRunnableThread::Create(this, TEXT("NavcamSender"));
 }
@@ -62,7 +64,13 @@ void UNavcamStreamer::EndPlay(const EEndPlayReason::Type Reason)
 		SenderThread = nullptr;
 	}
 	bConnected = false;         // Run() already closed Socket on its way out.
-	Pending.Empty();
+
+	// Drop the component's reference. Any render command still in flight holds
+	// its own reference and will free the state — and its readbacks — on the
+	// render thread when it finishes. Nothing to block on here: this is what
+	// makes stopping instant instead of the multi-second freeze that a
+	// FlushRenderingCommands / fence Wait caused.
+	Stream.Reset();
 	Active.Empty();
 	Super::EndPlay(Reason);
 }
@@ -307,31 +315,42 @@ void UNavcamStreamer::TickComponent(float DeltaTime, ELevelTick TickType,
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	// The game thread never touches the socket — only this flag, which Run()
-	// (background thread) owns. No blocking calls here, ever.
-	if (!bConnected)
+	// The game thread never touches the socket or a readback — only these two
+	// flags, which the sender/render threads own. No blocking calls here, ever.
+	if (!bConnected || !Stream.IsValid())
 	{
 		return;
 	}
-
-	PollReadbacks();
 
 	const double Now = FPlatformTime::Seconds();
 	if (Now - LastSendTime >= 1.0 / FMath::Max(SendHz, 0.5f))
 	{
 		LastSendTime = Now;
-		EnqueueCaptures();
+		PumpCaptures();
 	}
 }
 
-void UNavcamStreamer::EnqueueCaptures()
+namespace
 {
-	// One tick, one frame id: this is what makes the left/right pair a rig.
-	// bCaptureEveryFrame means the capture already rendered this frame before
-	// component tick order guarantees matter here — the readback reads
-	// whatever the capture last rendered, which at every-frame is current.
-	const uint64 FrameId = GFrameCounter;
+	// One camera's render target, resolved on the game thread and handed to
+	// the render command. File scope so the ENQUEUE_RENDER_COMMAND lambda can
+	// name the type.
+	struct FNavcamCap
+	{
+		FTextureRenderTargetResource* Resource;
+		int32 CamId;
+		int32 W;
+		int32 H;
+	};
+}
 
+void UNavcamStreamer::PumpCaptures()
+{
+	// Gather render-target pointers on the game thread (the only step that
+	// must be here), then post ONE render command that owns the whole readback
+	// lifecycle. bCaptureEveryFrame means each target already holds this
+	// frame's render; the readback of it completes asynchronously on the GPU.
+	TArray<FNavcamCap> Caps;
 	for (FNavcamResolved& Cam : Active)
 	{
 		if (!Cam.Capture || !Cam.Capture->TextureTarget)
@@ -340,83 +359,89 @@ void UNavcamStreamer::EnqueueCaptures()
 		}
 		FTextureRenderTargetResource* Resource =
 			Cam.Capture->TextureTarget->GameThread_GetRenderTargetResource();
-		if (!Resource)
+		if (Resource)
 		{
-			continue;
+			Caps.Add({ Resource, Cam.CamId,
+			           Cam.Capture->TextureTarget->SizeX,
+			           Cam.Capture->TextureTarget->SizeY });
 		}
-
-		FPendingReadback Job;
-		Job.CamId = Cam.CamId;
-		Job.Width = Cam.Capture->TextureTarget->SizeX;
-		Job.Height = Cam.Capture->TextureTarget->SizeY;
-		Job.FrameId = FrameId;
-		Job.Readback = MakeUnique<FRHIGPUTextureReadback>(TEXT("NavcamReadback"));
-
-		FRHIGPUTextureReadback* ReadbackPtr = Job.Readback.Get();
-		ENQUEUE_RENDER_COMMAND(NavcamEnqueueCopy)(
-			[ReadbackPtr, Resource](FRHICommandListImmediate& RHICmdList)
-			{
-				ReadbackPtr->EnqueueCopy(RHICmdList,
-				                         Resource->GetRenderTargetTexture());
-			});
-		Pending.Add(MoveTemp(Job));
 	}
-}
-
-void UNavcamStreamer::PollReadbacks()
-{
-	for (int32 i = Pending.Num() - 1; i >= 0; --i)
+	if (Caps.Num() == 0)
 	{
-		FPendingReadback& Job = Pending[i];
-		if (!Job.Readback->IsReady())
+		return;
+	}
+
+	// One tick, one frame id: this is what pairs left/right as a rig.
+	const uint64 FrameId = GFrameCounter;
+	TSharedPtr<FNavcamStreamState, ESPMode::ThreadSafe> S = Stream;
+
+	ENQUEUE_RENDER_COMMAND(NavcamPump)(
+		[S, Caps, FrameId](FRHICommandListImmediate& RHICmdList)
 		{
-			continue;
-		}
-
-		const int32 W = Job.Width, H = Job.Height;
-		TArray<uint8> Packet;
-		Packet.SetNumUninitialized(sizeof(FNavFrameHeader) + W * H * 4);
-
-		FNavFrameHeader* Header = reinterpret_cast<FNavFrameHeader*>(Packet.GetData());
-		Header->Magic[0] = 'N'; Header->Magic[1] = 'A';
-		Header->Magic[2] = 'V'; Header->Magic[3] = 'F';
-		Header->Version = 1;
-		Header->CamId = static_cast<uint8>(Job.CamId);
-		Header->Format = 1;                 // BGRA8
-		Header->Reserved = 0;
-		Header->Width = static_cast<uint16>(W);
-		Header->Height = static_cast<uint16>(H);
-		Header->FrameId = Job.FrameId;
-		Header->PayloadSize = static_cast<uint32>(W * H * 4);
-
-		// Lock/copy on the render thread; the GPU work already completed, so
-		// this is a memcpy, not a stall. Rows may be padded (pitch >= width).
-		uint8* Dest = Packet.GetData() + sizeof(FNavFrameHeader);
-		FRHIGPUTextureReadback* ReadbackPtr = Job.Readback.Get();
-		ENQUEUE_RENDER_COMMAND(NavcamLockCopy)(
-			[ReadbackPtr, Dest, W, H](FRHICommandListImmediate&)
+			// 1. Drain the readbacks started on a previous pump. At any real
+			//    SendHz they finished on the GPU long ago; IsReady() gates it
+			//    regardless. Lock/copy/Unlock all here on the render thread.
+			for (int32 i = S->Pending.Num() - 1; i >= 0; --i)
 			{
+				FPendingReadback& Job = S->Pending[i];
+				if (!Job.Readback->IsReady())
+				{
+					continue;
+				}
+
+				const int32 W = Job.Width, H = Job.Height;
+				TArray<uint8> Packet;
+				Packet.SetNumUninitialized(sizeof(FNavFrameHeader) + W * H * 4);
+
+				FNavFrameHeader* Hd = reinterpret_cast<FNavFrameHeader*>(Packet.GetData());
+				Hd->Magic[0] = 'N'; Hd->Magic[1] = 'A';
+				Hd->Magic[2] = 'V'; Hd->Magic[3] = 'F';
+				Hd->Version = 1;
+				Hd->CamId = static_cast<uint8>(Job.CamId);
+				Hd->Format = 1;                 // BGRA8
+				Hd->Reserved = 0;
+				Hd->Width = static_cast<uint16>(W);
+				Hd->Height = static_cast<uint16>(H);
+				Hd->FrameId = Job.FrameId;
+				Hd->PayloadSize = static_cast<uint32>(W * H * 4);
+
 				int32 RowPitchPixels = 0;
-				void* Src = ReadbackPtr->Lock(RowPitchPixels);
+				void* Src = Job.Readback->Lock(RowPitchPixels);
 				if (Src)
 				{
+					uint8* Dest = Packet.GetData() + sizeof(FNavFrameHeader);
 					const uint8* SrcBytes = static_cast<const uint8*>(Src);
 					for (int32 Row = 0; Row < H; ++Row)
 					{
 						FMemory::Memcpy(Dest + Row * W * 4,
-						                SrcBytes + Row * RowPitchPixels * 4,
-						                W * 4);
+						                SrcBytes + Row * RowPitchPixels * 4, W * 4);
 					}
-					ReadbackPtr->Unlock();
+					Job.Readback->Unlock();
+					S->Ready.Enqueue(MoveTemp(Packet));
 				}
-			});
-		// The lock-copy must complete before the packet is queued; flushing
-		// here waits only for the memcpy above, not for scene rendering.
-		FlushRenderingCommands();
+				S->Pending.RemoveAt(i);
+			}
 
-		SendQueue.Enqueue(MoveTemp(Packet));
-		Pending.RemoveAt(i);
-	}
+			// Safety net: never let readbacks pile up unbounded and exhaust
+			// VRAM if the consumer somehow stalls. 3 cameras x a few frames.
+			while (S->Pending.Num() > 9)
+			{
+				S->Pending.RemoveAt(0);
+			}
+
+			// 2. Start this frame's readbacks (async GPU copy; nothing waits).
+			for (const FNavcamCap& C : Caps)
+			{
+				FPendingReadback Job;
+				Job.CamId = C.CamId;
+				Job.Width = C.W;
+				Job.Height = C.H;
+				Job.FrameId = FrameId;
+				Job.Readback = MakeUnique<FRHIGPUTextureReadback>(TEXT("NavcamReadback"));
+				Job.Readback->EnqueueCopy(RHICmdList, C.Resource->GetRenderTargetTexture());
+				S->Pending.Add(MoveTemp(Job));
+			}
+		});
 }
 
 namespace
@@ -434,6 +459,10 @@ namespace
 
 uint32 UNavcamStreamer::Run()
 {
+	// Hold our own reference for the thread's lifetime, so the ready-frame
+	// queue stays valid even as the component drops its reference at EndPlay.
+	TSharedPtr<FNavcamStreamState, ESPMode::ThreadSafe> S = Stream;
+
 	TArray<uint8> Packet;
 	while (!bStopSender)
 	{
@@ -452,7 +481,7 @@ uint32 UNavcamStreamer::Run()
 			continue;
 		}
 
-		if (!SendQueue.Dequeue(Packet))
+		if (!S.IsValid() || !S->Ready.Dequeue(Packet))
 		{
 			FPlatformProcess::Sleep(0.005f);
 			continue;
@@ -473,8 +502,11 @@ uint32 UNavcamStreamer::Run()
 		{
 			CloseSocket(Socket);
 			bConnected = false;
-			TArray<uint8> Discard;
-			while (SendQueue.Dequeue(Discard)) {}    // stale frames, drop them
+			if (S.IsValid())
+			{
+				TArray<uint8> Discard;
+				while (S->Ready.Dequeue(Discard)) {}    // stale frames, drop them
+			}
 			UE_LOG(LogTemp, Warning,
 			       TEXT("NavcamStreamer: link lost; redialling every 3 s."));
 		}

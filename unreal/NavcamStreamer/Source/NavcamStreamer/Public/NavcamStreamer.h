@@ -52,7 +52,7 @@ struct NAVCAMSTREAMER_API FNavcamResolved
 	int32 CamId = 0;
 };
 
-// One in-flight asynchronous readback.
+// One in-flight asynchronous readback. Touched only on the render thread.
 struct FPendingReadback
 {
 	TUniquePtr<FRHIGPUTextureReadback> Readback;
@@ -60,6 +60,24 @@ struct FPendingReadback
 	int32 Width = 0;
 	int32 Height = 0;
 	uint64 FrameId = 0;
+};
+
+// Shared between three threads through a ref-counted pointer, so it outlives
+// whichever drops its reference last and teardown never has to block:
+//   - Pending: created, polled, locked and freed ONLY on the render thread.
+//     Every earlier crash/freeze came from touching readbacks off the render
+//     thread; here the game thread never does.
+//   - Ready: lock-free MPSC handoff. The render thread pushes finished frames,
+//     the sender thread pops them. No lock, no wait.
+// The component, each in-flight render command, and the sender thread each
+// hold a shared reference. The last one to finish frees this — and with it
+// the FRHIGPUTextureReadback objects — on whatever thread that happens to be,
+// which for in-flight render commands is the render thread. Correct by
+// construction, with no FlushRenderingCommands / fence / join to stall on.
+struct FNavcamStreamState
+{
+	TArray<FPendingReadback> Pending;                      // render thread only
+	TQueue<TArray<uint8>, EQueueMode::Mpsc> Ready;         // render -> sender
 };
 
 UCLASS(ClassGroup = (Custom), meta = (BlueprintSpawnableComponent))
@@ -77,10 +95,14 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Navcam|Network")
 	int32 ServerPort = 3004;
 
-	// Frames per second pushed to ROS. Captures render every frame regardless;
-	// this only limits readback + network. 5 Hz is ample for a 1 Hz pipeline.
+	// Frames per second pushed to ROS. The stereo node's default
+	// image_reading_hz_rate is 1 Hz; every frame beyond what it actually
+	// consumes is still fully parsed and BGRA->RGB converted by the receiver
+	// for nothing — at 640x480x4 bytes x3 cameras, each extra Hz here is
+	// ~3.7 MB/s of wasted work. Keep this close to (a small margin above)
+	// the consumer's real rate, not high "for safety".
 	UPROPERTY(EditAnywhere, Category = "Navcam", meta = (ClampMin = "0.5", ClampMax = "30"))
-	float SendHz = 5.0f;
+	float SendHz = 2.0f;
 
 	// The three navcam SceneCapture2Ds, selected by name from a dropdown
 	// listing every SceneCapture2D in reach (this blueprint's components tree,
@@ -159,8 +181,13 @@ public:
 
 private:
 	void ResolveCapture(const FName& Name, int32 CamId);
-	void EnqueueCaptures();
-	void PollReadbacks();
+
+	// Enqueues ONE render command per send tick that does everything on the
+	// render thread: drain the readbacks started last tick (now finished on
+	// the GPU) into Ready, then start this tick's readbacks. The game thread
+	// only gathers render-target pointers and posts the command — it never
+	// locks, waits, or frees a readback.
+	void PumpCaptures();
 
 	// Socket ownership lives ENTIRELY on the background thread (Run()): create,
 	// connect, send, close. FSocket::Connect() is synchronous and can block for
@@ -184,9 +211,9 @@ private:
 	double LastConnectAttempt = 0.0;             // Run()'s thread only.
 	bool bLoggedWaiting = false;                 // Run()'s thread only.
 
-	// Packets ready to send: header already prepended.
-	TQueue<TArray<uint8>, EQueueMode::Mpsc> SendQueue;
+	// Readback + ready-frame state, shared with render commands and the sender
+	// thread. Created in BeginPlay, released (not blocked-on) in EndPlay.
+	TSharedPtr<FNavcamStreamState, ESPMode::ThreadSafe> Stream;
 
-	TArray<FPendingReadback> Pending;
 	double LastSendTime = 0.0;
 };
