@@ -39,8 +39,12 @@ Unreal instance at configure time and validated.
 """
 
 from typing import Dict, List, Optional, Tuple
+import collections
 import contextlib
 import math
+import socket
+import struct
+import threading
 import time
 import re
 import json
@@ -120,6 +124,144 @@ def radial_to_planar(point_depth: np.ndarray, fx: float, fy: float,
     return point_depth / np.sqrt(1.0 + px ** 2 + py ** 2)
 
 
+class FrameStreamReceiver:
+    """
+    TCP server for the NavcamStreamer plugin (unreal/NavcamStreamer/).
+
+    Unreal renders the navcams with each frame and pushes them here over one
+    connection, so no UnrealCV render-on-demand — and no game-thread stall —
+    is needed for RGB. Packets are 24-byte-header BGRA frames tagged with
+    Unreal's frame counter; captures enqueued in one tick share a tag, which
+    is what lets left/right be paired as a rigid stereo view.
+
+    Runs a background thread; survives Play/Stop cycles by re-accepting.
+    """
+
+    _HEADER = struct.Struct('<4sBBBBHHQI')
+    _MAGIC = b'NAVF'
+    _RING = 6                      # frames kept per camera for pairing
+
+    def __init__(self, bind_ip: str, port: int, logger):
+        self._addr = (bind_ip, port)
+        self._log = logger
+        self._frames: Dict[int, collections.deque] = {}
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._server: Optional[socket.socket] = None
+        self._thread: Optional[threading.Thread] = None
+        self.connected = False
+
+    def start(self) -> None:
+        self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._server.bind(self._addr)
+        self._server.listen(1)
+        self._server.settimeout(0.5)
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+        self._log.info(f'Frame stream: listening on {self._addr[0]}:{self._addr[1]} '
+                       f'for the NavcamStreamer plugin.')
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+        if self._server:
+            self._server.close()
+            self._server = None
+
+    def latest_pair(self, left_id: int, right_id: int, center_id: int):
+        """
+        Newest frame id present for BOTH eyes, with the nearest centre frame.
+
+        Returns (left, right, center, frame_id, age_s) or None. The eyes must
+        match exactly — that is the rigid-pair guarantee. The centre tolerates
+        a small offset: it is not matched against anything, only overlaid.
+        """
+        with self._lock:
+            eyes_l = {fid: f for fid, f, _ in self._frames.get(left_id, ())}
+            eyes_r = {fid: f for fid, f, _ in self._frames.get(right_id, ())}
+            common = sorted(set(eyes_l) & set(eyes_r))
+            if not common:
+                return None
+            fid = common[-1]
+            centers = list(self._frames.get(center_id, ()))
+            if not centers:
+                return None
+            c_fid, center, t = min(centers, key=lambda e: abs(e[0] - fid))
+            if abs(c_fid - fid) > 60:        # a second of frames apart: stale
+                return None
+            age = time.monotonic() - t
+            return eyes_l[fid], eyes_r[fid], center, fid, age
+
+    # ------------------------------------------------------------------ #
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                conn, addr = self._server.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            self._log.info(f'Frame stream: Unreal connected from {addr[0]}:{addr[1]}.')
+            self.connected = True
+            try:
+                self._read_stream(conn)
+            finally:
+                conn.close()
+                self.connected = False
+                if not self._stop.is_set():
+                    self._log.warn('Frame stream: Unreal disconnected; waiting for '
+                                   'the next Play.')
+
+    def _read_stream(self, conn: socket.socket) -> None:
+        conn.settimeout(0.5)
+        buf = b''
+        while not self._stop.is_set():
+            try:
+                chunk = conn.recv(1 << 20)
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            if not chunk:
+                return
+            buf += chunk
+            buf = self._drain(buf)
+
+    def _drain(self, buf: bytes) -> bytes:
+        """Extract every complete frame; keep the trailing fragment."""
+        while True:
+            start = buf.find(self._MAGIC)
+            if start < 0:
+                return buf[-3:]              # keep a possible partial magic
+            if start > 0:
+                buf = buf[start:]            # resync past garbage
+            if len(buf) < self._HEADER.size:
+                return buf
+            (_, version, cam_id, fmt, _, w, h, fid,
+             size) = self._HEADER.unpack_from(buf)
+            if version != 1 or fmt != 1 or size != w * h * 4 or w == 0:
+                self._log.warn(f'Frame stream: bad header (v{version} fmt{fmt} '
+                               f'{w}x{h} size {size}); resyncing.',
+                               throttle_duration_sec=10.0)
+                buf = buf[4:]                # skip this magic, scan again
+                continue
+            end = self._HEADER.size + size
+            if len(buf) < end:
+                return buf                   # payload still in flight
+            bgra = np.frombuffer(buf[self._HEADER.size:end],
+                                 dtype=np.uint8).reshape(h, w, 4)
+            rgb = np.ascontiguousarray(bgra[:, :, [2, 1, 0]])
+            with self._lock:
+                ring = self._frames.setdefault(
+                    cam_id, collections.deque(maxlen=self._RING))
+                ring.append((fid, rgb, time.monotonic()))
+            buf = buf[end:]
+
+
 class LifecycleStereoDepth(rclpy.lifecycle.Node):
     """Stereo matching node for a simulated UnrealCV stereo rig."""
 
@@ -133,6 +275,16 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self.unreal_client: Optional[Client] = None
         self.cv_bridge = CvBridge()
         self._is_active = False
+
+        # 'stream' image source (NavcamStreamer plugin pushes frames).
+        self._stream: Optional[FrameStreamReceiver] = None
+        self._last_stream_fid: int = -1
+
+        # Reconnection state. Unreal drops the TCP link every time the editor
+        # restarts, and a stopped game de-registers the cameras.
+        self._ucv_addr: Tuple[str, int] = ('', 0)
+        self._last_reconnect: float = 0.0
+        self._consecutive_failures: int = 0
 
         # Rig solution, filled in by _solve_rig during on_configure.
         self._baseline_m: float = 0.0
@@ -156,6 +308,12 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
             parameters=[
                 ('ip',                      rclpy.Parameter.Type.STRING),
                 ('port',                    rclpy.Parameter.Type.INTEGER),
+                # 'unrealcv' renders on demand (stalls the game ~300 ms per
+                # camera); 'stream' receives pushed frames from the
+                # NavcamStreamer plugin (unreal/NavcamStreamer/) — no stall.
+                ('image_source',            rclpy.Parameter.Type.STRING),
+                ('stream_bind_ip',          rclpy.Parameter.Type.STRING),
+                ('stream_port',             rclpy.Parameter.Type.INTEGER),
                 ('left_camera_id',          rclpy.Parameter.Type.INTEGER),
                 ('right_camera_id',         rclpy.Parameter.Type.INTEGER),
                 ('center_camera_id',        rclpy.Parameter.Type.INTEGER),
@@ -165,9 +323,13 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                 ('center_topic',            rclpy.Parameter.Type.STRING),
                 ('image_reading_hz_rate',   rclpy.Parameter.Type.DOUBLE),
                 ('pause_game_during_capture', rclpy.Parameter.Type.BOOL),
-                # Rig geometry. Both are auto-solved from Unreal when <= 0.
+                # Rig geometry. Auto-solved from Unreal when <= 0 (unrealcv
+                # mode); both are REQUIRED in stream mode, which never measures.
                 ('baseline_m',              rclpy.Parameter.Type.DOUBLE),
                 ('hfov_deg',                rclpy.Parameter.Type.DOUBLE),
+                # Centre camera's distance from the left eye along the baseline
+                # (metres). < 0 means the midpoint. Stream mode only.
+                ('center_offset_m',         rclpy.Parameter.Type.DOUBLE),
                 ('uu_per_metre',            rclpy.Parameter.Type.DOUBLE),
                 # Matching
                 ('num_disparities',         rclpy.Parameter.Type.INTEGER),
@@ -215,12 +377,64 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
 
     def _connect_unrealcv(self, ip: str, port: int) -> None:
         self.get_logger().info(f'Attempting connection to UnrealCV at {ip}:{port}...')
+        self._ucv_addr = (ip, port)
         self.unreal_client = Client((ip, port), 'inet')
         while not self.unreal_client.isconnected():
             self.unreal_client.connect()
             time.sleep(1.0)
         self.get_logger().info('UnrealCV TCP connection established.')
         self._resume_if_paused()
+
+    def _try_reconnect(self) -> None:
+        """
+        Re-establish a dropped UnrealCV link from inside the read cycle.
+
+        Restarting the Unreal editor resets the TCP connection, and a stopped
+        game de-registers the cameras; without this, every editor cycle needed a
+        manual container restart. One attempt per throttle window: connect with
+        a fresh client, then verify the navcams exist again. If they do not
+        (editor open, game not playing), drop the socket and try again later —
+        holding it would block the server's only client slot while erroring.
+        """
+        now = time.monotonic()
+        if now - self._last_reconnect < 5.0:
+            return
+        self._last_reconnect = now
+
+        if self.unreal_client:
+            try:
+                self.unreal_client.disconnect()
+            except Exception:
+                pass
+            self.unreal_client = None
+
+        ip, port = self._ucv_addr
+        try:
+            client = Client((ip, port), 'inet')
+            client.connect(3)
+            if not client.isconnected():
+                self.get_logger().warn(
+                    f'UnrealCV connection lost; {ip}:{port} is not serving. Is '
+                    f'the editor running? Retrying every 5 s.',
+                    throttle_duration_sec=30.0)
+                return
+            self.unreal_client = client
+            self._resume_if_paused()
+            self._check_cameras_exist()
+        except Exception as exc:
+            if self.unreal_client:
+                try:
+                    self.unreal_client.disconnect()
+                except Exception:
+                    pass
+                self.unreal_client = None
+            self.get_logger().warn(
+                f'UnrealCV reconnected but the rig is not ready ({exc}). Is the '
+                f'game playing? Retrying every 5 s.', throttle_duration_sec=30.0)
+            return
+
+        self._consecutive_failures = 0
+        self.get_logger().info('UnrealCV reconnected; resuming capture.')
 
     def _resume_if_paused(self) -> None:
         """
@@ -788,6 +1002,81 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
             left, right = right, left
         return left, right, center, center_depth_gt, center_mask
 
+    def _solve_stream_rig(self, eye_shape, center_shape) -> None:
+        """
+        Rig geometry from parameters and the first streamed frames.
+
+        Stream mode has no UnrealCV to measure, so the geometry is declared:
+        baseline_m and hfov_deg from parameters, image size from the frames,
+        the eyes co-rotated (SGBM requires it anyway — the NavcamStreamer
+        captures must share a rotation), and the centre camera on the baseline
+        at center_offset_m from the left eye (midpoint when negative).
+        """
+        self._height, self._width = eye_shape[:2]
+        self._cx = self._width / 2.0
+        self._cy = self._height / 2.0
+        self._fx = (self._width / 2.0) / math.tan(
+            math.radians(self.hfov_deg_param) / 2.0)
+
+        self._c_h, self._c_w = center_shape[:2]
+        self._c_fx = (self._c_w / 2.0) / math.tan(
+            math.radians(self.hfov_deg_param) / 2.0)
+        self._c_cx, self._c_cy = self._c_w / 2.0, self._c_h / 2.0
+
+        offset = (self.center_offset_m if self.center_offset_m >= 0.0
+                  else self._baseline_m / 2.0)
+        self._c_R = np.eye(3)
+        # Optical axes: x = right. The centre sits `offset` to the right of
+        # the left eye, on the baseline.
+        self._c_t = np.array([offset, 0.0, 0.0])
+
+        self._build_matcher()
+        self.get_logger().info(
+            f'Rig declared (stream mode): {self._width}x{self._height} | '
+            f'baseline {self._baseline_m * 100:.2f} cm | '
+            f'hfov {self.hfov_deg_param:.2f} deg -> fx {self._fx:.2f} px | '
+            f'centre {offset * 100:.2f} cm from the left eye')
+
+    def _capture_from_stream(self):
+        """
+        Take the newest same-tick pair from the NavcamStreamer plugin.
+
+        Frames were rendered with the game frame and pushed here — no UnrealCV,
+        no game-thread stall. Returns None when there is nothing new to
+        process; the cycle simply skips. Geometry is solved from parameters on
+        the first frame, when the image size becomes known.
+        """
+        got = self._stream.latest_pair(self.left_camera_id,
+                                       self.right_camera_id,
+                                       self.center_camera_id)
+        if got is None:
+            self.get_logger().warn(
+                'No streamed frames yet. Is the NavcamStreamer component in '
+                'the level, and the game playing?', throttle_duration_sec=15.0)
+            return None
+        left, right, center, fid, age = got
+
+        if fid == self._last_stream_fid:
+            return None                      # nothing new this cycle
+        if age > 3.0:
+            self.get_logger().warn(
+                f'Streamed frames are {age:.1f} s old — the stream has '
+                f'stalled. Skipping.', throttle_duration_sec=15.0)
+            return None
+
+        if self._matcher is None:
+            self._solve_stream_rig(left.shape, center.shape)
+        elif left.shape[:2] != (self._height, self._width):
+            self.get_logger().error(
+                f'Streamed frame is {left.shape[1]}x{left.shape[0]} but the '
+                f'rig was solved at {self._width}x{self._height}. Restart the '
+                f'node after changing the render target size.',
+                throttle_duration_sec=15.0)
+            return None
+        self._last_stream_fid = fid
+
+        return left, right, center, None, None
+
     # =========================================================================
     # Stereo matching
     # =========================================================================
@@ -1068,17 +1357,25 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
     def read_stereo_pair(self) -> None:
         if not self._is_active:
             return
-        if not self.unreal_client or not self.unreal_client.isconnected():
-            self.get_logger().warn('UnrealCV connection lost. Bypassing read cycle.',
-                                   throttle_duration_sec=5.0)
-            return
+        # Stream mode never touches UnrealCV; only the on-demand path needs
+        # the socket (and its reconnect dance).
+        streaming = self.image_source == 'stream'
+        if not streaming and (not self.unreal_client
+                              or not self.unreal_client.isconnected()):
+            self._try_reconnect()
+            if not self.unreal_client:
+                return
 
         try:
             stamp = self.get_clock().now().to_msg()
             f_left, f_right, f_center = (self.left_frame, self.right_frame,
                                          self.center_frame)
 
-            left, right, center, gt_raw, center_mask = self._capture_all()
+            captured = (self._capture_from_stream() if streaming
+                        else self._capture_all())
+            if captured is None:
+                return
+            left, right, center, gt_raw, center_mask = captured
             disp = self._compute_disparity(left, right)
             depth_left = self._depth_from_disparity(disp)
 
@@ -1142,6 +1439,22 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
 
         except Exception as exc:
             self.get_logger().error(f'Stereo read/publish cycle failed: {exc}')
+            # A connection can die without isconnected() noticing (a desynced
+            # receive thread returns None forever). Three straight failures
+            # mean the link is gone in practice: drop it so the reconnect
+            # path engages.
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= 3 and self.unreal_client:
+                self.get_logger().warn(
+                    'Three consecutive cycle failures — discarding the UnrealCV '
+                    'connection and reconnecting.')
+                try:
+                    self.unreal_client.disconnect()
+                except Exception:
+                    pass
+                self.unreal_client = None
+            return
+        self._consecutive_failures = 0
 
     # =========================================================================
     # Lifecycle transitions
@@ -1174,6 +1487,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self.pause_game_during_capture = self.get_parameter('pause_game_during_capture').value
         self.baseline_m_param = self.get_parameter('baseline_m').value
         self.hfov_deg_param   = self.get_parameter('hfov_deg').value
+        self.center_offset_m  = self.get_parameter('center_offset_m').value
         self.uu_per_metre     = self.get_parameter('uu_per_metre').value
         self.num_disparities_param = self.get_parameter('num_disparities').value
         self.max_depth_m      = self.get_parameter('max_depth_m').value
@@ -1190,16 +1504,43 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self.enable_object_mask = self.get_parameter('enable_object_mask').value
         hz                    = self.get_parameter('image_reading_hz_rate').value
 
-        self._connect_unrealcv(self.get_parameter('ip').value,
-                               self.get_parameter('port').value)
-        self._check_cameras_exist()
-        # All pose queries in one pause window: the rig must be measured at a
-        # single instant, or the rover's motion is misread as rig geometry.
-        self._snapshot_geometry()
-        self._solve_rig()
-        self._build_matcher()
-        self._solve_center_transform()
-        self._audit_near_field()
+        self.image_source = self.get_parameter('image_source').value.strip().lower()
+        if self.image_source not in ('unrealcv', 'stream'):
+            raise ValueError(
+                f"image_source must be 'unrealcv' or 'stream', "
+                f"not '{self.image_source}'")
+
+        if self.image_source == 'stream':
+            # No UnrealCV at all: frames come from the NavcamStreamer plugin
+            # and the rig geometry from parameters. Nothing can be measured,
+            # so the two geometry inputs are mandatory.
+            if self.baseline_m_param <= 0.0 or self.hfov_deg_param <= 0.0:
+                raise ValueError(
+                    'image_source "stream" runs without UnrealCV, so the rig '
+                    'cannot be measured: set baseline_m and hfov_deg to the '
+                    'real rig values (they are required, not optional, here).')
+            if self.validate_against_ground_truth or self.enable_object_mask:
+                self.get_logger().warn(
+                    'depth_gt and object_mask need UnrealCV and are disabled '
+                    'in stream mode.')
+                self.validate_against_ground_truth = False
+                self.enable_object_mask = False
+            self._baseline_m = self.baseline_m_param
+            self._swap_lr = False
+            # Intrinsics need the frame size; solved when the first frame lands.
+            self._matcher = None
+            self._width = self._height = 0
+        else:
+            self._connect_unrealcv(self.get_parameter('ip').value,
+                                   self.get_parameter('port').value)
+            self._check_cameras_exist()
+            # All pose queries in one pause window: the rig must be measured at
+            # a single instant, or the rover's motion is misread as rig geometry.
+            self._snapshot_geometry()
+            self._solve_rig()
+            self._build_matcher()
+            self._solve_center_transform()
+            self._audit_near_field()
 
         L, R, C = self.left_topic, self.right_topic, self.center_topic
 
@@ -1241,6 +1582,13 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
             f'{" + object mask" if self.enable_object_mask else ""}). '
             f'Frames: {self.left_frame}, {self.right_frame}, {self.center_frame}.')
 
+        if self.image_source == 'stream':
+            self._stream = FrameStreamReceiver(
+                self.get_parameter('stream_bind_ip').value,
+                self.get_parameter('stream_port').value,
+                self.get_logger())
+            self._stream.start()
+
         self._timer = self.create_timer(1.0 / hz, self.read_stereo_pair)
         return TransitionCallbackReturn.SUCCESS
 
@@ -1258,6 +1606,10 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         if self._timer:
             self.destroy_timer(self._timer)
             self._timer = None
+
+        if self._stream:
+            self._stream.stop()
+            self._stream = None
 
         # getattr: _release also runs from a failed on_configure, which may not
         # have created any publisher.

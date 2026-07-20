@@ -54,16 +54,14 @@ void UNavcamStreamer::EndPlay(const EEndPlayReason::Type Reason)
 	bStopSender = true;
 	if (SenderThread)
 	{
+		// Bounded: Run() checks bStopSender between sends and its connect
+		// attempts are capped at the 2 s Wait() in TryConnect, so this join
+		// never hangs the way a blocking Connect() on the game thread would.
 		SenderThread->Kill(true);
 		delete SenderThread;
 		SenderThread = nullptr;
 	}
-	if (Socket)
-	{
-		Socket->Close();
-		ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->DestroySocket(Socket);
-		Socket = nullptr;
-	}
+	bConnected = false;         // Run() already closed Socket on its way out.
 	Pending.Empty();
 	Active.Empty();
 	Super::EndPlay(Reason);
@@ -214,10 +212,30 @@ void UNavcamStreamer::ResolveCapture(const FName& Name, int32 CamId)
 		       CaptureWidth, CaptureHeight, *Name.ToString());
 	}
 
-	// Rendered with the frame, not on demand — the whole point.
+	// Renders every frame on the render thread — no game-thread stall — and
+	// is read back at SendHz. An on-demand variant (CaptureSceneDeferred,
+	// triggered only at SendHz) was tried to cut the GPU cost further, but
+	// its readback one tick later captured a stale buffer regardless of the
+	// scene: a GPU-pipeline-depth timing bug, not yet solved. Revisit only
+	// with a proper GPU fence instead of a fixed one-tick delay.
 	Found->bCaptureEveryFrame = true;
 	Found->bCaptureOnMovement = false;
 	Found->CaptureSource = SCS_FinalColorLDR;
+
+	if (bLockExposure)
+	{
+		// AEM_Manual disables scene-luminance metering entirely, so there is
+		// no auto-exposure feedback loop to fight — unlike pinning
+		// AutoExposureMin/MaxBrightness, which fixes the METERED luminance,
+		// not the output: forcing that to a value far from the scene's real
+		// luminance (a dim lunar surface) drives the exposure curve to
+		// wildly overcompensate, which is what blew the image to white.
+		FPostProcessSettings& PP = Found->PostProcessSettings;
+		PP.bOverride_AutoExposureMethod = true;
+		PP.AutoExposureMethod = AEM_Manual;
+		PP.bOverride_AutoExposureBias = true;
+		PP.AutoExposureBias = ExposureCompensationEV;
+	}
 
 	FNavcamResolved Entry;
 	Entry.Capture = Found;
@@ -228,8 +246,15 @@ void UNavcamStreamer::ResolveCapture(const FName& Name, int32 CamId)
 	       Found->TextureTarget->SizeX, Found->TextureTarget->SizeY);
 }
 
-bool UNavcamStreamer::ConnectSocket()
+bool UNavcamStreamer::TryConnect()
 {
+	// Called only from Run() (background thread). Non-blocking connect with a
+	// short bounded wait: FSocket::Connect() on a BLOCKING socket can take the
+	// full OS TCP timeout (many seconds) to fail, and an earlier version of
+	// this file called the equivalent of this function from TickComponent —
+	// which froze the entire engine (render, input, everything) for that
+	// duration, every 3-second retry, whenever the ROS node wasn't already up
+	// when Play was pressed. Never do socket I/O on the game thread.
 	ISocketSubsystem* Subsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
 	FIPv4Address Ip;
 	if (!FIPv4Address::Parse(ServerIp, Ip))
@@ -241,12 +266,21 @@ bool UNavcamStreamer::ConnectSocket()
 	Addr->SetIp(Ip.Value);
 	Addr->SetPort(ServerPort);
 
-	Socket = Subsystem->CreateSocket(NAME_Stream, TEXT("NavcamStream"), false);
-	Socket->SetNoDelay(true);
+	FSocket* NewSocket = Subsystem->CreateSocket(NAME_Stream, TEXT("NavcamStream"), false);
+	NewSocket->SetNonBlocking(true);
+	NewSocket->SetNoDelay(true);
 	int32 Unused;
-	Socket->SetSendBufferSize(4 * 1024 * 1024, Unused);
+	NewSocket->SetSendBufferSize(4 * 1024 * 1024, Unused);
 
-	if (!Socket->Connect(*Addr))
+	// A non-blocking connect returns immediately; success is confirmed by
+	// waiting for the socket to become writable, bounded so this thread —
+	// and EndPlay's Kill(true) join of it — can never stall for long.
+	NewSocket->Connect(*Addr);
+	const bool bWritable =
+		NewSocket->Wait(ESocketWaitConditions::WaitForWrite, FTimespan::FromSeconds(2.0));
+	const bool bOk = bWritable && NewSocket->GetConnectionState() == SCS_Connected;
+
+	if (!bOk)
 	{
 		if (!bLoggedWaiting)
 		{
@@ -256,11 +290,14 @@ bool UNavcamStreamer::ConnectSocket()
 			       *ServerIp, ServerPort);
 			bLoggedWaiting = true;
 		}
-		Subsystem->DestroySocket(Socket);
-		Socket = nullptr;
+		NewSocket->Close();
+		Subsystem->DestroySocket(NewSocket);
 		return false;
 	}
+
 	bLoggedWaiting = false;
+	Socket = NewSocket;
+	bConnected = true;
 	UE_LOG(LogTemp, Log, TEXT("NavcamStreamer: connected to %s:%d."), *ServerIp, ServerPort);
 	return true;
 }
@@ -270,36 +307,16 @@ void UNavcamStreamer::TickComponent(float DeltaTime, ELevelTick TickType,
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	const double Now = FPlatformTime::Seconds();
-
-	// A failed send means the node went away (its container restarted, say):
-	// drop the socket here on the game thread and fall through to redial.
-	if (bSocketDead && Socket)
+	// The game thread never touches the socket — only this flag, which Run()
+	// (background thread) owns. No blocking calls here, ever.
+	if (!bConnected)
 	{
-		Socket->Close();
-		ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->DestroySocket(Socket);
-		Socket = nullptr;
-		bSocketDead = false;
-		TArray<uint8> Discard;
-		while (SendQueue.Dequeue(Discard)) {}
-		UE_LOG(LogTemp, Warning,
-		       TEXT("NavcamStreamer: link lost; redialling every 3 s."));
-	}
-	if (!Socket)
-	{
-		if (Now - LastConnectAttempt >= 3.0)
-		{
-			LastConnectAttempt = Now;
-			ConnectSocket();
-		}
-		if (!Socket)
-		{
-			return;
-		}
+		return;
 	}
 
 	PollReadbacks();
 
+	const double Now = FPlatformTime::Seconds();
 	if (Now - LastSendTime >= 1.0 / FMath::Max(SendHz, 0.5f))
 	{
 		LastSendTime = Now;
@@ -310,6 +327,9 @@ void UNavcamStreamer::TickComponent(float DeltaTime, ELevelTick TickType,
 void UNavcamStreamer::EnqueueCaptures()
 {
 	// One tick, one frame id: this is what makes the left/right pair a rig.
+	// bCaptureEveryFrame means the capture already rendered this frame before
+	// component tick order guarantees matter here — the readback reads
+	// whatever the capture last rendered, which at every-frame is current.
 	const uint64 FrameId = GFrameCounter;
 
 	for (FNavcamResolved& Cam : Active)
@@ -399,29 +419,67 @@ void UNavcamStreamer::PollReadbacks()
 	}
 }
 
+namespace
+{
+	void CloseSocket(FSocket*& Socket)
+	{
+		if (Socket)
+		{
+			Socket->Close();
+			ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->DestroySocket(Socket);
+			Socket = nullptr;
+		}
+	}
+}
+
 uint32 UNavcamStreamer::Run()
 {
 	TArray<uint8> Packet;
 	while (!bStopSender)
 	{
-		if (!Socket || bSocketDead || !SendQueue.Dequeue(Packet))
+		if (!bConnected)
+		{
+			const double Now = FPlatformTime::Seconds();
+			if (Now - LastConnectAttempt >= 3.0)
+			{
+				LastConnectAttempt = Now;
+				TryConnect();          // blocks this thread only, briefly and boundedly
+			}
+			else
+			{
+				FPlatformProcess::Sleep(0.1f);
+			}
+			continue;
+		}
+
+		if (!SendQueue.Dequeue(Packet))
 		{
 			FPlatformProcess::Sleep(0.005f);
 			continue;
 		}
 		int32 Offset = 0;
-		while (Offset < Packet.Num() && !bStopSender && !bSocketDead)
+		bool bFailed = false;
+		while (Offset < Packet.Num() && !bStopSender)
 		{
 			int32 Sent = 0;
 			if (!Socket->Send(Packet.GetData() + Offset, Packet.Num() - Offset, Sent))
 			{
-				// The game thread owns socket teardown; just flag it.
-				bSocketDead = true;
+				bFailed = true;
 				break;
 			}
 			Offset += Sent;
 		}
+		if (bFailed)
+		{
+			CloseSocket(Socket);
+			bConnected = false;
+			TArray<uint8> Discard;
+			while (SendQueue.Dequeue(Discard)) {}    // stale frames, drop them
+			UE_LOG(LogTemp, Warning,
+			       TEXT("NavcamStreamer: link lost; redialling every 3 s."));
+		}
 	}
+	CloseSocket(Socket);
 	return 0;
 }
 

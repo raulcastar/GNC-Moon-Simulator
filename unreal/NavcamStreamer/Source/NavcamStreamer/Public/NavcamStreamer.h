@@ -30,6 +30,7 @@
 #include "Components/ActorComponent.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Engine/EngineTypes.h"
+#include "Engine/Scene.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "RHIGPUReadback.h"
 #include "HAL/Runnable.h"
@@ -117,6 +118,25 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Navcam|Cameras")
 	int32 CaptureHeight = 480;
 
+	// Lock the captures to manual exposure instead of auto-exposing. Useful
+	// for the glare study (auto-exposure would hide the saturation being
+	// measured, and could let the two eyes expose differently from each
+	// other, poisoning stereo matching) — but NOT the fix for a white image
+	// from sporadic captures; that turned out to be a capture-timing bug, not
+	// exposure. Off by default: verify the base image is correct with this
+	// off before turning it on.
+	//
+	// Manual mode (AEM_Manual) disables scene metering, so there is no
+	// scene-dependent feedback loop to fight. ExposureCompensationEV is a
+	// plain brightness dial: 0 = neutral, positive = brighter, negative =
+	// darker.
+	UPROPERTY(EditAnywhere, Category = "Navcam|Cameras")
+	bool bLockExposure = false;
+
+	UPROPERTY(EditAnywhere, Category = "Navcam|Cameras",
+	          meta = (EditCondition = "bLockExposure"))
+	float ExposureCompensationEV = 0.0f;
+
 	// Ids the ROS side knows the cameras by (left/right/center_camera_id in
 	// component_stereo_depth/config/params.yaml). Defaults match its defaults.
 	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Navcam|Cameras")
@@ -141,20 +161,28 @@ private:
 	void ResolveCapture(const FName& Name, int32 CamId);
 	void EnqueueCaptures();
 	void PollReadbacks();
-	bool ConnectSocket();
+
+	// Socket ownership lives ENTIRELY on the background thread (Run()): create,
+	// connect, send, close. FSocket::Connect() is synchronous and can block for
+	// the OS TCP timeout; calling it from TickComponent — as an earlier version
+	// of this file did — freezes the whole engine (render, input, everything)
+	// for that duration, every retry. TryConnect uses a non-blocking socket
+	// with a short bounded Wait() so even this thread never stalls for long,
+	// keeping EndPlay's Kill(true) join bounded too.
+	bool TryConnect();
 
 	// Captures found by name at BeginPlay.
 	UPROPERTY(Transient)
 	TArray<FNavcamResolved> Active;
 
-	FSocket* Socket = nullptr;
+	FSocket* Socket = nullptr;                  // Run()'s thread only.
 	FRunnableThread* SenderThread = nullptr;
 	FThreadSafeBool bStopSender = false;
-	// Set by the sender thread on a failed send; the game thread then closes
-	// the socket and the tick loop redials.
-	FThreadSafeBool bSocketDead = false;
-	double LastConnectAttempt = 0.0;
-	bool bLoggedWaiting = false;
+	// The only socket state the game thread may read. Set/cleared by Run().
+	FThreadSafeBool bConnected = false;
+
+	double LastConnectAttempt = 0.0;             // Run()'s thread only.
+	bool bLoggedWaiting = false;                 // Run()'s thread only.
 
 	// Packets ready to send: header already prepended.
 	TQueue<TArray<uint8>, EQueueMode::Mpsc> SendQueue;
