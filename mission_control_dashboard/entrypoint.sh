@@ -52,4 +52,4 @@ ros2 daemon stop || true
 # ------------------------------------------------------------------------------
 # 5. Execute the Primary ROS 2 Launch Process
 # ------------------------------------------------------------------------------
-exec ros2 launch component_rover_leo_raph lc_component_rover_leo_raph.launch.py
+exec ros2 launch mission_control_dashboard mission_control_dashboard.launch.py

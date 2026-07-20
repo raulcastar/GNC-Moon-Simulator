@@ -1,269 +1,701 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Lunar Rover Mission Control</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
-    <style>
-        body { 
-            font-family: Arial, sans-serif; background-color: #1e1e1e; color: #fff; 
-            margin: 0; padding: 0; height: 100vh; overflow: hidden;
-            display: flex; flex-direction: column;
-        }
-        
-        .header { text-align: center; flex: 0 0 auto; padding: 10px; }
-        h2, p { margin: 0; padding: 2px; }
+<meta charset="UTF-8">
+<title>GNC MOON SIM — Mission Control</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  :root {
+    --bg:      #05080d;
+    --panel:   #0a1018;
+    --panel2:  #0e1622;
+    --line:    #1b2a3d;
+    --text:    #b8c7d9;
+    --dim:     #5a6b80;
+    --accent:  #35e0b5;
+    --cyan:    #4fc3f7;
+    --amber:   #ffb454;
+    --red:     #ff5566;
+    --mono:    'Consolas','Menlo','DejaVu Sans Mono',monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--mono);
+    font-size: 13px; overflow: hidden;
+    display: grid; grid-template-rows: 46px 1fr 190px; gap: 6px; padding: 6px;
+  }
 
-        .main-layout { display: flex; flex: 1; min-height: 0; padding: 10px; gap: 20px; }
+  /* ============ HEADER ============ */
+  header {
+    display: flex; align-items: center; gap: 18px; padding: 0 14px;
+    background: linear-gradient(180deg, var(--panel2), var(--panel));
+    border: 1px solid var(--line); border-radius: 4px;
+  }
+  .brand { color: var(--accent); font-weight: bold; letter-spacing: 3px; font-size: 15px;
+           text-shadow: 0 0 12px rgba(53,224,181,.35); white-space: nowrap; }
+  .brand small { color: var(--dim); letter-spacing: 1px; font-size: 10px; display: block; }
+  .clock { text-align: center; }
+  .clock .lbl { color: var(--dim); font-size: 9px; letter-spacing: 2px; }
+  .clock .val { color: var(--cyan); font-size: 16px; letter-spacing: 1px; }
+  .spacer { flex: 1; }
+  .lights { display: flex; gap: 14px; }
+  .light { text-align: center; font-size: 9px; letter-spacing: 1px; color: var(--dim); }
+  .light .dot {
+    width: 11px; height: 11px; border-radius: 50%; margin: 0 auto 3px;
+    background: #333; border: 1px solid #222; transition: background .3s;
+  }
+  .light .dot.ok    { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  .light .dot.stale { background: var(--amber);  box-shadow: 0 0 8px var(--amber); }
+  .light .dot.dead  { background: #402028; }
 
-        .map-section { display: flex; flex: 2; justify-content: center; align-items: stretch; gap: 10px; }
+  /* ============ MAIN GRID ============ */
+  main { display: grid; grid-template-columns: 29% 1fr 27%; gap: 6px; min-height: 0; }
+  .col { display: flex; flex-direction: column; gap: 6px; min-height: 0; min-width: 0; }
 
-        .map-wrapper { position: relative; aspect-ratio: 1 / 1; height: 100%; max-width: 100%; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+    display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  }
+  .panel-title {
+    padding: 4px 10px; font-size: 10px; letter-spacing: 2px; color: var(--dim);
+    border-bottom: 1px solid var(--line); background: var(--panel2);
+    display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
+  }
+  .panel-title .tag { color: var(--accent); }
+  .panel-title .age { margin-left: auto; color: var(--dim); font-size: 9px; }
 
-        #canvas-container { position: relative; width: 100%; height: 100%; border: 2px solid #555; background-color: black; }
-        canvas.layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; cursor: crosshair; }
-        #mapCanvas { z-index: 1; }
-        #odomCanvas { z-index: 2; }
-        
-        /* --- NEW: The Loading Overlay Styling --- */
-        #loading-overlay {
-            display: none;
-            position: absolute;
-            top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: rgba(0, 0, 0, 0.85);
-            color: #00ffff;
-            padding: 15px 30px;
-            border: 2px solid #00ffff;
-            border-radius: 8px;
-            z-index: 10;
-            font-family: monospace; font-size: 18px; font-weight: bold;
-            pointer-events: none; /* Prevents the overlay from blocking mouse clicks */
-            box-shadow: 0 0 15px rgba(0, 255, 255, 0.4);
-        }
+  /* ============ CAMERA FEEDS ============ */
+  #cams { flex: 1; display: grid; grid-template-rows: 1.5fr 1fr 1fr; gap: 6px; min-height: 0; }
+  .cam-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; min-height: 0; }
+  .feed { position: relative; background: #000; }
+  .feed img {
+    width: 100%; height: 100%; object-fit: contain; display: block;
+    image-rendering: auto; flex: 1; min-height: 0;
+  }
+  .feed .nosig {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: #24344a; font-size: 12px; letter-spacing: 4px;
+    background: repeating-linear-gradient(0deg, #04070c 0 2px, #060a11 2px 4px);
+  }
 
-        #colorbar-container { width: 70px; height: 100%; display: none; flex-direction: column; text-align: left; }
-        #colorbarCanvas { width: 100%; flex: 1; min-height: 0; border: 1px solid #555;}
+  /* ============ MAP ============ */
+  #map-panel { flex: 1; }
+  #map-body { flex: 1; display: flex; gap: 8px; padding: 8px; min-height: 0; }
+  #map-wrap { position: relative; flex: 1; min-width: 0; }
+  #map-stack { position: absolute; inset: 0; margin: auto; }
+  #map-stack canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+  #mapCanvas  { z-index: 1; }
+  #odomCanvas { z-index: 2; cursor: crosshair; }
+  #planning {
+    display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    z-index: 5; padding: 8px 20px; color: var(--cyan); border: 1px solid var(--cyan);
+    background: rgba(4,10,16,.9); letter-spacing: 2px; font-size: 12px;
+    box-shadow: 0 0 18px rgba(79,195,247,.3); pointer-events: none;
+  }
+  #cbar { width: 46px; flex: 0 0 auto; display: none; flex-direction: column; }
+  #cbarCanvas { flex: 1; min-height: 0; border: 1px solid var(--line); width: 100%; }
+  #map-hint { padding: 3px 10px; color: var(--dim); font-size: 10px; border-top: 1px solid var(--line);
+              display: flex; gap: 14px; }
+  #map-hint b { color: var(--cyan); font-weight: normal; }
+  #map-hint .sw { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 4px; }
 
-        .camera-section { flex: 1; display: flex; flex-direction: column; gap: 15px; min-width: 300px; }
-        .feed-box { flex: 1; display: flex; flex-direction: column; border: 2px solid #555; background: #000; min-height: 0; }
-        .feed-title { text-align: center; font-size: 14px; background: #333; padding: 5px; margin: 0; font-weight: bold; }
-        .feed-box img { flex: 1; min-height: 0; width: 100%; object-fit: contain; }
-    </style>
+  /* ============ LIDAR + TELEMETRY ============ */
+  #lidar-panel { flex: 1.4; }
+  #lidarCanvas { flex: 1; min-height: 0; width: 100%; }
+  #dem-panel   { flex: 1.1; }
+  #tele-panel  { flex: 0 0 auto; }
+  #tele { flex: 1; padding: 8px 12px; overflow-y: auto; }
+  .tl { display: flex; justify-content: space-between; padding: 3px 0;
+        border-bottom: 1px dashed #131e2c; }
+  .tl .k { color: var(--dim); letter-spacing: 1px; font-size: 11px; }
+  .tl .v { color: var(--accent); font-size: 13px; }
+  .tl .v.cy { color: var(--cyan); }
+
+  #cmd-bar { display: flex; gap: 6px; padding: 8px 10px 2px; }
+  #cmd-bar button {
+    flex: 1; font-family: var(--mono); font-size: 10px; letter-spacing: 1px;
+    padding: 7px 4px; cursor: pointer; border-radius: 3px;
+    background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+  }
+  #cmd-bar button:hover { border-color: var(--accent); color: var(--accent); }
+  #cmd-bar button.lit { border-color: var(--amber); color: var(--amber);
+                        box-shadow: 0 0 8px rgba(255,180,84,.25); }
+  #btn-stop { border-color: #5a2230 !important; color: var(--red) !important; }
+  #btn-stop:hover { background: #2a1018 !important; box-shadow: 0 0 10px rgba(255,85,102,.3); }
+
+  /* ============ CONSOLE ============ */
+  footer.panel { min-height: 0; }
+  #console-bar { display: flex; gap: 8px; align-items: center; }
+  #console-bar button {
+    background: none; border: 1px solid var(--line); color: var(--dim);
+    font-family: var(--mono); font-size: 9px; letter-spacing: 1px;
+    padding: 2px 8px; cursor: pointer; border-radius: 2px;
+  }
+  #console-bar button.on { color: var(--accent); border-color: var(--accent); }
+  #log {
+    flex: 1; overflow-y: auto; padding: 4px 10px; font-size: 11.5px; line-height: 1.5;
+  }
+  #log .row { white-space: pre-wrap; word-break: break-word; }
+  #log .t   { color: var(--dim); }
+  #log .n   { color: var(--cyan); }
+  #log .INFO  { color: var(--text); }
+  #log .WARN  { color: var(--amber); }
+  #log .ERROR, #log .FATAL { color: var(--red); }
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
 </head>
 <body>
-    <div class="header">
-        <h2>Mission Control Dashboard</h2>
-        <p>Click anywhere on the topographical map to dispatch the rover.</p>
-    </div>
 
-    <div class="main-layout">
-        <div class="map-section">
-            <div class="map-wrapper">
-                <div id="canvas-container">
-                    <canvas id="mapCanvas" class="layer"></canvas>
-                    <canvas id="odomCanvas" class="layer"></canvas>
-                </div>
-                <div id="loading-overlay">Calculating Optimal Path...</div>
-            </div>
-            
-            <div id="colorbar-container">
-                <div style="font-size: 12px; font-weight: bold; text-align: center; margin-bottom: 4px; color: white;">Elev.</div>
-                <canvas id="colorbarCanvas"></canvas>
-            </div>
+<header>
+  <div class="brand">GNC MOON SIMULATOR<small>MISSION CONTROL // LUNAR SURFACE OPS</small></div>
+  <div class="clock"><div class="lbl">MET</div><div class="val" id="met">T+ 00:00:00</div></div>
+  <div class="clock"><div class="lbl">UTC</div><div class="val" id="utc">--:--:--</div></div>
+  <div class="spacer"></div>
+  <div class="lights">
+    <div class="light"><div class="dot" id="li-link"></div>LINK</div>
+    <div class="light"><div class="dot" id="li-odom"></div>ODOM</div>
+    <div class="light"><div class="dot" id="li-cam"></div>NAVCAM</div>
+    <div class="light"><div class="dot" id="li-depth"></div>DEPTH</div>
+    <div class="light"><div class="dot" id="li-lidar"></div>LIDAR</div>
+  </div>
+</header>
+
+<main>
+  <!-- ============ LEFT: CAMERAS ============ -->
+  <div class="col">
+    <div class="panel" style="flex:1">
+      <div class="panel-title"><span class="tag">▣</span>NAVCAM ARRAY
+        <span class="age"><button id="btn-camrst" style="background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);font-size:9px;padding:1px 7px;cursor:pointer">⟳ RESTART NODE</button></span>
+      </div>
+      <div id="cams">
+        <div class="cam-row" style="grid-template-columns:1fr">
+          <div class="feed" id="f-cam_central"><div class="nosig">CENTRAL — NO SIGNAL</div><img></div>
         </div>
-
-        <div class="camera-section">
-            <div class="feed-box">
-                <div class="feed-title">Color Camera (RGB)</div>
-                <img id="colorStream" src="" alt="Waiting for Video Stream..." />
-            </div>
-            <div class="feed-box">
-                <div class="feed-title">Depth Camera (Normalized)</div>
-                <img id="depthStream" src="" alt="Waiting for Depth Stream..." />
-            </div>
+        <div class="cam-row">
+          <div class="feed" id="f-cam_left"><div class="nosig">LEFT — NO SIGNAL</div><img></div>
+          <div class="feed" id="f-cam_right"><div class="nosig">RIGHT — NO SIGNAL</div><img></div>
         </div>
+        <div class="cam-row">
+          <div class="feed" id="f-depth"><div class="nosig">STEREO DEPTH</div><img></div>
+          <div class="feed" id="f-mask"><div class="nosig">SEGMENTATION</div><img></div>
+        </div>
+      </div>
     </div>
+  </div>
 
-    <script>
-        const socket = io();
-        
-        const mapCanvas = document.getElementById('mapCanvas');
-        const mapCtx = mapCanvas.getContext('2d');
-        const odomCanvas = document.getElementById('odomCanvas');
-        const odomCtx = odomCanvas.getContext('2d');
-        const cbCanvas = document.getElementById('colorbarCanvas');
-        const cbCtx = cbCanvas.getContext('2d');
+  <!-- ============ CENTER: MAP ============ -->
+  <div class="col">
+    <div class="panel" id="map-panel">
+      <div class="panel-title"><span class="tag">◈</span>TOPOGRAPHIC MAP — CLICK TO DISPATCH ROVER
+        <span class="age"><button id="btn-map" style="background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);font-size:9px;padding:1px 7px;cursor:pointer">RELOAD MAP</button></span>
+      </div>
+      <div id="map-body">
+        <div id="map-wrap">
+          <div id="map-stack">
+            <canvas id="mapCanvas"></canvas>
+            <canvas id="odomCanvas"></canvas>
+          </div>
+          <div id="planning">COMPUTING TRAVERSE…</div>
+        </div>
+        <div id="cbar">
+          <div style="font-size:9px;color:var(--dim);text-align:center;padding:2px">ELEV</div>
+          <canvas id="cbarCanvas"></canvas>
+        </div>
+      </div>
+      <div id="map-hint">
+        <span><b class="sw" style="background:#ff5566"></b>PLANNED</span>
+        <span><b class="sw" style="background:#4fc3f7"></b>DRIVEN</span>
+        <span><b>◉</b> ROVER</span>
+      </div>
+    </div>
+  </div>
 
-        let mapRes = 1.0; let mapWidth = 0; let mapHeight = 0;
-        let currentPose = null; let globalPath = []; let actualTrajectory = [];
-        let minHeightLabel = "0.0m"; let maxHeightLabel = "0.0m";
+  <!-- ============ RIGHT: LIDAR 3D + LOCAL DEM + TELEMETRY ============ -->
+  <div class="col">
+    <div class="panel" id="lidar-panel">
+      <div class="panel-title"><span class="tag">◎</span>LIDAR — 3D · DRAG TO ORBIT · WHEEL TO ZOOM<span class="age" id="lidar-info"></span></div>
+      <canvas id="lidarCanvas" style="cursor:grab"></canvas>
+    </div>
+    <div class="panel" id="dem-panel">
+      <div class="panel-title"><span class="tag">▦</span>LOCAL DEM — 3D TERRAIN · DRAG · WHEEL<span class="age" id="dem-info"></span></div>
+      <div class="feed" style="flex:1;cursor:grab" id="demView"><div class="nosig" id="dem-nosig">AWAITING LOCAL MAPPING</div></div>
+    </div>
+    <div class="panel" id="tele-panel">
+      <div class="panel-title"><span class="tag">▤</span>ROVER TELEMETRY &amp; COMMAND</div>
+      <div id="cmd-bar">
+        <button id="btn-lon">☀ LIGHTS ON</button>
+        <button id="btn-loff">● LIGHTS OFF</button>
+        <button id="btn-stop">■ ALL STOP</button>
+      </div>
+      <div id="tele">
+        <div class="tl"><span class="k">POSITION X</span><span class="v" id="t-x">—</span></div>
+        <div class="tl"><span class="k">POSITION Y</span><span class="v" id="t-y">—</span></div>
+        <div class="tl"><span class="k">ALTITUDE Z</span><span class="v" id="t-z">—</span></div>
+        <div class="tl"><span class="k">HEADING</span><span class="v cy" id="t-yaw">—</span></div>
+        <div class="tl"><span class="k">GROUND SPEED</span><span class="v cy" id="t-spd">—</span></div>
+        <div class="tl"><span class="k">ODOM RATE</span><span class="v" id="t-hz">—</span></div>
+        <div class="tl"><span class="k">LIDAR POINTS</span><span class="v" id="t-pts">—</span></div>
+        <div class="tl"><span class="k">LAST GOAL</span><span class="v cy" id="t-goal">—</span></div>
+      </div>
+    </div>
+  </div>
+</main>
 
-        function getViridisColor(t) {
-            t = Math.max(0.0, Math.min(1.0, t));
-            const stops = [
-                { t: 0.00, r: 68,  g: 1,   b: 84  },  
-                { t: 0.25, r: 59,  g: 82,  b: 139 },  
-                { t: 0.50, r: 33,  g: 145, b: 140 },  
-                { t: 0.75, r: 94,  g: 201, b: 98  },  
-                { t: 1.00, r: 253, g: 231, b: 37  }   
-            ];
-            for (let i = 0; i < stops.length - 1; i++) {
-                if (t >= stops[i].t && t <= stops[i+1].t) {
-                    const range = stops[i+1].t - stops[i].t;
-                    const local_t = (t - stops[i].t) / range;
-                    const r = Math.round(stops[i].r + local_t * (stops[i+1].r - stops[i].r));
-                    const g = Math.round(stops[i].g + local_t * (stops[i+1].g - stops[i].g));
-                    const b = Math.round(stops[i].b + local_t * (stops[i+1].b - stops[i].b));
-                    return [r, g, b];
-                }
-            }
-            return [253, 231, 37]; 
-        }
+<!-- ============ CONSOLE ============ -->
+<footer class="panel">
+  <div class="panel-title" id="console-bar">
+    <span class="tag">≡</span>SYSTEM CONSOLE — /rosout
+    <span style="flex:1"></span>
+    <button data-f="ALL" class="on">ALL</button>
+    <button data-f="WARN">WARN+</button>
+    <button data-f="ERROR">ERR</button>
+    <button id="btn-pause">PAUSE</button>
+    <button id="btn-clear">CLEAR</button>
+  </div>
+  <div id="log"></div>
+</footer>
 
-        function drawOverlay() {
-            if (mapWidth === 0 || mapHeight === 0) return;
-            odomCtx.clearRect(0, 0, odomCanvas.width, odomCanvas.height);
+<script>
+const socket = io();
+const $ = id => document.getElementById(id);
 
-            odomCtx.save();
-            odomCtx.lineWidth = 1;
-            odomCtx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
-            odomCtx.fillStyle = 'rgba(255, 255, 255, 0.8)';
-            odomCtx.font = '14px Arial';
-            odomCtx.setLineDash([5, 5]);
-            
-            const gridStepPixels = 200 / mapRes;
+/* ---------------- clocks ---------------- */
+const t0 = Date.now();
+setInterval(() => {
+  const s = Math.floor((Date.now() - t0) / 1000);
+  const hh = String(Math.floor(s/3600)).padStart(2,'0');
+  const mm = String(Math.floor(s%3600/60)).padStart(2,'0');
+  const ss = String(s%60).padStart(2,'0');
+  $('met').textContent = `T+ ${hh}:${mm}:${ss}`;
+  $('utc').textContent = new Date().toISOString().substr(11,8);
+}, 500);
 
-            for (let i = 0; i <= mapWidth; i += gridStepPixels) {
-                odomCtx.beginPath();
-                odomCtx.moveTo(i, 0);
-                odomCtx.lineTo(i, mapHeight);
-                odomCtx.stroke();
-                odomCtx.fillText(Math.round(i * mapRes), i + 5, mapHeight - 5);
-            }
+/* ---------------- status lights ---------------- */
+const lastSeen = { link:0, odom:0, cam:0, depth:0, lidar:0 };
+socket.on('connect',    () => { lastSeen.link = Date.now(); addLocal('INFO', 'Uplink established.'); });
+socket.on('disconnect', () => { lastSeen.link = 0; addLocal('ERROR', 'Uplink lost.'); });
+setInterval(() => {
+  const now = Date.now();
+  const set = (id, t, freshMs) => {
+    const d = $(id); d.className = 'dot' +
+      (t === 0 ? ' dead' : now - t < freshMs ? ' ok' : now - t < freshMs*4 ? ' stale' : ' dead');
+  };
+  if (socket.connected) lastSeen.link = now;
+  set('li-link',  lastSeen.link,  3000);
+  set('li-odom',  lastSeen.odom,  2000);
+  set('li-cam',   lastSeen.cam,   4000);
+  set('li-depth', lastSeen.depth, 4000);
+  set('li-lidar', lastSeen.lidar, 4000);
+}, 700);
 
-            for (let j = 0; j <= mapHeight; j += gridStepPixels) {
-                odomCtx.beginPath();
-                odomCtx.moveTo(0, j);
-                odomCtx.lineTo(mapWidth, j);
-                odomCtx.stroke();
-                let labelY = Math.round((mapHeight - j) * mapRes);
-                if (labelY !== 0) odomCtx.fillText(labelY, 5, j - 5);
-            }
-            odomCtx.restore();
+/* ---------------- camera feeds ---------------- */
+socket.on('feed', msg => {
+  const box = $('f-' + msg.id);
+  if (!box) return;
+  box.querySelector('.nosig').style.display = 'none';
+  box.querySelector('img').src = 'data:image/jpeg;base64,' + msg.image;
+  if (msg.id.startsWith('cam_')) lastSeen.cam = Date.now();
+  if (msg.id === 'depth') lastSeen.depth = Date.now();
+});
 
-            if (globalPath.length > 0) {
-                odomCtx.beginPath(); odomCtx.strokeStyle = 'red'; odomCtx.lineWidth = 3;
-                for (let i = 0; i < globalPath.length; i++) {
-                    let pxX = globalPath[i].x / mapRes; let pxY = mapHeight - (globalPath[i].y / mapRes);
-                    if (i === 0) odomCtx.moveTo(pxX, pxY); else odomCtx.lineTo(pxX, pxY);
-                }
-                odomCtx.stroke();
-            }
+/* ---------------- telemetry ---------------- */
+let odomTimes = [];
+socket.on('odom_update', m => {
+  lastSeen.odom = Date.now();
+  odomTimes.push(Date.now());
+  odomTimes = odomTimes.filter(t => Date.now() - t < 3000);
+  $('t-x').textContent   = m.x.toFixed(2) + ' m';
+  $('t-y').textContent   = m.y.toFixed(2) + ' m';
+  $('t-z').textContent   = m.z.toFixed(2) + ' m';
+  $('t-yaw').textContent = m.yaw.toFixed(1) + '°';
+  $('t-spd').textContent = m.speed.toFixed(2) + ' m/s';
+  $('t-hz').textContent  = (odomTimes.length / 3).toFixed(1) + ' Hz';
+  currentPose = m;
+  drawOverlay();
+});
 
-            if (actualTrajectory.length > 0) {
-                odomCtx.beginPath(); odomCtx.strokeStyle = 'blue'; odomCtx.lineWidth = 3;
-                for (let i = 0; i < actualTrajectory.length; i++) {
-                    let pxX = actualTrajectory[i].x / mapRes; let pxY = mapHeight - (actualTrajectory[i].y / mapRes);
-                    if (i === 0) odomCtx.moveTo(pxX, pxY); else odomCtx.lineTo(pxX, pxY);
-                }
-                odomCtx.stroke();
-            }
+/* ---------------- console ---------------- */
+let logFilter = 'ALL', paused = false;
+const logDiv = $('log');
+const LVL = { INFO: 1, WARN: 2, ERROR: 3, FATAL: 3 };
+function addRow(level, node, text, stamp) {
+  if (paused) return;
+  if (logFilter === 'WARN'  && (LVL[level]||1) < 2) return;
+  if (logFilter === 'ERROR' && (LVL[level]||1) < 3) return;
+  const atBottom = logDiv.scrollHeight - logDiv.scrollTop - logDiv.clientHeight < 40;
+  const d = document.createElement('div');
+  d.className = 'row';
+  const ts = new Date((stamp || Date.now()/1000) * 1000).toISOString().substr(11, 8);
+  d.innerHTML = `<span class="t">${ts}</span> <span class="${level}">${level.padEnd(5)}</span> ` +
+                `<span class="n">[${node}]</span> <span class="${level}">${esc(text)}</span>`;
+  logDiv.appendChild(d);
+  while (logDiv.childNodes.length > 500) logDiv.removeChild(logDiv.firstChild);
+  if (atBottom) logDiv.scrollTop = logDiv.scrollHeight;
+}
+const esc = s => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const addLocal = (lvl, txt) => addRow(lvl, 'console', txt, Date.now()/1000);
+socket.on('log', m => addRow(m.level, m.node, m.text, m.stamp));
 
-            if (currentPose) {
-                let pxX = currentPose.x / mapRes; let pxY = mapHeight - (currentPose.y / mapRes);
-                odomCtx.beginPath(); odomCtx.arc(pxX, pxY, 7, 0, 2 * Math.PI, false);
-                odomCtx.fillStyle = 'cyan'; odomCtx.fill(); odomCtx.strokeStyle = 'white'; odomCtx.stroke();
-            }
-        }
+document.querySelectorAll('#console-bar button[data-f]').forEach(b =>
+  b.onclick = () => {
+    logFilter = b.dataset.f;
+    document.querySelectorAll('#console-bar button[data-f]').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+  });
+$('btn-pause').onclick = e => { paused = !paused; e.target.textContent = paused ? 'RESUME' : 'PAUSE'; e.target.classList.toggle('on', paused); };
+$('btn-clear').onclick = () => logDiv.innerHTML = '';
 
-        function drawColorbar(rangeExists) {
-            if (!rangeExists) return;
-            document.getElementById('colorbar-container').style.display = 'flex';
-            
-            cbCanvas.width = cbCanvas.clientWidth;
-            cbCanvas.height = cbCanvas.clientHeight;
-            
-            cbCtx.clearRect(0, 0, cbCanvas.width, cbCanvas.height);
-            const levels = 20;
-            const bH = cbCanvas.height / levels;
-            for(let i = 0; i < levels; i++) {
-                let c_t = Math.floor(((levels - 1 - i) / (levels - 1)) * levels) / levels;
-                let color = getViridisColor(c_t);
-                cbCtx.fillStyle = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
-                cbCtx.fillRect(0, i * bH, cbCanvas.width, Math.ceil(bH));
-            }
-            cbCtx.fillStyle = 'white'; cbCtx.font = '12px Courier New'; cbCtx.textAlign = 'left'; cbCtx.textBaseline = 'middle';
-            cbCtx.fillText(maxHeightLabel + "m", 5, 12);
-            cbCtx.fillText(minHeightLabel + "m", 5, cbCanvas.height - 12);
-        }
+/* ---------------- lidar: 3D orbit view ---------------- */
+const lc = $('lidarCanvas'), lctx = lc.getContext('2d');
+let cloud = null;                                   /* last flat xyz list */
+const cam = { yaw: -2.35, pitch: 0.45, dist: 28 };  /* orbit state */
 
-        // --- WebSocket Listeners ---
-        socket.on('color_frame', msg => { document.getElementById('colorStream').src = "data:image/jpeg;base64," + msg.image; });
-        socket.on('depth_frame', msg => { document.getElementById('depthStream').src = "data:image/jpeg;base64," + msg.image; });
-        
-        socket.on('global_path_update', msg => { 
-            // --- NEW: Hide the loading prompt when the path arrives ---
-            document.getElementById('loading-overlay').style.display = 'none';
-            globalPath = msg.path; 
-            drawOverlay(); 
-        });
+function heightColor(z, zmin, zmax) {
+  const t = Math.max(0, Math.min(1, (z - zmin) / Math.max(0.01, zmax - zmin)));
+  const r = Math.round(30 + 225 * t);
+  const g = Math.round(120 + 100 * (1 - Math.abs(t - .5) * 2));
+  const b = Math.round(255 - 225 * t);
+  return `rgb(${r},${g},${b})`;
+}
 
-        socket.on('trajectory_update', msg => { actualTrajectory = msg.path; drawOverlay(); });
-        socket.on('odom_update', msg => { currentPose = msg; drawOverlay(); });
+function project(x, y, z, W, H) {
+  /* orbit camera around the origin: yaw about +z, then pitch, then perspective */
+  const cy_ = Math.cos(cam.yaw), sy_ = Math.sin(cam.yaw);
+  const cp_ = Math.cos(cam.pitch), sp_ = Math.sin(cam.pitch);
+  const rx =  x * cy_ + y * sy_;
+  const ry = -x * sy_ + y * cy_;
+  const vy =  ry * cp_ - z * sp_;          /* depth into the screen */
+  const vz =  ry * sp_ + z * cp_;          /* up on the screen */
+  const d = vy + cam.dist;
+  if (d < 0.5) return null;
+  const f = 0.9 * Math.min(W, H) / (d / cam.dist * 1.2);
+  return [W/2 + rx * f / cam.dist * 10, H/2 - vz * f / cam.dist * 10, d];
+}
 
-        socket.on('map_update', function(msg) {
-            mapWidth = msg.width; mapHeight = msg.height; mapRes = msg.resolution;
-            
-            mapCanvas.width = mapWidth; mapCanvas.height = mapHeight;
-            odomCanvas.width = mapWidth; odomCanvas.height = mapHeight;
+function drawLidar() {
+  lc.width = lc.clientWidth; lc.height = lc.clientHeight;
+  const W = lc.width, H = lc.height;
+  lctx.fillStyle = '#04070c'; lctx.fillRect(0, 0, W, H);
 
-            const imgData = mapCtx.createImageData(mapWidth, mapHeight);
-            let cMin = Infinity; let cMax = -Infinity;
-            for (let i = 0; i < msg.data.length; i++) {
-                if (msg.data[i] < 9999.0) {
-                    if (msg.data[i] < cMin) cMin = msg.data[i];
-                    if (msg.data[i] > cMax) cMax = msg.data[i];
-                }
-            }
-            let hR = cMax - cMin; let valid = (cMax !== -Infinity && cMin !== Infinity);
-            if (valid) {
-                if (hR === 0) hR = 1.0;
-                minHeightLabel = cMin.toFixed(1); maxHeightLabel = cMax.toFixed(1);
-            }
+  /* ground grid: 5 m squares out to 20 m, plus body axes */
+  lctx.strokeStyle = '#12202f'; lctx.lineWidth = 1;
+  for (let g = -20; g <= 20; g += 5) {
+    let a = project(g, -20, 0, W, H), b = project(g, 20, 0, W, H);
+    if (a && b) { lctx.beginPath(); lctx.moveTo(a[0],a[1]); lctx.lineTo(b[0],b[1]); lctx.stroke(); }
+    a = project(-20, g, 0, W, H); b = project(20, g, 0, W, H);
+    if (a && b) { lctx.beginPath(); lctx.moveTo(a[0],a[1]); lctx.lineTo(b[0],b[1]); lctx.stroke(); }
+  }
+  const o = project(0,0,0,W,H), ax = project(4,0,0,W,H), ay = project(0,4,0,W,H), az = project(0,0,3,W,H);
+  const axis = (p, c) => { if (o && p) { lctx.strokeStyle = c; lctx.lineWidth = 2;
+    lctx.beginPath(); lctx.moveTo(o[0],o[1]); lctx.lineTo(p[0],p[1]); lctx.stroke(); } };
+  axis(ax, '#35e0b5'); axis(ay, '#4fc3f7'); axis(az, '#ffb454');
 
-            for (let i = 0; i < msg.data.length; i++) {
-                let x = i % mapWidth; let y = Math.floor(i / mapWidth);
-                let pI = (((mapHeight - 1) - y) * mapWidth + x) * 4;
-                if (msg.data[i] >= 9999.0) {
-                    imgData.data[pI] = 0; imgData.data[pI+1] = 0; imgData.data[pI+2] = 0; imgData.data[pI+3] = 255; 
-                } else if (valid) {
-                    let vC = getViridisColor(Math.floor(((msg.data[i] - cMin) / hR) * 20.0) / 20.0);
-                    imgData.data[pI] = vC[0]; imgData.data[pI+1] = vC[1]; imgData.data[pI+2] = vC[2]; imgData.data[pI+3] = 255;
-                }
-            }
-            mapCtx.putImageData(imgData, 0, 0);
-            drawColorbar(valid); drawOverlay();
-        });
+  if (!cloud) return;
+  let zmin = 1e9, zmax = -1e9;
+  for (let i = 2; i < cloud.length; i += 3) {
+    if (cloud[i] < zmin) zmin = cloud[i];
+    if (cloud[i] > zmax) zmax = cloud[i];
+  }
+  for (let i = 0; i < cloud.length; i += 3) {
+    const p = project(cloud[i], cloud[i+1], cloud[i+2], W, H);
+    if (!p || p[0] < 0 || p[0] > W || p[1] < 0 || p[1] > H) continue;
+    const s = p[2] < cam.dist ? 3 : 2;               /* nearer -> bigger */
+    lctx.fillStyle = heightColor(cloud[i+2], zmin, zmax);
+    lctx.fillRect(p[0], p[1], s, s);
+  }
+}
 
-        odomCanvas.addEventListener('mousedown', function(e) {
-            const rect = odomCanvas.getBoundingClientRect();
-            
-            const scaleX = odomCanvas.width / rect.width;
-            const scaleY = odomCanvas.height / rect.height;
+socket.on('lidar', m => {
+  lastSeen.lidar = Date.now();
+  $('t-pts').textContent = m.count;
+  $('lidar-info').textContent = `${m.count} pts · ${m.frame}`;
+  cloud = m.points;
+  if (!document.hidden) drawLidar();   /* skip the render while unseen */
+});
 
-            let pixelX = (e.clientX - rect.left) * scaleX;
-            let pixelY = (e.clientY - rect.top) * scaleY;
+/* orbit interaction */
+let dragging = false, lx = 0, ly = 0;
+lc.addEventListener('mousedown', e => { dragging = true; lx = e.clientX; ly = e.clientY; lc.style.cursor = 'grabbing'; });
+window.addEventListener('mouseup', () => { dragging = false; lc.style.cursor = 'grab'; });
+window.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  cam.yaw   += (e.clientX - lx) * 0.008;
+  cam.pitch  = Math.max(0.05, Math.min(1.5, cam.pitch + (e.clientY - ly) * 0.008));
+  lx = e.clientX; ly = e.clientY;
+  drawLidar();
+});
+lc.addEventListener('wheel', e => {
+  e.preventDefault();
+  cam.dist = Math.max(6, Math.min(90, cam.dist * (e.deltaY > 0 ? 1.12 : 0.89)));
+  drawLidar();
+}, { passive: false });
 
-            let targetX = pixelX * mapRes;
-            let targetY = (mapHeight - pixelY) * mapRes;
+/* ---------------- local DEM: three.js terrain ---------------- */
+const demView = $('demView');
+let demScene = null, demCam = null, demRenderer = null, demMesh = null, demMarker = null;
+const demOrbit = { yaw: -0.7, pitch: 0.55, dist: 14, cz: 0 };
+const V_EXAG = 1.5;                        /* vertical exaggeration */
 
-            // --- NEW: Show the loading prompt while we wait for the planner ---
-            document.getElementById('loading-overlay').style.display = 'block';
+function demInit() {
+  demScene = new THREE.Scene();
+  demScene.background = new THREE.Color(0x04070c);
+  demCam = new THREE.PerspectiveCamera(50, 1, 0.1, 500);
+  demCam.up.set(0, 0, 1);                  /* z is up: grid x lateral, y forward */
+  demRenderer = new THREE.WebGLRenderer({ antialias: true });
+  demView.appendChild(demRenderer.domElement);
+  demRenderer.domElement.style.cssText = 'position:absolute;inset:0';
+  demScene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+  sun.position.set(-10, -6, 20);
+  demScene.add(sun);
+  demMarker = new THREE.Mesh(
+    new THREE.ConeGeometry(0.18, 0.5, 12),
+    new THREE.MeshBasicMaterial({ color: 0x35e0b5 }));
+  demMarker.rotation.x = Math.PI / 2;      /* cone points +z */
+  demMarker.visible = false;
+  demScene.add(demMarker);
+}
 
-            socket.emit('send_goal', { x: targetX, y: targetY });
-        });
-        
-        window.addEventListener('resize', () => { if(mapWidth > 0) drawColorbar(true); });
-    </script>
+function demDraw() {
+  if (!demRenderer) return;
+  const w = demView.clientWidth, h = demView.clientHeight;
+  demRenderer.setSize(w, h, false);
+  demCam.aspect = w / h; demCam.updateProjectionMatrix();
+  const o = demOrbit;
+  demCam.position.set(
+    o.dist * Math.cos(o.pitch) * Math.cos(o.yaw),
+    o.dist * Math.cos(o.pitch) * Math.sin(o.yaw),
+    o.cz + o.dist * Math.sin(o.pitch));
+  demCam.lookAt(0, 0, o.cz);
+  demRenderer.render(demScene, demCam);
+}
+
+socket.on('local_grid', m => {
+  if (document.hidden) return;   /* don't rebuild/upload the mesh while unseen */
+  if (!window.THREE) { addLocal('ERROR', 'three.js failed to load — no 3D DEM.'); return; }
+  if (!demRenderer) demInit();
+  $('dem-nosig').style.display = 'none';
+  const span = Math.max(0.01, m.hmax - m.hmin);
+  $('dem-info').textContent =
+    `${m.w}×${m.h} @ ${m.res} m · Δh ${span.toFixed(2)} m`;
+
+  const wm = m.w * m.res, hm = m.h * m.res;      /* extent in metres */
+
+  /* Subsample so the rebuilt mesh never exceeds ~90x90 vertices. A fine grid
+     (5 cm cells over several metres) is hundreds of thousands of vertices;
+     rebuilding that plus computeVertexNormals every push, on the GPU Unreal is
+     already using, is what froze the compositor. At map scale the terrain
+     shape is unchanged by the decimation. */
+  const CAP = 90;
+  const step = Math.max(1, Math.ceil(Math.max(m.w, m.h) / CAP));
+  const gw = Math.floor((m.w + step - 1) / step);   /* sampled columns */
+  const gh = Math.floor((m.h + step - 1) / step);   /* sampled rows */
+
+  const geo = new THREE.PlaneGeometry(wm, hm, gw - 1, gh - 1);
+  const pos = geo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  for (let r = 0; r < gh; r++) {
+    for (let c = 0; c < gw; c++) {
+      const vi = r * gw + c;                    /* vertex index in sampled mesh */
+      const sc = Math.min(c * step, m.w - 1);   /* source column */
+      const sr = Math.min(r * step, m.h - 1);   /* source row */
+      const gi = (m.h - 1 - sr) * m.w + sc;     /* grid index, row 0 at bottom */
+      const v = m.data[gi];
+      if (v < 0) {                               /* unknown: floor, dark */
+        pos.setZ(vi, 0);
+        colors[vi*3] = 0.03; colors[vi*3+1] = 0.05; colors[vi*3+2] = 0.08;
+      } else {
+        pos.setZ(vi, (v / 100) * span * V_EXAG);
+        const cc = viridis(v / 100);
+        colors[vi*3] = cc[0]/255; colors[vi*3+1] = cc[1]/255; colors[vi*3+2] = cc[2]/255;
+      }
+    }
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.computeVertexNormals();
+
+  if (demMesh) { demScene.remove(demMesh); demMesh.geometry.dispose(); demMesh.material.dispose(); }
+  demMesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({
+    vertexColors: true, side: THREE.DoubleSide }));
+  demScene.add(demMesh);
+  demOrbit.cz = span * V_EXAG / 2;
+
+  /* rover marker, if the pose falls inside the grid (grid lives in odom) */
+  if (currentPose) {
+    const lx = (currentPose.x - m.ox) - wm / 2;
+    const ly = (currentPose.y - m.oy) - hm / 2;
+    demMarker.visible = Math.abs(lx) <= wm/2 && Math.abs(ly) <= hm/2;
+    demMarker.position.set(lx, ly, span * V_EXAG + 0.3);
+  }
+  demDraw();
+});
+
+/* DEM orbit interaction */
+let demDrag = false, dlx = 0, dly = 0;
+demView.addEventListener('mousedown', e => { demDrag = true; dlx = e.clientX; dly = e.clientY; demView.style.cursor = 'grabbing'; });
+window.addEventListener('mouseup', () => { demDrag = false; demView.style.cursor = 'grab'; });
+window.addEventListener('mousemove', e => {
+  if (!demDrag) return;
+  demOrbit.yaw   -= (e.clientX - dlx) * 0.008;
+  demOrbit.pitch  = Math.max(0.08, Math.min(1.5, demOrbit.pitch + (e.clientY - dly) * 0.008));
+  dlx = e.clientX; dly = e.clientY;
+  demDraw();
+});
+demView.addEventListener('wheel', e => {
+  e.preventDefault();
+  demOrbit.dist = Math.max(3, Math.min(80, demOrbit.dist * (e.deltaY > 0 ? 1.12 : 0.89)));
+  demDraw();
+}, { passive: false });
+
+/* ---------------- rover command buttons ---------------- */
+$('btn-lon').onclick = () => {
+  socket.emit('headlights', { on: true });
+  $('btn-lon').classList.add('lit'); $('btn-loff').classList.remove('lit');
+  addLocal('INFO', 'Headlights ON commanded.');
+};
+$('btn-loff').onclick = () => {
+  socket.emit('headlights', { on: false });
+  $('btn-loff').classList.add('lit'); $('btn-lon').classList.remove('lit');
+  addLocal('INFO', 'Headlights OFF commanded.');
+};
+$('btn-stop').onclick = () => {
+  socket.emit('stop_rover', {});
+  addLocal('WARN', 'ALL STOP commanded.');
+};
+$('btn-camrst').onclick = e => {
+  socket.emit('restart_cameras', {});
+  addLocal('INFO', 'Camera node restart requested.');
+  e.target.disabled = true; e.target.textContent = '⟳ RESTARTING…';
+  setTimeout(() => { e.target.disabled = false; e.target.textContent = '⟳ RESTART NODE'; }, 30000);
+};
+
+/* ---------------- map (elevation + paths + goal) ---------------- */
+const mapCanvas = $('mapCanvas'),  mapCtx  = mapCanvas.getContext('2d');
+const odomCanvas = $('odomCanvas'), odomCtx = odomCanvas.getContext('2d');
+const cbCanvas = $('cbarCanvas'),   cbCtx   = cbCanvas.getContext('2d');
+let mapRes = 1, mapW = 0, mapH = 0;
+let currentPose = null, globalPath = [], drivenPath = [];
+let elevMin = '0', elevMax = '0';
+
+function viridis(t) {
+  t = Math.max(0, Math.min(1, t));
+  const s = [[0,68,1,84],[.25,59,82,139],[.5,33,145,140],[.75,94,201,98],[1,253,231,37]];
+  for (let i = 0; i < s.length-1; i++) if (t >= s[i][0] && t <= s[i+1][0]) {
+    const u = (t - s[i][0]) / (s[i+1][0] - s[i][0]);
+    return [0,1,2].map(k => Math.round(s[i][k+1] + u * (s[i+1][k+1] - s[i][k+1])));
+  }
+  return [253,231,37];
+}
+
+socket.on('map_update', m => {
+  mapW = m.width; mapH = m.height; mapRes = m.resolution;
+  mapCanvas.width = odomCanvas.width = mapW;
+  mapCanvas.height = odomCanvas.height = mapH;
+  fitMapStack();
+
+  const img = mapCtx.createImageData(mapW, mapH);
+  let lo = Infinity, hi = -Infinity;
+  for (const v of m.data) if (v < 9999) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  const ok = hi !== -Infinity, span = (hi - lo) || 1;
+  if (ok) { elevMin = lo.toFixed(1); elevMax = hi.toFixed(1); }
+  for (let i = 0; i < m.data.length; i++) {
+    const x = i % mapW, y = (i / mapW) | 0;
+    const o = (((mapH - 1 - y) * mapW) + x) * 4;
+    if (m.data[i] >= 9999 || !ok) { img.data[o+3] = 255; continue; }
+    const c = viridis(Math.floor((m.data[i]-lo)/span*20)/20);
+    img.data[o] = c[0]; img.data[o+1] = c[1]; img.data[o+2] = c[2]; img.data[o+3] = 255;
+  }
+  mapCtx.putImageData(img, 0, 0);
+  drawColorbar(ok); drawOverlay();
+  addLocal('INFO', `Elevation map loaded: ${mapW}×${mapH} @ ${mapRes} m/px.`);
+});
+
+function fitMapStack() {
+  const wrap = $('map-wrap'), stack = $('map-stack');
+  if (!mapW) return;
+  const s = Math.min(wrap.clientWidth / mapW, wrap.clientHeight / mapH);
+  stack.style.width  = (mapW * s) + 'px';
+  stack.style.height = (mapH * s) + 'px';
+}
+window.addEventListener('resize', () => { fitMapStack(); drawColorbar(mapW > 0); });
+
+function drawColorbar(show) {
+  $('cbar').style.display = show ? 'flex' : 'none';
+  if (!show) return;
+  cbCanvas.width = cbCanvas.clientWidth; cbCanvas.height = cbCanvas.clientHeight;
+  const n = 20, h = cbCanvas.height / n;
+  for (let i = 0; i < n; i++) {
+    const c = viridis((n - 1 - i) / (n - 1));
+    cbCtx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
+    cbCtx.fillRect(0, i * h, cbCanvas.width, Math.ceil(h));
+  }
+  cbCtx.fillStyle = '#fff'; cbCtx.font = '9px monospace';
+  cbCtx.fillText(elevMax, 3, 10);
+  cbCtx.fillText(elevMin, 3, cbCanvas.height - 4);
+}
+
+function drawOverlay() {
+  if (!mapW) return;
+  odomCtx.clearRect(0, 0, mapW, mapH);
+
+  odomCtx.save();
+  odomCtx.strokeStyle = 'rgba(255,255,255,.12)'; odomCtx.setLineDash([4,6]);
+  odomCtx.fillStyle = 'rgba(255,255,255,.45)'; odomCtx.font = '13px monospace';
+  const step = 200 / mapRes;
+  for (let i = 0; i <= mapW; i += step) {
+    odomCtx.beginPath(); odomCtx.moveTo(i,0); odomCtx.lineTo(i,mapH); odomCtx.stroke();
+    odomCtx.fillText(Math.round(i*mapRes), i+4, mapH-6);
+  }
+  for (let j = 0; j <= mapH; j += step) {
+    odomCtx.beginPath(); odomCtx.moveTo(0,j); odomCtx.lineTo(mapW,j); odomCtx.stroke();
+    const v = Math.round((mapH-j)*mapRes);
+    if (v) odomCtx.fillText(v, 4, j-4);
+  }
+  odomCtx.restore();
+
+  const path = (pts, color) => {
+    if (!pts.length) return;
+    odomCtx.beginPath(); odomCtx.strokeStyle = color; odomCtx.lineWidth = 3;
+    pts.forEach((p, i) => {
+      const x = p.x/mapRes, y = mapH - p.y/mapRes;
+      i ? odomCtx.lineTo(x, y) : odomCtx.moveTo(x, y);
+    });
+    odomCtx.stroke();
+  };
+  path(globalPath, '#ff5566');
+  path(drivenPath, '#4fc3f7');
+
+  if (currentPose) {
+    const x = currentPose.x/mapRes, y = mapH - currentPose.y/mapRes;
+    odomCtx.beginPath(); odomCtx.arc(x, y, 7, 0, 7);
+    odomCtx.fillStyle = '#35e0b5'; odomCtx.fill();
+    odomCtx.strokeStyle = '#fff'; odomCtx.stroke();
+    if (currentPose.yaw !== undefined) {
+      const a = currentPose.yaw * Math.PI / 180;
+      odomCtx.beginPath(); odomCtx.moveTo(x, y);
+      odomCtx.lineTo(x + 16*Math.cos(a), y - 16*Math.sin(a));
+      odomCtx.strokeStyle = '#35e0b5'; odomCtx.lineWidth = 2; odomCtx.stroke();
+    }
+  }
+}
+
+socket.on('global_path_update', m => { $('planning').style.display='none'; globalPath = m.path; drawOverlay(); });
+socket.on('trajectory_update',  m => { drivenPath = m.path; drawOverlay(); });
+
+odomCanvas.addEventListener('mousedown', e => {
+  const r = odomCanvas.getBoundingClientRect();
+  const gx = (e.clientX - r.left) * (odomCanvas.width / r.width) * mapRes;
+  const gy = (odomCanvas.height - (e.clientY - r.top) * (odomCanvas.height / r.height)) * mapRes;
+  $('planning').style.display = 'block';
+  $('t-goal').textContent = `${gx.toFixed(0)}, ${gy.toFixed(0)} m`;
+  addLocal('INFO', `Goal dispatched: (${gx.toFixed(1)}, ${gy.toFixed(1)}) m.`);
+  socket.emit('send_goal', { x: gx, y: gy });
+});
+$('btn-map').onclick = () => socket.emit('refresh_map', {});
+</script>
 </body>
 </html>
