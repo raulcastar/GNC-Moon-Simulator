@@ -5,6 +5,20 @@ lc_component_stereo_depth:
     port:                                 9000
     image_reading_hz_rate:                 1.0
 
+    # ── Image source ──────────────────────────────────────────────────────────
+    # unrealcv  render on demand through UnrealCV. Each grab blocks Unreal's
+    #           game thread ~300 ms (measured), freezing the simulation ~40%
+    #           of wall time at 1 Hz with three cameras.
+    # stream    receive frames pushed by the NavcamStreamer plugin
+    #           (unreal/NavcamStreamer/): captures render with the frame and
+    #           reach this node with no game-thread stall. Left/right are
+    #           paired by Unreal's frame counter, keeping the same-tick
+    #           guarantee. UnrealCV stays connected for the one-time rig
+    #           geometry solve and the optional gt/mask products.
+    image_source:                       stream
+    stream_bind_ip:                    0.0.0.0
+    stream_port:                          3004
+
     # ── The three navcams ─────────────────────────────────────────────────────
     # left/right form the stereo pair. The stereo depth is reprojected onto the
     # central camera's pixel grid, so its depth, disparity, object mask and RGB
@@ -19,6 +33,25 @@ lc_component_stereo_depth:
     left_camera_id:                          1
     right_camera_id:                         2
     center_camera_id:                        0   # Navcam_Sensor
+
+    # Object-segmentation capture (stream mode). Must equal the NavcamStreamer
+    # MaskCamId. Its SceneCapture uses a post-process material that colours the
+    # Custom Depth-Stencil buffer — the UnrealCV object_mask, reproduced without
+    # UnrealCV. Set < 0 to stream no mask (and set enable_object_mask: false).
+    mask_camera_id:                          3
+
+    # Legend for the object mask, published as JSON on object_mask_mapping.
+    # One "<stencil_id>:<name>" per tagged class; the ids MUST match the
+    # CustomDepth Stencil Value you set on the actors in Unreal (see the
+    # NavcamStreamer README). This is what tells a consumer / you what each
+    # number in the scene is — the mask image itself only carries colours.
+    # Example (edit to your scene):
+    mask_labels:
+      - "2:rover"
+      - "10:landscape"
+      - "20:boulder"
+      - "21:small_rock"
+      - "30:crater"
 
     # Hierarchical topic namespaces. TF frame names are derived by flattening
     # them ('navcam/central' -> 'navcam_central'), since tf2 forbids '/'.
@@ -46,8 +79,15 @@ lc_component_stereo_depth:
     #   hfov_deg    vget /camera/N/fov
     # The central camera's FOV is always read from Unreal: it may differ from
     # the pair's, and the reprojection uses its real intrinsics.
-    baseline_m:                            0.0   # metres; 0 = solve from Unreal
-    hfov_deg:                              0.0   # degrees; 0 = query Unreal
+    # In unrealcv mode 0 means measure from the running game. In stream mode
+    # nothing can be measured, so BOTH ARE REQUIRED there: set them to the
+    # NavcamStreamer captures' real geometry.
+    baseline_m:                            0.2   # metres between the eyes
+    hfov_deg:                             90.0   # capture FOVAngle, degrees
+
+    # Stream mode only: centre camera's distance from the LEFT eye along the
+    # baseline, metres. Negative = midpoint of the eyes.
+    center_offset_m:                      -1.0
 
     # Unreal Units per metre. Scales the baseline and the ground-truth depth
     # identically, so a wrong value shifts absolute metres but leaves the
@@ -104,8 +144,13 @@ lc_component_stereo_depth:
     depth_max_distance:                    6.0   # metres
 
     # Publishes navcam/central/object_mask (rgb8) and object_mask_mapping (JSON
-    # object -> colour, downloaded once at configure time). Costs one extra vget
-    # per frame, inside the pause window.
+    # object -> colour).
+    #   unrealcv mode  mask + name->colour legend come from UnrealCV (one extra
+    #                  vget per frame, inside the pause window).
+    #   stream mode    mask comes from the NavcamStreamer segmentation capture
+    #                  named by mask_camera_id; colours are baked into the
+    #                  Unreal post-process material, so the legend is empty.
+    #                  Needs that capture to exist, or it self-disables.
     enable_object_mask:                   true
 
     # ── Glare study ───────────────────────────────────────────────────────────

@@ -195,6 +195,24 @@ class FrameStreamReceiver:
             age = time.monotonic() - t
             return eyes_l[fid], eyes_r[fid], center, fid, age
 
+    def frame_near(self, cam_id: int, fid: int, max_gap: int = 60):
+        """
+        The frame for cam_id closest to frame id `fid`, or None.
+
+        Used for the object-mask capture, which is streamed on its own cam_id
+        but must overlay the central image: take the mask rendered nearest the
+        same world tick. `max_gap` matches the centre-pairing tolerance in
+        latest_pair — a second of frames apart is treated as stale.
+        """
+        with self._lock:
+            frames = list(self._frames.get(cam_id, ()))
+        if not frames:
+            return None
+        f_fid, img, _ = min(frames, key=lambda e: abs(e[0] - fid))
+        if abs(f_fid - fid) > max_gap:
+            return None
+        return img
+
     # ------------------------------------------------------------------ #
 
     def _loop(self) -> None:
@@ -317,6 +335,15 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                 ('left_camera_id',          rclpy.Parameter.Type.INTEGER),
                 ('right_camera_id',         rclpy.Parameter.Type.INTEGER),
                 ('center_camera_id',        rclpy.Parameter.Type.INTEGER),
+                # Stream cam id of the object-segmentation capture (NavcamStreamer
+                # MaskCamId). < 0 disables the mask. Stream mode only.
+                ('mask_camera_id',          rclpy.Parameter.Type.INTEGER),
+                # Legend for the object mask: "<stencil_id>:<name>" entries, one
+                # per tagged class, published as JSON on object_mask_mapping so a
+                # consumer knows what each stencil id in the scene means. The ids
+                # must match the CustomDepth Stencil Value set on the actors in
+                # Unreal. Stream mode only.
+                ('mask_labels',             rclpy.Parameter.Type.STRING_ARRAY),
                 # Topic namespaces, one per physical camera
                 ('left_topic',              rclpy.Parameter.Type.STRING),
                 ('right_topic',             rclpy.Parameter.Type.STRING),
@@ -589,6 +616,44 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
             f'Mapped {len(color_mapping)} of {len(object_ids)} objects'
             + (f' ({failed} gave no colour).' if failed else '.'))
         return json.dumps(color_mapping)
+
+    def _build_stream_label_map(self) -> str:
+        """
+        Stencil-id -> name legend for the streamed object mask, from the
+        mask_labels parameter ("<id>:<name>" entries).
+
+        The mask itself only carries the material's hashed colours, so this is
+        the authoritative record of what each id in the Unreal scene means. It
+        is published as JSON on object_mask_mapping, e.g.
+        {"10": "landscape", "20": "boulder", "30": "crater"}. Malformed entries
+        are skipped with a warning rather than aborting configuration.
+        """
+        labels: Dict[str, str] = {}
+        for entry in self.mask_labels:
+            head, sep, name = str(entry).partition(':')
+            key, name = head.strip(), name.strip()
+            if not sep or not key or not name:
+                self.get_logger().warn(
+                    f"Ignoring malformed mask_labels entry '{entry}'; expected "
+                    f"'<stencil_id>:<name>'.")
+                continue
+            if not key.lstrip('-').isdigit():
+                self.get_logger().warn(
+                    f"Ignoring mask_labels entry '{entry}': '{key}' is not an "
+                    f"integer stencil id.")
+                continue
+            labels[str(int(key))] = name
+        if labels:
+            self.get_logger().info(
+                f'Object mask legend ({len(labels)} ids): '
+                + ', '.join(f'{k}={v}' for k, v in sorted(
+                    labels.items(), key=lambda kv: int(kv[0]))))
+        else:
+            self.get_logger().warn(
+                'mask_labels is empty; object_mask_mapping will publish "{}". '
+                'Add "<id>:<name>" entries matching the CustomDepth Stencil '
+                'Values you set in Unreal.')
+        return json.dumps(labels)
 
     def _check_cameras_exist(self) -> None:
         """
@@ -1075,7 +1140,15 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
             return None
         self._last_stream_fid = fid
 
-        return left, right, center, None, None
+        # Object mask (optional): rendered by a separate SceneCapture whose
+        # post-process material colours the Custom Depth-Stencil buffer, and
+        # streamed on its own cam id. It is already RGB (the receiver swaps
+        # BGRA->RGB) and flat-coloured, so it publishes as-is. No ground-truth
+        # depth in stream mode — that still needs UnrealCV.
+        mask = None
+        if self.enable_object_mask and self.mask_camera_id >= 0:
+            mask = self._stream.frame_near(self.mask_camera_id, fid)
+        return left, right, center, None, mask
 
     # =========================================================================
     # Stereo matching
@@ -1481,6 +1554,8 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self.left_camera_id   = self.get_parameter('left_camera_id').value
         self.right_camera_id  = self.get_parameter('right_camera_id').value
         self.center_camera_id = self.get_parameter('center_camera_id').value
+        self.mask_camera_id   = self.get_parameter('mask_camera_id').value
+        self.mask_labels      = self.get_parameter('mask_labels').value or []
         self.left_topic       = self.get_parameter('left_topic').value
         self.right_topic      = self.get_parameter('right_topic').value
         self.center_topic     = self.get_parameter('center_topic').value
@@ -1519,12 +1594,28 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                     'image_source "stream" runs without UnrealCV, so the rig '
                     'cannot be measured: set baseline_m and hfov_deg to the '
                     'real rig values (they are required, not optional, here).')
-            if self.validate_against_ground_truth or self.enable_object_mask:
+            # Ground-truth depth reads UnrealCV's exact depth buffer, which
+            # stream mode does not have — always off here.
+            if self.validate_against_ground_truth:
                 self.get_logger().warn(
-                    'depth_gt and object_mask need UnrealCV and are disabled '
-                    'in stream mode.')
+                    'depth_gt needs UnrealCV and is disabled in stream mode.')
                 self.validate_against_ground_truth = False
-                self.enable_object_mask = False
+            # The object mask, by contrast, is served by a dedicated
+            # NavcamStreamer capture (post-process material over the Custom
+            # Depth-Stencil buffer). It works in stream mode as long as
+            # mask_camera_id names that capture.
+            if self.enable_object_mask:
+                if self.mask_camera_id is None or self.mask_camera_id < 0:
+                    self.get_logger().warn(
+                        'enable_object_mask is on but mask_camera_id is unset '
+                        '(< 0): the mask needs the NavcamStreamer segmentation '
+                        'capture. Disabling the object mask.')
+                    self.enable_object_mask = False
+                else:
+                    self.get_logger().info(
+                        f'Object mask served from stream cam id '
+                        f'{self.mask_camera_id} (NavcamStreamer segmentation '
+                        f'capture).')
             self._baseline_m = self.baseline_m_param
             self._swap_lr = False
             # Intrinsics need the frame size; solved when the first frame lands.
@@ -1567,14 +1658,21 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         if self.enable_object_mask:
             pub('center_object_mask', RosImage, f'{C}/object_mask')
             pub('center_object_mask_mapping', String, f'{C}/object_mask_mapping')
-            try:
-                self._cached_color_map_json = self._build_color_mapping()
-            except Exception as exc:
-                # The mask images are usable without a name->colour legend.
-                self.get_logger().error(
-                    f'Object colour mapping failed ({exc}); publishing an empty '
-                    f'map. The object_mask images are unaffected.')
-                self._cached_color_map_json = "{}"
+            if self.image_source == 'stream':
+                # Colours are baked into the Unreal post-process material, so
+                # there is no name->colour legend to query. Instead publish the
+                # user-declared stencil-id -> name legend (mask_labels), which is
+                # what tells a consumer what each id in the scene represents.
+                self._cached_color_map_json = self._build_stream_label_map()
+            else:
+                try:
+                    self._cached_color_map_json = self._build_color_mapping()
+                except Exception as exc:
+                    # The mask images are usable without a name->colour legend.
+                    self.get_logger().error(
+                        f'Object colour mapping failed ({exc}); publishing an '
+                        f'empty map. The object_mask images are unaffected.')
+                    self._cached_color_map_json = "{}"
 
         self.get_logger().info(
             f'Publishing {L}/*, {R}/* (colour) and {C}/* '

@@ -68,11 +68,14 @@
 
   /* ============ CAMERA FEEDS ============ */
   #cams { flex: 1; display: grid; grid-template-rows: 1.5fr 1fr 1fr; gap: 6px; min-height: 0; }
-  .cam-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; min-height: 0; }
-  .feed { position: relative; background: #000; }
+  /* grid-template-rows pins the single row to the track height from #cams;
+     without it the row is implicit-auto and collapses to the image's
+     intrinsic height, so feeds overflow and overlap the row below. */
+  .cam-row { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr); gap: 6px; min-height: 0; }
+  .feed { position: relative; background: #000; min-height: 0; overflow: hidden; }
   .feed img {
     width: 100%; height: 100%; object-fit: contain; display: block;
-    image-rendering: auto; flex: 1; min-height: 0;
+    image-rendering: auto;
   }
   .feed .nosig {
     position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;

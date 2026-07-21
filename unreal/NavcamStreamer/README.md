@@ -68,10 +68,65 @@ This folder **is** the plugin — copy it whole.
    connects at BeginPlay (re-Play after restarting the node, as with the rover
    link).
 
-UnrealCV stays connected for what it is still good at: the one-time rig
-geometry solve at configure, and the optional `object_mask` / `depth_gt`
-products if enabled (each still costs a stall — leave them off outside glare
-studies).
+In stream mode the ROS node needs **no** UnrealCV: the rig geometry comes from
+`baseline_m` / `hfov_deg` params, colour and the object mask come from the
+captures below. The legacy UnrealCV plugin can be disabled outright — and
+should be, because its `AnnotationComponent` fights the Custom Depth-Stencil
+buffer the object mask uses (see the crash note below).
+
+## Object segmentation mask (optional)
+
+Reproduces UnrealCV's `object_mask` — each object a flat colour — **without**
+UnrealCV, by reading Unreal's **Custom Depth-Stencil** buffer and colouring it
+in a post-process material. It streams as a fourth capture on the same path as
+the RGB cameras.
+
+1. **Enable the buffer.** Project Settings → Rendering → Postprocessing →
+   **Custom Depth-Stencil Pass = `Enabled with Stencil`**, then restart the
+   editor.
+   > Do **not** enable it with the `r.CustomDepth 3` *console* command while the
+   > old UnrealCV plugin is still in the project — its `AnnotationComponent`
+   > asserts on the forced proxy rebuild and the editor crashes
+   > (`PrimitiveSceneProxy.cpp:438`). Set it in Project Settings, or just
+   > disable/remove the UnrealCV plugin (it is unused in stream mode).
+
+2. **Tag every actor you want segmented — this is the required per-object step.**
+   On each mesh: *Details → Rendering →* set **Render CustomDepth Pass = true**
+   **and give it a nonzero CustomDepth Stencil Value (an id, 1–255)**. Same id →
+   same colour (e.g. all boulders share one id); unique ids → per-object masks.
+   Id 0 is "untagged" and renders black. Special cases:
+   - **Nanite meshes** (typical for Megascans rocks/terrain) also need Nanite's
+     custom-depth path on, or they silently ignore the stencil value: add
+     ```ini
+     [SystemSettings]
+     r.Nanite.CustomDepth=1
+     ```
+     to `Config/DefaultEngine.ini`.
+   - **Landscape:** set the same two properties on the Landscape actor — and on
+     **each** `LandscapeStreamingProxy` if World Partition split the terrain.
+   - **Painted foliage:** set them on the **Foliage Type asset**, not on the
+     placed instances.
+
+3. **Colouriser material `PPM_ObjectMask`.** A Material with *Material Domain =
+   Post Process*, *Blendable Location = After Tonemapping*, that reads a
+   `SceneTexture: CustomStencil` node (R channel) and maps the value to a flat
+   colour into **Emissive Color** (e.g. a `Custom` HLSL node hashing the id to
+   RGB, black when the value is 0).
+
+4. **Mask capture.** A fourth `SceneCaptureComponent2D` (e.g. **`Navcam_Mask`**),
+   posed and FOV-matched to `NavcamCenter`, with `PPM_ObjectMask` added to its
+   *Post Process Settings → Post Process Materials* (weight 1). Leave its render
+   target empty (auto-created). On the **NavcamStreamer** component set
+   **MaskCaptureName** to it; its **MaskCamId** (default 3, under *Advanced*)
+   must equal `mask_camera_id` in the stereo node's params.
+
+5. **Name the ids (what each number means).** The mask image carries only
+   colours, so the id→name legend is declared on the ROS side in
+   `component_stereo_depth/config/params.yaml → mask_labels` as `"<id>:<name>"`
+   entries — **keep these ids in sync with the CustomDepth Stencil Values from
+   step 2**. The stereo node republishes them as JSON on
+   `navcam/central/object_mask_mapping`; `ros2 topic echo` it to read the legend,
+   e.g. `{"10": "landscape", "20": "boulder", "30": "crater"}`.
 
 ## Wire format
 

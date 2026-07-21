@@ -125,6 +125,17 @@ public:
 	          meta = (GetOptions = "GetSceneCaptureNames"))
 	FName CenterCaptureName = TEXT("NavcamCenter");
 
+	// Optional object-segmentation capture. Point this at a SceneCapture whose
+	// post-process material colours each object from the Custom Depth-Stencil
+	// buffer (the UnrealCV object_mask, reproduced without UnrealCV). Leave
+	// blank to stream no mask. It rides the same path as the RGB cameras: same
+	// frame id, so the ROS side overlays it on the central image. Nothing about
+	// the segmentation lives in this plugin — the colours come entirely from the
+	// material on the capture; here it is just another SceneCapture to read back.
+	UPROPERTY(EditAnywhere, Category = "Navcam|Cameras",
+	          meta = (GetOptions = "GetSceneCaptureNames"))
+	FName MaskCaptureName;
+
 	// Feeds the dropdowns above. Lists the blueprint's own SceneCapture2D
 	// components when editing the blueprint, plus every instance in the world
 	// when placed in a level.
@@ -169,6 +180,10 @@ public:
 
 	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Navcam|Cameras")
 	int32 CenterCamId = 0;
+
+	// Must match mask_camera_id in component_stereo_depth/config/params.yaml.
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Navcam|Cameras")
+	int32 MaskCamId = 3;
 
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type Reason) override;

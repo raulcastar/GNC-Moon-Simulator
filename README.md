@@ -20,9 +20,14 @@ a volume and runs `colcon build` in its entrypoint:
 docker compose restart component_stereo_depth
 ```
 
-Three services drop to an interactive shell instead of launching automatically:
-`component_local_mapping`, `mission_control_dashboard` and `debug_cli`. Bring
-them up by hand:
+The mission control web interface starts automatically — open
+**http://localhost:5000**. It shows all three navcam feeds, stereo depth,
+object segmentation, a live top-down lidar sweep, rover telemetry (position,
+heading, speed), the elevation map with click-to-dispatch goals, and a system
+console streaming `/rosout`.
+
+Two services drop to an interactive shell instead of launching automatically:
+`component_local_mapping` and `debug_cli`. Bring them up by hand:
 
 ```bash
 docker compose exec component_local_mapping \
@@ -38,13 +43,73 @@ docker compose exec component_local_mapping \
 | `component_local_mapping` | Builds a local DEM and occupancy grid from the central navcam's depth. |
 | `component_path_planner` | Global path over the elevation grid. |
 | `component_rover_leo_raph` | Rover base: `/cmd_vel` in, `/odom` out. |
-| `mission_control_dashboard` | Operator UI. |
+| `mission_control_dashboard` | Web mission control on port 5000: camera wall, lidar, telemetry, map with goal dispatch, /rosout console. |
 | `custom_map_interfaces` | Shared message definitions. |
 
 **Only one process may hold the UnrealCV socket.** The server accepts a single
 client connection, so `component_stereo_depth` serves every camera itself. Stop
 it before running anything else that talks to Unreal, including the scripts in
 `utils/`.
+
+## Talking to Unreal
+
+Two independent links, and they fail differently:
+
+| Link | Transport | Carries |
+|---|---|---|
+| UnrealCV | TCP 9000 | cameras, poses, object masks |
+| Rover plugin | TCP 3003 | wheel commands out, odometry in |
+
+The containers run `network_mode: host`, so they sit on WSL2's network stack
+while Unreal runs on Windows. Crossing that boundary is where this link goes
+wrong, and **only `127.0.0.1` works** — the host's LAN address is ambiguous under
+mirrored networking and silently drops traffic.
+
+A wildcard is worse: `0.0.0.0` is a bind address, not a destination. Linux
+rewrites a datagram sent to it into one sent to `127.0.0.1` (the sender's own
+loopback), and Windows rejects it outright. Anything that sends to `0.0.0.0` is
+talking to itself. The legacy UDP path (`sending_ip` / `sending_port` /
+`listen_port`, kept behind `transport: udp`) is entirely subject to this; TCP
+sidesteps it by never needing a destination at all.
+
+### The rover link is TCP (default)
+
+`transport: tcp` replaces the two UDP sockets with **one bidirectional TCP
+connection** on `tcp_port` (3003), carrying wheel commands out and pose back.
+
+This is the arrangement that works, because **neither side needs the other's
+address**. Every failure on this link came from an address being wrong or
+ambiguous — a wildcard used as a destination, or a mirrored-networking address
+that could mean Windows or WSL. A connection has no such question: replies go
+back the way they came, and Unreal's `Send IP` leaves the picture entirely.
+
+**Unreal dials, the node listens** (`tcp_role: server`). Unreal's TCP component
+connects out to `127.0.0.1:3003` — the only address that crosses into WSL; the
+host's LAN address does not. Set `tcp_role: client` for the reverse, if the
+Unreal component is switched to listen instead.
+
+Unreal delimits nothing, so the reader **scans for JSON objects rather than for a
+separator**. Bare, split across reads, coalesced, or newline-delimited all parse,
+as do Unreal's locale numbers (`1,205`) even when a read boundary lands inside
+one. Payloads are the same as UDP: `FL`/`BL`/`FR`/`BR` + `headlights_on` inbound,
+the pose object outbound.
+
+One operational catch: **Unreal connects once, at BeginPlay, and does not
+redial.** Restarting `component_rover_leo_raph` drops the listener, so Unreal
+must be re-played to reconnect. The node itself handles the reverse fine — it
+keeps listening and re-accepts across a Play/Stop cycle without a restart.
+
+To test the link without ROS in the way:
+
+```bash
+docker compose stop component_rover_leo_raph   # it holds the telemetry port
+python utils/udp_probe.py
+```
+
+It waits for telemetry, reports where Unreal is, drives the rover from that
+address and tells you whether the pose changed. Silence in the first step means
+Unreal is not sending — the plugin is off, aimed elsewhere, or **the game is
+paused**, which freezes physics so no command has any effect.
 
 ## The navcam rig
 
@@ -94,6 +159,28 @@ python utils/list_unreal_cameras.py
 
 It prints every camera's location, rotation, FOV and resolution, then evaluates
 each ordered pair as a stereo candidate.
+
+### Streaming frames instead of polling UnrealCV
+
+UnrealCV renders on demand: every `vget` blocks the game thread for a full
+render + synchronous GPU readback — **~300 ms per camera, measured**, freezing
+the simulation ~40% of wall time at 1 Hz with three cameras. Switching the
+image encoding does not help (BMP took as long as PNG); the stall *is* the
+synchronous readback.
+
+`image_source: stream` in `component_stereo_depth/config/params.yaml` removes
+it. The **NavcamStreamer** component (`unreal/NavcamStreamer/` — build
+instructions in its README) renders the navcams with each frame on the render
+thread, reads them back asynchronously, and pushes them to the node over TCP
+port 3004. Left/right frames carry Unreal's frame counter and are paired only
+when the ids match exactly, preserving the same-tick guarantee the batched
+UnrealCV request provided. The centre frame may trail by a frame or two — it is
+overlaid, not matched.
+
+UnrealCV stays connected for the one-time rig geometry solve and, if enabled,
+`depth_gt` / `object_mask` — each of those still costs a stall and only aligns
+with streamed frames while the rover is stationary, so leave them off outside
+glare studies. The default remains `unrealcv` until the plugin side is built.
 
 ### Simultaneity without pausing
 
@@ -180,9 +267,10 @@ Run these with `component_stereo_depth` stopped — it holds the UnrealCV socket
 
 | Script | Purpose |
 |---|---|
-| `utils/list_unreal_cameras.py` | Enumerate camera poses; flag usable stereo pairs. |
+| `utils/list_unreal_cameras.py` | Enumerate camera poses; flag usable stereo pairs. `--resume` clears a stale pause. |
 | `utils/stereo_depth_test.py` | One-shot SGBM + glare comparison, plotted with matplotlib. |
 | `utils/connect_unrealcv.py` | Minimal capture and display. |
+| `utils/udp_probe.py` | Prove the rover UDP link both ways. Needs `component_rover_leo_raph` stopped, not the stereo node. |
 
 ## ⚙️ WSL2 System Configuration (`.wslconfig`)
 

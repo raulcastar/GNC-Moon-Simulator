@@ -42,6 +42,7 @@ void UNavcamStreamer::BeginPlay()
 	ResolveCapture(LeftCaptureName, LeftCamId);
 	ResolveCapture(RightCaptureName, RightCamId);
 	ResolveCapture(CenterCaptureName, CenterCamId);
+	ResolveCapture(MaskCaptureName, MaskCamId);   // optional; skipped if blank
 
 	Stream = MakeShared<FNavcamStreamState, ESPMode::ThreadSafe>();
 
@@ -423,8 +424,8 @@ void UNavcamStreamer::PumpCaptures()
 			}
 
 			// Safety net: never let readbacks pile up unbounded and exhaust
-			// VRAM if the consumer somehow stalls. 3 cameras x a few frames.
-			while (S->Pending.Num() > 9)
+			// VRAM if the consumer somehow stalls. Up to 4 cameras x a few frames.
+			while (S->Pending.Num() > 12)
 			{
 				S->Pending.RemoveAt(0);
 			}
