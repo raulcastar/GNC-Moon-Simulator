@@ -29,9 +29,11 @@ lc_component_local_mapping:
 
     # camera_angle: tilt of the camera from horizontal in degrees.
     #   0   = camera looking straight ahead (horizontal)
-    #   +ve = tilted up    (looking above horizon)
-    #   -ve = tilted down  (nadir-ish, looking at ground ahead)
-    camera_angle: 0.0
+    #   Sign (verified against the transform total = pi/2 + camera_angle, and
+    #   empirically against the live DEM): DOWN tilt is POSITIVE. camera_angle
+    #   = +90 gives z_w = h - d (nadir, correct); -90 gives z_w = h + d (up).
+    #   The navcams are physically pitched DOWN 20 deg in Unreal, so this is +20.
+    camera_angle: 20.0
 
     # camera_roll: lateral (sideways) tilt of the camera mounting in degrees.
     #   0   = camera level (no lateral tilt)
@@ -63,6 +65,25 @@ lc_component_local_mapping:
     # Check the log line "[DEM diag] depth range" — if objects 1 m away show as
     # ~10 m, the publisher's unit assumption is wrong; fix it there.
     depth_scale: 1.0
+
+    # ── Elevation sanity window (metres, rover base = 0) ──────────────────────
+    # Stereo depth on textureless regolith, seen at the grazing angle of a
+    # near-horizontal camera, throws occasional wild outliers — measured heights
+    # from -2.5 m to +3.2 m over a 3 m patch. The DEM keeps the MAX height per
+    # cell (so rocks survive), which means one bad point spikes a whole cell.
+    # This window discards physically impossible elevations before binning.
+    # Widen if you drive real crater walls / tall boulders; tighten to reject
+    # more noise. -2.5..+3.2 m was outliers; ground+rocks live in roughly ±1 m.
+    min_elevation: -1.0    # metres below the rover base
+    max_elevation:  1.5    # metres above the rover base
+
+    # Apply live rover roll/pitch from /odom to the DEM. Keep FALSE: the odom
+    # orientation is in a non-standard frame (the same one that mirrors the
+    # dashboard heading), so the extracted roll is spurious (~-84° on flat
+    # ground) and rotates the DEM into a narrow warped sliver. The fixed camera
+    # mounting tilt is already handled by camera_angle. Only set true once the
+    # odom orientation is republished in a standard REP-103 frame.
+    apply_rover_tilt: false
 
     # ── Debug DEM visualisation ───────────────────────────────────────────────
     # Off: the container runs headless and the mission control dashboard now

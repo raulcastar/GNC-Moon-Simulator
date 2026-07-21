@@ -86,8 +86,8 @@
   /* ============ MAP ============ */
   #map-panel { flex: 1; }
   #map-body { flex: 1; display: flex; gap: 8px; padding: 8px; min-height: 0; }
-  #map-wrap { position: relative; flex: 1; min-width: 0; }
-  #map-stack { position: absolute; inset: 0; margin: auto; }
+  #map-wrap { position: relative; flex: 1; min-width: 0; overflow: hidden; }
+  #map-stack { position: absolute; inset: 0; margin: auto; transform-origin: 0 0; will-change: transform; }
   #map-stack canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
   #mapCanvas  { z-index: 1; }
   #odomCanvas { z-index: 2; cursor: crosshair; }
@@ -149,6 +149,33 @@
   ::-webkit-scrollbar { width: 8px; }
   ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
+
+  /* ============ VIEW TABS ============ */
+  .viewtabs { display: flex; gap: 4px; margin-left: 12px; }
+  .viewtabs button {
+    background: none; border: 1px solid var(--line); color: var(--dim);
+    font-family: var(--mono); font-size: 9px; letter-spacing: 1px;
+    padding: 4px 10px; cursor: pointer; border-radius: 3px; white-space: nowrap;
+  }
+  .viewtabs button:hover { color: var(--text); border-color: var(--dim); }
+  .viewtabs button.on {
+    color: var(--accent); border-color: var(--accent);
+    box-shadow: 0 0 8px rgba(53,224,181,.2);
+  }
+  /* Focused views: hide the other columns and let the chosen one fill. The 3D
+     views keep the telemetry panel docked (it is small, flex:0 0 auto). */
+  main[data-view="cams"]  { grid-template-columns: 1fr; }
+  main[data-view="cams"]  #col-map, main[data-view="cams"]  #col-right { display: none; }
+  main[data-view="map"]   { grid-template-columns: 1fr; }
+  main[data-view="map"]   #col-cams, main[data-view="map"]  #col-right { display: none; }
+  main[data-view="dem"]   { grid-template-columns: 1fr; }
+  main[data-view="dem"]   #col-cams, main[data-view="dem"]  #col-map,
+  main[data-view="dem"]   #lidar-panel { display: none; }
+  main[data-view="dem"]   #dem-panel { flex: 1; }
+  main[data-view="lidar"] { grid-template-columns: 1fr; }
+  main[data-view="lidar"] #col-cams, main[data-view="lidar"] #col-map,
+  main[data-view="lidar"] #dem-panel { display: none; }
+  main[data-view="lidar"] #lidar-panel { flex: 1; }
 </style>
 </head>
 <body>
@@ -157,6 +184,13 @@
   <div class="brand">GNC MOON SIMULATOR<small>MISSION CONTROL // LUNAR SURFACE OPS</small></div>
   <div class="clock"><div class="lbl">MET</div><div class="val" id="met">T+ 00:00:00</div></div>
   <div class="clock"><div class="lbl">UTC</div><div class="val" id="utc">--:--:--</div></div>
+  <div class="viewtabs">
+    <button data-view="all" class="on">OVERVIEW</button>
+    <button data-view="cams">CAMERAS</button>
+    <button data-view="map">MAP</button>
+    <button data-view="dem">TERRAIN 3D</button>
+    <button data-view="lidar">LIDAR 3D</button>
+  </div>
   <div class="spacer"></div>
   <div class="lights">
     <div class="light"><div class="dot" id="li-link"></div>LINK</div>
@@ -167,9 +201,9 @@
   </div>
 </header>
 
-<main>
+<main data-view="all">
   <!-- ============ LEFT: CAMERAS ============ -->
-  <div class="col">
+  <div class="col" id="col-cams">
     <div class="panel" style="flex:1">
       <div class="panel-title"><span class="tag">▣</span>NAVCAM ARRAY
         <span class="age"><button id="btn-camrst" style="background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);font-size:9px;padding:1px 7px;cursor:pointer">⟳ RESTART NODE</button></span>
@@ -191,10 +225,13 @@
   </div>
 
   <!-- ============ CENTER: MAP ============ -->
-  <div class="col">
+  <div class="col" id="col-map">
     <div class="panel" id="map-panel">
-      <div class="panel-title"><span class="tag">◈</span>TOPOGRAPHIC MAP — CLICK TO DISPATCH ROVER
-        <span class="age"><button id="btn-map" style="background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);font-size:9px;padding:1px 7px;cursor:pointer">RELOAD MAP</button></span>
+      <div class="panel-title"><span class="tag">◈</span>TOPOGRAPHIC MAP — CLICK DISPATCH · WHEEL ZOOM · DRAG PAN
+        <span class="age" style="display:flex;gap:6px">
+          <button id="btn-zoomreset" style="background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);font-size:9px;padding:1px 7px;cursor:pointer">RESET VIEW</button>
+          <button id="btn-map" style="background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);font-size:9px;padding:1px 7px;cursor:pointer">RELOAD MAP</button>
+        </span>
       </div>
       <div id="map-body">
         <div id="map-wrap">
@@ -212,13 +249,14 @@
       <div id="map-hint">
         <span><b class="sw" style="background:#ff5566"></b>PLANNED</span>
         <span><b class="sw" style="background:#4fc3f7"></b>DRIVEN</span>
-        <span><b>◉</b> ROVER</span>
+        <span><b style="color:#35e0b5">➤</b> ROVER + HEADING</span>
+        <span><b>⇕</b> WHEEL ZOOM · DRAG PAN</span>
       </div>
     </div>
   </div>
 
   <!-- ============ RIGHT: LIDAR 3D + LOCAL DEM + TELEMETRY ============ -->
-  <div class="col">
+  <div class="col" id="col-right">
     <div class="panel" id="lidar-panel">
       <div class="panel-title"><span class="tag">◎</span>LIDAR — 3D · DRAG TO ORBIT · WHEEL TO ZOOM<span class="age" id="lidar-info"></span></div>
       <canvas id="lidarCanvas" style="cursor:grab"></canvas>
@@ -439,7 +477,7 @@ lc.addEventListener('wheel', e => {
 
 /* ---------------- local DEM: three.js terrain ---------------- */
 const demView = $('demView');
-let demScene = null, demCam = null, demRenderer = null, demMesh = null, demMarker = null;
+let demScene = null, demCam = null, demRenderer = null, demMesh = null, demMarker = null, demGrid = null;
 const demOrbit = { yaw: -0.7, pitch: 0.55, dist: 14, cz: 0 };
 const V_EXAG = 1.5;                        /* vertical exaggeration */
 
@@ -493,7 +531,7 @@ socket.on('local_grid', m => {
      rebuilding that plus computeVertexNormals every push, on the GPU Unreal is
      already using, is what froze the compositor. At map scale the terrain
      shape is unchanged by the decimation. */
-  const CAP = 90;
+  const CAP = 56;   /* coarse enough that the grid cells read as distinct cells */
   const step = Math.max(1, Math.ceil(Math.max(m.w, m.h) / CAP));
   const gw = Math.floor((m.w + step - 1) / step);   /* sampled columns */
   const gh = Math.floor((m.h + step - 1) / step);   /* sampled rows */
@@ -521,10 +559,32 @@ socket.on('local_grid', m => {
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
 
+  /* Grid overlay: a clean quad wireframe over the very same vertices, so the
+     surface reads as a 3D grid of height cells rather than a smooth blob. Only
+     row and column edges are drawn (no triangle diagonals). */
+  const P = pos.array;
+  const seg = new Float32Array((gh * (gw - 1) + gw * (gh - 1)) * 6);
+  let s = 0;
+  const edge = (a, b) => {
+    seg[s++] = P[a*3]; seg[s++] = P[a*3+1]; seg[s++] = P[a*3+2];
+    seg[s++] = P[b*3]; seg[s++] = P[b*3+1]; seg[s++] = P[b*3+2];
+  };
+  for (let r = 0; r < gh; r++)
+    for (let c = 0; c < gw - 1; c++) edge(r*gw + c, r*gw + c + 1);
+  for (let c = 0; c < gw; c++)
+    for (let r = 0; r < gh - 1; r++) edge(r*gw + c, (r+1)*gw + c);
+  const lgeo = new THREE.BufferGeometry();
+  lgeo.setAttribute('position', new THREE.BufferAttribute(seg, 3));
+
   if (demMesh) { demScene.remove(demMesh); demMesh.geometry.dispose(); demMesh.material.dispose(); }
+  if (demGrid) { demScene.remove(demGrid); demGrid.geometry.dispose(); demGrid.material.dispose(); }
   demMesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({
-    vertexColors: true, side: THREE.DoubleSide }));
+    vertexColors: true, side: THREE.DoubleSide,
+    polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }));
+  demGrid = new THREE.LineSegments(lgeo, new THREE.LineBasicMaterial({
+    color: 0x9fe0f5, transparent: true, opacity: 0.30 }));
   demScene.add(demMesh);
+  demScene.add(demGrid);
   demOrbit.cz = span * V_EXAG / 2;
 
   /* rover marker, if the pose falls inside the grid (grid lives in odom) */
@@ -674,23 +734,93 @@ function drawOverlay() {
 
   if (currentPose) {
     const x = currentPose.x/mapRes, y = mapH - currentPose.y/mapRes;
-    odomCtx.beginPath(); odomCtx.arc(x, y, 7, 0, 7);
-    odomCtx.fillStyle = '#35e0b5'; odomCtx.fill();
-    odomCtx.strokeStyle = '#fff'; odomCtx.stroke();
     if (currentPose.yaw !== undefined) {
-      const a = currentPose.yaw * Math.PI / 180;
-      odomCtx.beginPath(); odomCtx.moveTo(x, y);
-      odomCtx.lineTo(x + 16*Math.cos(a), y - 16*Math.sin(a));
-      odomCtx.strokeStyle = '#35e0b5'; odomCtx.lineWidth = 2; odomCtx.stroke();
+      // Heading arrow. Screen y is down, world +y is up, so the y term is
+      // negated — same convention the paths above use (y = mapH - y_world).
+      // Measured empirically: driving the rover straight, its travel direction
+      // is (-yaw - 90) deg in the map frame, not yaw — the odom yaw frame is
+      // mirrored and rotated 90 deg from the map's world axes (the planner
+      // corrects the same way, yaw = -raw_yaw - offset). Verified to ~2 deg.
+      const a = -currentPose.yaw * Math.PI / 180 - Math.PI / 2;
+      const dx = Math.cos(a), dy = -Math.sin(a);
+      const L = 26, hl = 12, hw = 7;          // shaft length, head length, head half-width
+      const tx = x + dx*L,        ty = y + dy*L;        // arrow tip
+      const bx = x + dx*(L - hl), by = y + dy*(L - hl); // base of the head
+      const px = -dy, py = dx;                          // unit perpendicular
+      odomCtx.strokeStyle = '#35e0b5'; odomCtx.fillStyle = '#35e0b5';
+      odomCtx.lineWidth = 3; odomCtx.lineCap = 'round';
+      odomCtx.beginPath(); odomCtx.moveTo(x, y); odomCtx.lineTo(bx, by); odomCtx.stroke();
+      odomCtx.beginPath();
+      odomCtx.moveTo(tx, ty);
+      odomCtx.lineTo(bx + px*hw, by + py*hw);
+      odomCtx.lineTo(bx - px*hw, by - py*hw);
+      odomCtx.closePath(); odomCtx.fill();
     }
+    // Rover body marker, drawn on top of the arrow's tail.
+    odomCtx.beginPath(); odomCtx.arc(x, y, 6, 0, 7);
+    odomCtx.fillStyle = '#35e0b5'; odomCtx.fill();
+    odomCtx.strokeStyle = '#fff'; odomCtx.lineWidth = 2; odomCtx.stroke();
   }
 }
 
 socket.on('global_path_update', m => { $('planning').style.display='none'; globalPath = m.path; drawOverlay(); });
-socket.on('trajectory_update',  m => { drivenPath = m.path; drawOverlay(); });
+socket.on('trajectory_update',  m => {
+  drivenPath = m.path;
+  if (!m.path.length) {                 // session reset (Unreal Play/Stop): wipe stale goal
+    globalPath = []; $('t-goal').textContent = '—'; $('planning').style.display = 'none';
+    addLocal('INFO', 'New session detected (Unreal Play/Stop) — map cleared.');
+  }
+  drawOverlay();
+});
 
+/* ---------------- map zoom + pan ----------------
+   #map-stack has transform-origin 0 0, so its getBoundingClientRect() reflects
+   the live translate+scale. Zooming toward the cursor then reduces to a single
+   pan nudge: tx += (cursorX - rectLeft) * (1 - scaleRatio). A click sets a goal;
+   a drag (moved past a threshold) pans instead, so both share the left button. */
+const mapStack = $('map-stack');
+let vz = 1, vtx = 0, vty = 0;
+function applyView() {
+  mapStack.style.transform = `translate(${vtx}px, ${vty}px) scale(${vz})`;
+}
+function resetView() { vz = 1; vtx = 0; vty = 0; applyView(); }
+
+$('map-wrap').addEventListener('wheel', e => {
+  if (!mapW) return;
+  e.preventDefault();
+  const r = mapStack.getBoundingClientRect();
+  const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  let nz = Math.min(8, Math.max(1, vz * f));
+  const k = nz / vz;
+  vtx += (e.clientX - r.left) * (1 - k);
+  vty += (e.clientY - r.top)  * (1 - k);
+  vz = nz;
+  if (vz <= 1.0001) resetView(); else applyView();   // snap back to centered fit at 1x
+}, { passive: false });
+
+let dragStart = null, panStart = null, dragged = false;
 odomCanvas.addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
+  dragStart = { x: e.clientX, y: e.clientY };
+  panStart  = { tx: vtx, ty: vty };
+  dragged = false;
+});
+window.addEventListener('mousemove', e => {
+  if (!dragStart) return;
+  const dx = e.clientX - dragStart.x, dy = e.clientY - dragStart.y;
+  if (!dragged && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) {
+    dragged = true; odomCanvas.style.cursor = 'grabbing';
+  }
+  if (dragged) { vtx = panStart.tx + dx; vty = panStart.ty + dy; applyView(); }
+});
+window.addEventListener('mouseup', e => {
+  if (!dragStart) return;
+  const wasDrag = dragged;
+  dragStart = null; odomCanvas.style.cursor = 'crosshair';
+  if (wasDrag) return;                       // panned, not a goal click
   const r = odomCanvas.getBoundingClientRect();
+  if (e.clientX < r.left || e.clientX > r.right ||
+      e.clientY < r.top  || e.clientY > r.bottom) return;
   const gx = (e.clientX - r.left) * (odomCanvas.width / r.width) * mapRes;
   const gy = (odomCanvas.height - (e.clientY - r.top) * (odomCanvas.height / r.height)) * mapRes;
   $('planning').style.display = 'block';
@@ -698,7 +828,33 @@ odomCanvas.addEventListener('mousedown', e => {
   addLocal('INFO', `Goal dispatched: (${gx.toFixed(1)}, ${gy.toFixed(1)}) m.`);
   socket.emit('send_goal', { x: gx, y: gy });
 });
+
+$('btn-zoomreset').onclick = resetView;
 $('btn-map').onclick = () => socket.emit('refresh_map', {});
+
+/* ---------------- view switcher ----------------
+   Tabs flip <main data-view>; CSS hides the other columns and expands the
+   chosen panel. After the layout reflows, the heavy canvases (map / DEM / lidar)
+   must resize to their new box, so redraw them once on the next frame. The
+   choice is remembered across refreshes. */
+const mainEl = document.querySelector('main');
+function setView(v) {
+  mainEl.dataset.view = v;
+  document.querySelectorAll('.viewtabs button')
+          .forEach(b => b.classList.toggle('on', b.dataset.view === v));
+  try { localStorage.setItem('mc_view', v); } catch (e) {}
+  requestAnimationFrame(() => {
+    if (mapW) { fitMapStack(); drawColorbar(mapW > 0); }
+    if (demRenderer) demDraw();
+    drawLidar();
+  });
+}
+document.querySelectorAll('.viewtabs button')
+        .forEach(b => b.onclick = () => setView(b.dataset.view));
+try {
+  const saved = localStorage.getItem('mc_view');
+  if (saved && saved !== 'all') setView(saved);
+} catch (e) {}
 </script>
 </body>
 </html>

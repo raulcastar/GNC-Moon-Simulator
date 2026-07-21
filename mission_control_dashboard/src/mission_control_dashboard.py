@@ -61,6 +61,13 @@ _MAX_LIDAR_POINTS = 4000       # per frame pushed to the browser
 _LIDAR_MIN_PERIOD = 1.0        # seconds between lidar frames
 _ODOM_MIN_PERIOD = 0.15        # seconds between telemetry emits
 _GRID_MIN_PERIOD = 2.0         # seconds between local DEM frames
+# The driven-trajectory Path grows without bound as the rover moves. Relaying
+# every pose meant an ever-larger payload each update, and the browser re-drew
+# the whole polyline on every odom tick — O(N) with N climbing, which is what
+# made the machine crawl over a long run. Decimate to a fixed budget (the trail
+# shape is preserved) and throttle. Bounds payload and client redraw cost.
+_TRAJ_MAX_POINTS = 1500        # points per driven-path push (decimated)
+_TRAJ_MIN_PERIOD = 0.5         # seconds between driven-path frames
 
 
 def _cloud_xyz(msg: PointCloud2, max_points: int) -> np.ndarray:
@@ -102,6 +109,7 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         self._last_lidar = 0.0
         self._last_odom_emit = 0.0
         self._last_grid = 0.0
+        self._last_traj = 0.0
         self._prev_odom = None      # (t, x, y) for speed estimation
 
         self.declare_parameter('global_res', 1.0)
@@ -316,8 +324,28 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
     def trajectory_callback(self, msg: Path) -> None:
         if not self._is_active():
             return
-        coords = [{'x': p.pose.position.x, 'y': p.pose.position.y}
-                  for p in msg.poses]
+        # An empty path is a clear signal (session reset / Unreal Play-Stop):
+        # always forward it so the browser wipes the old trail, bypassing the
+        # rate limit that would otherwise drop it.
+        if len(msg.poses) == 0:
+            socketio.emit('trajectory_update', {'path': []})
+            return
+        now = time.monotonic()
+        if now - self._last_traj < _TRAJ_MIN_PERIOD:
+            return
+        self._last_traj = now
+        # Decimate the (unbounded, ever-growing) driven path to a fixed budget:
+        # stride keeps the whole trail's shape while capping payload and the
+        # browser's per-redraw cost. The last pose is always included so the
+        # trail reaches the rover's current position.
+        poses = msg.poses
+        n = len(poses)
+        step = max(1, (n + _TRAJ_MAX_POINTS - 1) // _TRAJ_MAX_POINTS)
+        idx = list(range(0, n, step))
+        if idx and idx[-1] != n - 1:
+            idx.append(n - 1)
+        coords = [{'x': poses[i].pose.position.x, 'y': poses[i].pose.position.y}
+                  for i in idx]
         socketio.emit('trajectory_update', {'path': coords})
 
     def rosout_callback(self, msg: Log) -> None:

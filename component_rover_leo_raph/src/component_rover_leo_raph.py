@@ -55,6 +55,15 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         
         # Rover State
         self.headlights_on: bool = False
+        # Last wheel command, so a headlights toggle can be resent in the full
+        # drive-packet shape Unreal parses without disturbing motion.
+        self._last_wheels: dict = {"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0}
+        # Slew-rate (acceleration) limiter state. A commanded velocity STEP
+        # (e.g. a manual `ros2 topic pub`, or any glitch) would otherwise become
+        # an instant wheel-speed jump and flip the rover; these ramp v and w.
+        self._v_cmd: float = 0.0
+        self._w_cmd: float = 0.0
+        self._last_cmd_t: Optional[float] = None
         
         # Network Utilities: Transmission
         self.udp_send_socket: Optional[socket.socket] = None
@@ -99,6 +108,14 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
                 ('tcp_port',     rclpy.Parameter.Type.INTEGER),
             ])
 
+        # Acceleration limits (declared with defaults so an older params.yaml
+        # without them still starts). A step command is ramped to these rates
+        # instead of jumping, which is what stops the rover tipping on a hard
+        # launch. The path planner already ramps at ~0.4 m/s^2, so a slightly
+        # higher cap here is a safety net that leaves normal driving untouched.
+        self.declare_parameter('max_linear_accel', 0.6)    # m/s^2
+        self.declare_parameter('max_angular_accel', 1.5)   # rad/s^2
+
     # =========================================================================
     # Kinematics & Coordinate Transformation Helpers
     # =========================================================================
@@ -126,6 +143,23 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         q.y = cr * sp * cy + sr * cp * sy
         q.z = cr * cp * sy - sr * sp * cy
         return q
+
+    @staticmethod
+    def _slew(cur: float, target: float, step: float) -> float:
+        """
+        Rate-limit ONLY acceleration; let deceleration/stop take effect at once.
+
+        Speeding up (larger |velocity| in the current direction) is what tips the
+        rover, so it is ramped by at most `step`. Slowing down, stopping, or
+        reversing is applied immediately: braking cannot tip the rover, and the
+        planner halts by commanding a single zero — which must stop the rover now,
+        not coast while it blocks on replanning (that was making a new-goal click
+        fail to stop the rover).
+        """
+        speeding_up = abs(target) > abs(cur) and (cur == 0.0 or (cur > 0) == (target > 0))
+        if not speeding_up:
+            return target
+        return cur + max(-step, min(step, target - cur))
 
     def twist_to_wheels(self, v: float, w: float) -> dict:
         """
@@ -215,14 +249,31 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         Updates the internal state of the headlights based on incoming ROS 2 commands.
         """
         self.headlights_on = msg.data
-        self._send({"headlights_on": self.headlights_on}, "headlights")
+        # Unreal reads the light state from the drive packet (FL/BL/FR/BR +
+        # headlights_on), not from a standalone {"headlights_on": ...}, so send
+        # the full shape. Reuse the last wheel command so the toggle alone does
+        # not change motion (zeros when the rover is idle).
+        self._send({**self._last_wheels, "headlights_on": self.headlights_on},
+                   "headlights")
         self.get_logger().info(f"Headlights toggled: {'ON' if self.headlights_on else 'OFF'}")
 
     def cmd_vel_callback(self, msg: Twist) -> None:
         """
         Processes incoming linear/angular velocity commands and dispatches them via UDP.
         """
-        self._send(self.twist_to_wheels(msg.linear.x, msg.angular.z), "cmd_vel")
+        # Ramp v and w toward the command instead of stepping to it. dt is the
+        # real gap between commands, capped so a long idle gap cannot allow one
+        # huge jump; the per-cycle change is bounded by accel * dt.
+        now = time.monotonic()
+        dt = 0.1 if self._last_cmd_t is None else min(now - self._last_cmd_t, 0.2)
+        self._last_cmd_t = now
+
+        self._v_cmd = self._slew(self._v_cmd, msg.linear.x,  self.max_linear_accel  * dt)
+        self._w_cmd = self._slew(self._w_cmd, msg.angular.z, self.max_angular_accel * dt)
+
+        wheels = self.twist_to_wheels(self._v_cmd, self._w_cmd)
+        self._last_wheels = {k: wheels[k] for k in ("FL", "BL", "FR", "BR")}
+        self._send(wheels, "cmd_vel")
 
     def _udp_receive_loop(self) -> None:
         """
@@ -446,6 +497,8 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self.listen_port = self.get_parameter('listen_port').value
         self.rover_width = self.get_parameter('rover_width').value
         self.headlights_on = self.get_parameter('headlights_on').value
+        self.max_linear_accel  = self.get_parameter('max_linear_accel').value
+        self.max_angular_accel = self.get_parameter('max_angular_accel').value
         self.transport   = self.get_parameter('transport').value.strip().lower()
         self.tcp_role    = self.get_parameter('tcp_role').value.strip().lower()
         self.tcp_port    = self.get_parameter('tcp_port').value
@@ -522,6 +575,10 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         # 1. Dispatch absolute zero velocities to enforce a hardware/simulation halt
         self._send({"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0,
                     "headlights_on": False}, "stop")
+        # Sent zeros directly, bypassing the ramp — zero its state too so the
+        # next command ramps from a standstill instead of a phantom velocity.
+        self._v_cmd = self._w_cmd = 0.0
+        self._last_cmd_t = None
 
         # 2. Assert thread termination and await its graceful exit (max 1 second block)
         self._keep_listening = False

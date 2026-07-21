@@ -131,6 +131,16 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
                 # Depth validity window (max is distance_limit — single source of truth)
                 ('min_valid_depth',  rclpy.Parameter.Type.DOUBLE),
                 ('depth_scale',      rclpy.Parameter.Type.DOUBLE),
+                # Elevation sanity window (metres, relative to the rover base at
+                # z_w=0). Rejects physically impossible heights from stereo-depth
+                # outliers before they poison the max-per-cell DEM.
+                ('min_elevation',    rclpy.Parameter.Type.DOUBLE),
+                ('max_elevation',    rclpy.Parameter.Type.DOUBLE),
+                # Apply live rover roll/pitch (from /odom) to the DEM. OFF by
+                # default: the odom orientation is in a non-standard frame, so the
+                # extracted roll is garbage (~-84° on flat ground) and warps the
+                # DEM. The fixed camera tilt is handled by camera_angle instead.
+                ('apply_rover_tilt', rclpy.Parameter.Type.BOOL),
                 ('debug_mode',       rclpy.Parameter.Type.BOOL),
                 ('debug_save_path',  rclpy.Parameter.Type.STRING),
             ]
@@ -315,7 +325,14 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         in_range = (
             (np.abs(x_w) < self.distance_limit) &
             (y_w > 0.0) &
-            (y_w < self.distance_limit)
+            (y_w < self.distance_limit) &
+            # Elevation sanity gate: stereo depth degrades as Z²/(fx·B) and, on a
+            # near-horizontal camera, a grazing ground pixel or a bad above-horizon
+            # match projects to a wildly wrong height. Those outliers otherwise win
+            # the max-per-cell reduction and spike the DEM. Keep only plausible
+            # ground/rock elevations relative to the rover base (z_w = 0).
+            (z_w >= self.min_elevation) &
+            (z_w <= self.max_elevation)
         )
         x_w = x_w[in_range]
         y_w = y_w[in_range]
@@ -528,12 +545,20 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         # Standard ZYX Tait-Bryan convention, same as ROS REP-103.
         #   roll  — rotation around X (right axis): lifts one side of the rover
         #   pitch — rotation around Y (left axis):  tilts rover forward/backward
-        sinr_cosp = 2.0 * (qw * qx + qy * qz)
-        cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy)
-        rover_roll  = math.atan2(sinr_cosp, cosr_cosp)
+        if self.apply_rover_tilt:
+            sinr_cosp = 2.0 * (qw * qx + qy * qz)
+            cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy)
+            rover_roll  = math.atan2(sinr_cosp, cosr_cosp)
 
-        sinp = max(-1.0, min(1.0, 2.0 * (qw * qy - qz * qx)))
-        rover_pitch = math.asin(sinp)
+            sinp = max(-1.0, min(1.0, 2.0 * (qw * qy - qz * qx)))
+            rover_pitch = math.asin(sinp)
+        else:
+            # The odom orientation is in a non-standard frame (same convention
+            # that mirrors the dashboard heading), so the roll extracted here is
+            # spurious (~-84° on flat ground) and rotates the whole DEM into a
+            # narrow warped sliver. Ignore it; camera_angle carries the fixed tilt.
+            rover_roll = 0.0
+            rover_pitch = 0.0
 
         # ── DEM computation (reference code logic, vectorised) ────────────────
         DEM, x_w, y_w, z_w, x_offset, colors = self._compute_dem(
@@ -696,6 +721,9 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         self.distance_limit  = self.get_parameter('distance_limit').value
         self.min_valid_depth = self.get_parameter('min_valid_depth').value
         self.depth_scale     = self.get_parameter('depth_scale').value
+        self.min_elevation   = self.get_parameter('min_elevation').value
+        self.max_elevation   = self.get_parameter('max_elevation').value
+        self.apply_rover_tilt = self.get_parameter('apply_rover_tilt').value
         # max valid depth == distance_limit: single parameter controls both the
         # pixel-level cut and the world-frame distance filter.
         self.debug_mode      = self.get_parameter('debug_mode').value

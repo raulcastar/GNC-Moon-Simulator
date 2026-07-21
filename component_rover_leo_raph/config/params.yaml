@@ -35,3 +35,11 @@ lc_component_rover_leo_raph:
     listen_port:                        3001
     rover_width:                        35.0 # centimeters, distance between left and right wheels
     headlights_on:                      true
+
+    # Acceleration limits: a commanded velocity STEP (manual `ros2 topic pub`,
+    # or any glitch) is ramped to these rates instead of jumping, so the rover
+    # does not tip on a hard launch. The path planner already ramps at ~0.4
+    # m/s^2, so these caps sit just above it and leave normal driving untouched
+    # — lower them if the rover still tips, raise them for snappier response.
+    max_linear_accel:                    0.6  # m/s^2
+    max_angular_accel:                   1.5  # rad/s^2

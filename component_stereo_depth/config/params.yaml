@@ -111,7 +111,14 @@ lc_component_stereo_depth:
     #   64  -> near 1.00 m, border 10% of the image
     #   128 -> near 0.50 m, border 20%
     #   224 -> near 0.29 m, border 35%
-    num_disparities:                        64
+    #
+    # The navcams are horizontal at 0.4 m, so the bottom of the image sees ground
+    # at only ~0.53 m. At 64 (near 1.0 m) that whole near band is inside the blind
+    # zone and never matches — the "lower image doesn't work" symptom, and the
+    # source of the DEM's holes near the rover. 128 (near 0.5 m) resolves it; the
+    # extra border is recovered by fill_left_border. Raise to 160/192 if the very
+    # bottom rows still drop out (e.g. when the rover pitches forward).
+    num_disparities:                       128
 
     max_depth_m:                           6.0
 

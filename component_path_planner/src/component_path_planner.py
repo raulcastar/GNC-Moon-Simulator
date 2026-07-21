@@ -94,6 +94,11 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         self.obstacles = np.array([])
         self.trajectory_history = []
         self.goal_reached = False
+        # A Play/Stop in Unreal teleports the rover back to its start pose, which
+        # shows up as a one-step odometry jump far larger than any real motion
+        # between frames. Above this many metres in one step, treat it as a new
+        # session and wipe the stale trajectory/goal so the map reflects the run.
+        self._session_reset_dist = 2.0
         
         # --- Environmental Matrices ---
         self.elevationMap = None
@@ -171,9 +176,25 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         
         v = msg.twist.twist.linear.x
         omega = msg.twist.twist.angular.z
-        
+
+        # New session (Unreal Play/Stop): the rover teleports to its start pose.
+        # Detect the resulting large one-step jump and clear the previous run's
+        # trajectory, goal and path — then push empty paths so the map clears too.
+        if self.robot_pose is not None:
+            jump = math.hypot(x - self.robot_pose[0], y - self.robot_pose[1])
+            if jump > self._session_reset_dist:
+                self.get_logger().info(
+                    f"Odometry jumped {jump:.1f} m — treating as an Unreal "
+                    f"Play/Stop. Clearing trajectory, goal and map overlays.")
+                self.trajectory_history = []
+                self.current_goal = None
+                self.global_path = None
+                self.goal_reached = False
+                self._stop_robot()
+                self._publish_clear()
+
         self.robot_pose = np.array([x, y, yaw, v, omega])
-        
+
         # Downsample trajectory recording to 0.1m intervals to prevent memory saturation
         if len(self.trajectory_history) == 0 or \
            math.hypot(x - self.trajectory_history[-1][0], y - self.trajectory_history[-1][1]) > 0.1:
@@ -390,9 +411,25 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             
         return response
 
+    def _publish_clear(self) -> None:
+        """
+        Push empty Global Path and Trajectory messages so the UI wipes the
+        previous run's overlays. _broadcast_paths skips an empty trajectory (it
+        guards on len > 0), so on a session reset the stale trail would otherwise
+        never be cleared — this sends the empty paths explicitly, once.
+        """
+        timestamp = self.get_clock().now().to_msg()
+        empty = Path()
+        empty.header.frame_id = 'map'
+        empty.header.stamp = timestamp
+        if self._pub_global_path and self._pub_global_path.is_activated:
+            self._pub_global_path.publish(empty)
+        if self._pub_trajectory and self._pub_trajectory.is_activated:
+            self._pub_trajectory.publish(empty)
+
     def _broadcast_paths(self) -> None:
         """
-        Translates the Global Path and Historical Trajectory arrays into 
+        Translates the Global Path and Historical Trajectory arrays into
         standard ROS 2 Path messages for visualizer consumption.
         """
         timestamp = self.get_clock().now().to_msg()
