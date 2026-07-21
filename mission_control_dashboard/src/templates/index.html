@@ -737,11 +737,9 @@ function drawOverlay() {
     if (currentPose.yaw !== undefined) {
       // Heading arrow. Screen y is down, world +y is up, so the y term is
       // negated — same convention the paths above use (y = mapH - y_world).
-      // Measured empirically: driving the rover straight, its travel direction
-      // is (-yaw - 90) deg in the map frame, not yaw — the odom yaw frame is
-      // mirrored and rotated 90 deg from the map's world axes (the planner
-      // corrects the same way, yaw = -raw_yaw - offset). Verified to ~2 deg.
-      const a = -currentPose.yaw * Math.PI / 180 - Math.PI / 2;
+      // Odom now carries a clean REP-103 heading (fixed at the rover node), so
+      // the reported yaw is the travel direction directly — no correction.
+      const a = currentPose.yaw * Math.PI / 180;
       const dx = Math.cos(a), dy = -Math.sin(a);
       const L = 26, hl = 12, hw = 7;          // shaft length, head length, head half-width
       const tx = x + dx*L,        ty = y + dy*L;        // arrow tip

@@ -167,12 +167,12 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         raw_y = msg.pose.pose.position.y
         raw_yaw = self.yaw_from_quaternion(msg.pose.pose.orientation)
         
-        # Apply static rotational offset to align the simulation forward vector
-        # with the algorithmic Cartesian grid (North = 0 rad)
+        # Odom now publishes a clean REP-103 heading (the rover node bakes in the
+        # Unreal-frame correction), so the quaternion yaw IS the heading — the
+        # old `-raw_yaw - 90` compensation is no longer needed.
         x = raw_x
         y = raw_y
-        yaw_offset = 90.0 * math.pi / 180.0
-        yaw = -raw_yaw - yaw_offset
+        yaw = raw_yaw
         
         v = msg.twist.twist.linear.x
         omega = msg.twist.twist.angular.z

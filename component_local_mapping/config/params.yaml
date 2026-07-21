@@ -25,7 +25,10 @@ lc_component_local_mapping:
     # camera_height_m: distance from the ground plane to the camera optical
     #   centre (= physical_height in CameraTransform). Used by rotateRefSystem
     #   to set the absolute elevation of z_w = 0 at the ground.
-    camera_height_m: 0.40   # metres (reference example: 0.40 m)
+    # Measured: with 0.40 the flat ground read ~-0.15 m (z_w below the base),
+    # so the true optical-centre height above the ground is ~0.25 m. Centres
+    # flat ground at z_w = 0.
+    camera_height_m: 0.25   # metres
 
     # camera_angle: tilt of the camera from horizontal in degrees.
     #   0   = camera looking straight ahead (horizontal)

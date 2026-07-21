@@ -370,8 +370,17 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         odom_msg.pose.pose.position.y = transform['y'] / 100.0
         odom_msg.pose.pose.position.z = transform['z'] / 100.0
 
-        odom_msg.pose.pose.orientation = self.euler_to_quaternion(
-            transform['roll'], transform['pitch'], transform['yaw'])
+        # Unreal's telemetry roll/pitch/yaw are in a non-standard, left-handed
+        # frame; fed straight into a ROS quaternion they produce garbage (roll
+        # ~= -84 deg on FLAT ground), which warps every consumer that reads
+        # orientation — the DEM tilt correction and the dashboard heading both
+        # needed hacks to compensate. Only the yaw->heading relation is reliable
+        # (measured by driving: heading = -U_yaw - 90). Publish a clean REP-103
+        # pure-yaw quaternion at the true heading. roll=pitch=0 is correct on
+        # flat ground; recovering real body tilt needs Unreal to send a standard
+        # frame (then set these from transform['roll']/['pitch']).
+        heading_deg = -transform['yaw'] - 90.0
+        odom_msg.pose.pose.orientation = self.euler_to_quaternion(0.0, 0.0, heading_deg)
 
         self._pub_odom.publish(odom_msg)
 
