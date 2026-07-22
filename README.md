@@ -1,9 +1,9 @@
 # GNC-Moon-Simulator
 
 ROS 2 (Jazzy) guidance, navigation and control stack for a lunar rover simulated
-in Unreal Engine. Sensor data crosses from Unreal into ROS over
-[UnrealCV](https://unrealcv.org/); every component runs in its own container and
-talks over Zenoh.
+in Unreal Engine. Sensor data crosses from Unreal into ROS over dedicated Unreal
+plugins (StereoCamStreamer for the cameras, MetaLidar for the lidar, a TCP link
+for the rover); every component runs in its own container and talks over Zenoh.
 
 ## Quick start
 
@@ -38,7 +38,7 @@ docker compose exec component_local_mapping \
 
 | Package | Role |
 |---|---|
-| `component_stereo_depth` | Owns the UnrealCV connection. Serves all three navcams and computes stereo depth. |
+| `component_stereo_depth` | Receives the three navcams from the StereoCamStreamer plugin and computes stereo depth. |
 | `component_lidar` | Velodyne point cloud from Unreal. |
 | `component_local_mapping` | Builds a local DEM and occupancy grid from the central navcam's depth. |
 | `component_path_planner` | Global path over the elevation grid. |
@@ -46,18 +46,14 @@ docker compose exec component_local_mapping \
 | `mission_control_dashboard` | Web mission control on port 5000: camera wall, lidar, telemetry, map with goal dispatch, /rosout console. |
 | `custom_map_interfaces` | Shared message definitions. |
 
-**Only one process may hold the UnrealCV socket.** The server accepts a single
-client connection, so `component_stereo_depth` serves every camera itself. Stop
-it before running anything else that talks to Unreal, including the scripts in
-`utils/`.
-
 ## Talking to Unreal
 
-Two independent links, and they fail differently:
+Three independent links, and they fail differently:
 
 | Link | Transport | Carries |
 |---|---|---|
-| UnrealCV | TCP 9000 | cameras, poses, object masks |
+| StereoCamStreamer | TCP 3004 | navcam frames + object mask (Unreal → ROS) |
+| MetaLidar | UDP | Velodyne point cloud (Unreal → ROS) |
 | Rover plugin | TCP 3003 | wheel commands out, odometry in |
 
 The containers run `network_mode: host`, so they sit on WSL2's network stack
@@ -125,8 +121,7 @@ navcam/left/camera_info              navcam/central/camera_info
                                      navcam/central/image_depth
 navcam/right/image_color             navcam/central/image_depth/visualization
 navcam/right/image_color/compressed  navcam/central/disparity
-navcam/right/camera_info             navcam/central/depth_gt
-                                     navcam/central/object_mask
+navcam/right/camera_info             navcam/central/object_mask
                                      navcam/central/object_mask_mapping
 ```
 
@@ -135,77 +130,41 @@ TF frame names flatten the namespace: `navcam_left`, `navcam_right`,
 
 `image_depth` is **planar Z depth in metres**, `NaN` where no surface was
 recovered. It is a stereo product, with the occlusion holes and range-dependent
-quantisation of one. `depth_gt` carries Unreal's exact depth buffer, converted to
-the same units and frame, for scoring the stereo result — nothing in the sensor
-path reads it.
+quantisation of one.
+
+### How frames arrive
+
+The **StereoCamStreamer** plugin (`unreal/StereoCamStreamer/` — build
+instructions in its README) renders each navcam **with the game frame** on the
+render thread, reads it back asynchronously, and pushes it to the node over TCP
+port 3004 — no render-on-demand, no game-thread stall. `component_stereo_depth`
+runs a TCP server there and processes frames as they land.
+
+Every capture enqueued in one Unreal tick carries the same frame counter, and
+the node pairs the left/right eyes **only when their ids match exactly** — that
+is the simultaneity guarantee, with no pausing and no round-trip probing. The
+centre frame is taken from the nearest tick; it is overlaid, not matched, so a
+frame or two of slack is fine.
 
 ### Rig requirements
 
 SGBM assumes epipolar lines are image rows. That holds only when the two eyes
-share a rotation and are offset purely along the left camera's right axis. At
-configure time the node reads all three poses and checks:
+share a rotation and are offset purely along the left camera's right axis, so the
+StereoCamStreamer captures must be **co-rotated and offset laterally** on the
+mount, with the central capture between them.
 
-- left and right rotations match, and the baseline is purely lateral
-- the central camera lies on the line between the eyes, near its midpoint
-- left and right FOVs agree
-
-Violations are logged as errors; a central camera far off the rig aborts
-configuration. To inspect the poses yourself, stop the node and run:
-
-```bash
-docker compose stop component_stereo_depth
-python utils/list_unreal_cameras.py
-```
-
-It prints every camera's location, rotation, FOV and resolution, then evaluates
-each ordered pair as a stereo candidate.
-
-### Streaming frames instead of polling UnrealCV
-
-UnrealCV renders on demand: every `vget` blocks the game thread for a full
-render + synchronous GPU readback — **~300 ms per camera, measured**, freezing
-the simulation ~40% of wall time at 1 Hz with three cameras. Switching the
-image encoding does not help (BMP took as long as PNG); the stall *is* the
-synchronous readback.
-
-`image_source: stream` in `component_stereo_depth/config/params.yaml` removes
-it. The **StereoCamStreamer** component (`unreal/StereoCamStreamer/` — build
-instructions in its README) renders the navcams with each frame on the render
-thread, reads them back asynchronously, and pushes them to the node over TCP
-port 3004. Left/right frames carry Unreal's frame counter and are paired only
-when the ids match exactly, preserving the same-tick guarantee the batched
-UnrealCV request provided. The centre frame may trail by a frame or two — it is
-overlaid, not matched.
-
-UnrealCV stays connected for the one-time rig geometry solve and, if enabled,
-`depth_gt` / `object_mask` — each of those still costs a stall and only aligns
-with streamed frames while the rover is stationary, so leave them off outside
-glare studies. The default remains `unrealcv` until the plugin side is built.
-
-### Simultaneity without pausing
-
-A stereo pair is only rigid if both eyes see the same world state. The node sends
-all its grabs as **one batched UnrealCV request**, so the server answers them
-back to back and normally within a single game tick. The world advances on ticks
-rather than wall-clock, so that is simultaneous however long the wire took.
-
-Every batch is bracketed by a `vget /camera/N/location` probe. If the two replies
-differ, the batch spanned ticks and the node says by how much, as a fraction of
-the baseline:
+A stream cannot be measured, so the geometry is **declared from parameters** in
+`component_stereo_depth/config/params.yaml`: `baseline_m` (eye separation),
+`hfov_deg` (the captures' FOV) and `center_offset_m` (the centre's position along
+the baseline). The image size is taken from the first frames, and the node logs
+the rig it solved at configure time:
 
 ```
-Capture: the rig moved 5.00 cm mid-batch (25% of the baseline) — the grabs span
-game ticks and are not simultaneous.
+Rig declared (stream mode): 640x480 | baseline 20.00 cm | hfov 90.00 deg
+-> fx 320.00 px | centre 10.00 cm from the left eye
 ```
 
-`pause_game_during_capture` guarantees simultaneity but freezes the simulation
-for every other component, so it is **off by default**. Turn it on only if the
-drift warning shows the batch spanning ticks and an exact baseline matters more
-than uninterrupted rover dynamics.
-
-The configure-time geometry snapshot uses the same batch and probe, retrying a
-few times to catch the rig within one tick. Measure the rig with the rover
-stationary if you want an exact baseline.
+Set these to the real capture geometry — wrong values shift absolute depth.
 
 ### Geometry that governs the result
 
@@ -223,29 +182,19 @@ of a wider border.
 
 Anything nearer than the near limit has a disparity beyond the search window.
 SGBM cannot find it and locks onto whatever correlates best inside the range,
-producing a speckled band along the bottom of the depth image. At startup the
-node measures how much of the view this affects and logs the `num_disparities`
-that would resolve it.
+producing a speckled band along the bottom of the depth image. Depth nearer than
+the near limit is rejected, and the node logs that limit at configure time; raise
+`num_disparities` if the bottom rows drop out.
 
 `fill_left_border` recovers most of the dead band: OpenCV blanks every column
 `u < num_disparities`, but a pixel at column `u` with disparity `d` is matchable
 whenever `d ≤ u`, and distant surfaces have small `d`.
 
-### Glare study
-
-`saturation_level` marks clipped pixels in the central image. With
-`validate_against_ground_truth`, every frame logs the matching hole rate and
-median/p95 `|dZ|/Z` **inside versus outside** the saturated region:
-
-```
-saturated 1.20% | glare: holes 61.3% med|dZ|/Z 4.11% p95 22.7%
-                | clean: holes  9.8% med|dZ|/Z 0.72% p95  3.1%
-```
-
-Lock the cameras' exposure in Unreal before trusting these numbers. If the eyes
-auto-expose independently they diverge most when a bright source is in one field
-of view, and the resulting photometric mismatch looks exactly like a glare
-effect.
+Exposure matters for matching: if the two eyes auto-expose independently they
+diverge most when a bright source is in one field of view, and the photometric
+mismatch looks exactly like a glare effect. Clamp or lock the captures' exposure
+in Unreal — see the StereoCamStreamer README's **Exposure** section (Min/Max
+EV100, or a full manual lock).
 
 ## Local mapping
 
@@ -263,13 +212,8 @@ where the ground plane lands.
 
 ## Utilities
 
-Run these with `component_stereo_depth` stopped — it holds the UnrealCV socket.
-
 | Script | Purpose |
 |---|---|
-| `utils/list_unreal_cameras.py` | Enumerate camera poses; flag usable stereo pairs. `--resume` clears a stale pause. |
-| `utils/stereo_depth_test.py` | One-shot SGBM + glare comparison, plotted with matplotlib. |
-| `utils/connect_unrealcv.py` | Minimal capture and display. |
 | `utils/udp_probe.py` | Prove the rover UDP link both ways. Needs `component_rover_leo_raph` stopped, not the stereo node. |
 
 ## ⚙️ WSL2 System Configuration (`.wslconfig`)
