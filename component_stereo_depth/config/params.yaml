@@ -1,21 +1,13 @@
 lc_component_stereo_depth:
   ros__parameters:
     debug_mode:                           true
-    ip:                                0.0.0.0
-    port:                                 9000
     image_reading_hz_rate:                 1.0
 
-    # ── Image source ──────────────────────────────────────────────────────────
-    # unrealcv  render on demand through UnrealCV. Each grab blocks Unreal's
-    #           game thread ~300 ms (measured), freezing the simulation ~40%
-    #           of wall time at 1 Hz with three cameras.
-    # stream    receive frames pushed by the StereoCamStreamer plugin
-    #           (unreal/StereoCamStreamer/): captures render with the frame and
-    #           reach this node with no game-thread stall. Left/right are
-    #           paired by Unreal's frame counter, keeping the same-tick
-    #           guarantee. UnrealCV stays connected for the one-time rig
-    #           geometry solve and the optional gt/mask products.
-    image_source:                       stream
+    # ── Frame stream ──────────────────────────────────────────────────────────
+    # Frames are pushed by the StereoCamStreamer plugin (unreal/StereoCamStreamer/)
+    # to this TCP server: captures render with the game frame and reach this node
+    # with no game-thread stall. Left/right are paired by Unreal's frame counter,
+    # so both eyes always come from the same world tick.
     stream_bind_ip:                    0.0.0.0
     stream_port:                          3004
 
@@ -24,17 +16,14 @@ lc_component_stereo_depth:
     # central camera's pixel grid, so its depth, disparity, object mask and RGB
     # all overlay one another.
     #
-    # Verify the ids with `python utils/list_unreal_cameras.py`, which prints
-    # every camera's pose. On startup this node logs where the central camera
-    # sits along the baseline: expect ~50%, ~0 cm off the eye-to-eye line.
-    #
-    # This node owns the single UnrealCV client connection and serves all three;
-    # nothing else may hold the socket.
+    # These are the StereoCamStreamer cam ids (its Left/Right/Center CamId),
+    # not UnrealCV camera indices. On startup this node logs where the central
+    # camera sits along the baseline: expect ~50%, ~0 cm off the eye-to-eye line.
     left_camera_id:                          1
     right_camera_id:                         2
     center_camera_id:                        0   # Navcam_Sensor
 
-    # Object-segmentation capture (stream mode). Must equal the StereoCamStreamer
+    # Object-segmentation capture. Must equal the StereoCamStreamer
     # MaskCamId. Its SceneCapture uses a post-process material that colours the
     # Custom Depth-Stencil buffer — the UnrealCV object_mask, reproduced without
     # UnrealCV. Set < 0 to stream no mask (and set enable_object_mask: false).
@@ -59,40 +48,17 @@ lc_component_stereo_depth:
     right_topic:                  navcam/right
     center_topic:               navcam/central
 
-    # Freeze the game while grabbing. Off by default: pausing stops the
-    # simulation for every other component.
-    #
-    # Not usually needed. All grabs go out as one batched request, so the server
-    # answers them back to back and normally within a single game tick — and the
-    # world only advances on ticks, so that is simultaneous however long the wire
-    # took. Every batch is bracketed by a location probe; if the rig moved, the
-    # node logs by how much, as a fraction of the baseline.
-    #
-    # Turn it on when an exact baseline matters more than uninterrupted rover
-    # dynamics, or if the drift warning shows the batch spanning ticks.
-    pause_game_during_capture:           false
-
     # ── Rig geometry ──────────────────────────────────────────────────────────
-    # Both are auto-solved from the running Unreal instance when <= 0:
-    #   baseline_m  camera locations projected on the left camera's right axis,
-    #               checked for a purely lateral offset
-    #   hfov_deg    vget /camera/N/fov
-    # The central camera's FOV is always read from Unreal: it may differ from
-    # the pair's, and the reprojection uses its real intrinsics.
-    # In unrealcv mode 0 means measure from the running game. In stream mode
-    # nothing can be measured, so BOTH ARE REQUIRED there: set them to the
+    # A stream cannot be measured, so BOTH ARE REQUIRED: set them to the
     # StereoCamStreamer captures' real geometry.
+    #   baseline_m  metres between the eyes
+    #   hfov_deg    the captures' FOVAngle
     baseline_m:                            0.2   # metres between the eyes
     hfov_deg:                             90.0   # capture FOVAngle, degrees
 
-    # Stream mode only: centre camera's distance from the LEFT eye along the
-    # baseline, metres. Negative = midpoint of the eyes.
+    # Centre camera's distance from the LEFT eye along the baseline, metres.
+    # Negative = midpoint of the eyes.
     center_offset_m:                      -1.0
-
-    # Unreal Units per metre. Scales the baseline and the ground-truth depth
-    # identically, so a wrong value shifts absolute metres but leaves the
-    # stereo/ground-truth error ratio untouched.
-    uu_per_metre:                       1000.0
 
     # ── Matching window ───────────────────────────────────────────────────────
     # num_disparities is the width of the SGBM search window, hence also of the
@@ -104,8 +70,7 @@ lc_component_stereo_depth:
     #   matching time                linear in it
     #
     # Depth nearer than the derived near limit is rejected; the node logs it.
-    # Surfaces closer still alias into the search range as plausible garbage —
-    # the near-field audit at startup reports how much of the view that is.
+    # Surfaces closer still alias into the search range as plausible garbage.
     #
     # With fx*B = 64 (20 cm baseline, 90°, 640 px):
     #   64  -> near 1.00 m, border 10% of the image
@@ -150,24 +115,9 @@ lc_component_stereo_depth:
     # Clamp and colormap range for image_depth / image_depth/visualization.
     depth_max_distance:                    6.0   # metres
 
-    # Publishes navcam/central/object_mask (rgb8) and object_mask_mapping (JSON
-    # object -> colour).
-    #   unrealcv mode  mask + name->colour legend come from UnrealCV (one extra
-    #                  vget per frame, inside the pause window).
-    #   stream mode    mask comes from the StereoCamStreamer segmentation capture
-    #                  named by mask_camera_id; colours are baked into the
-    #                  Unreal post-process material, so the legend is empty.
-    #                  Needs that capture to exist, or it self-disables.
+    # Publishes navcam/central/object_mask (rgb8) and object_mask_mapping (the
+    # mask_labels legend as JSON). The mask comes from the StereoCamStreamer
+    # segmentation capture named by mask_camera_id; colours are baked into the
+    # Unreal post-process material. Needs that capture to exist, or it
+    # self-disables.
     enable_object_mask:                   true
-
-    # ── Glare study ───────────────────────────────────────────────────────────
-    # A channel at or above this level has clipped. Measured on the central
-    # image, so it aligns with the depth it explains. Partitions the per-frame
-    # error statistics; not published as a topic.
-    saturation_level:                      250
-
-    # Publishes navcam/central/depth_gt (Unreal's exact depth buffer, converted
-    # to planar metres) and logs, per frame, the matching hole rate and |dZ|/Z
-    # inside vs outside the glare. Both live in the central camera's frame, so
-    # the comparison is pixel-aligned. Costs one extra vget.
-    validate_against_ground_truth:        true
