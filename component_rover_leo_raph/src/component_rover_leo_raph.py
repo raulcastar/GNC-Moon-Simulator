@@ -30,6 +30,42 @@ import warnings
 warnings.filterwarnings("ignore")
 
 
+# ── Quaternion helpers (tuples, x, y, z, w), for the body-tilt recovery ──────
+def _q_from_euler(roll_deg, pitch_deg, yaw_deg):
+    """Degrees, ZYX aerospace — identical convention to euler_to_quaternion."""
+    r, p, y = map(math.radians, (roll_deg, pitch_deg, yaw_deg))
+    cy, sy = math.cos(y * 0.5), math.sin(y * 0.5)
+    cp, sp = math.cos(p * 0.5), math.sin(p * 0.5)
+    cr, sr = math.cos(r * 0.5), math.sin(r * 0.5)
+    return (sr * cp * cy - cr * sp * sy,
+            cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy,
+            cr * cp * cy + sr * sp * sy)
+
+
+def _q_mul(a, b):
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return (aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+            aw * bw - ax * bx - ay * by - az * bz)
+
+
+def _q_inv(q):
+    x, y, z, w = q
+    return (-x, -y, -z, w)
+
+
+def _q_to_euler(q):
+    """Return (roll, pitch, yaw) in degrees, ZYX aerospace."""
+    x, y, z, w = q
+    roll = math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
+    pitch = math.asin(max(-1.0, min(1.0, 2 * (w * y - z * x))))
+    yaw = math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+    return math.degrees(roll), math.degrees(pitch), math.degrees(yaw)
+
+
 class LifecycleRoverController(rclpy.lifecycle.Node):
     """
     Lifecycle node handling asynchronous UDP communication with Unreal Engine.
@@ -115,6 +151,18 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         # higher cap here is a safety net that leaves normal driving untouched.
         self.declare_parameter('max_linear_accel', 0.6)    # m/s^2
         self.declare_parameter('max_angular_accel', 1.5)   # rad/s^2
+
+        # Body-tilt recovery from Unreal telemetry (see _publish_transform).
+        # publish_body_tilt: off -> pure-yaw odom (flat-ground only); on ->
+        # recover real roll/pitch relative to the level baseline.
+        # tilt_*_offset: the telemetry roll/pitch when the rover is LEVEL
+        # (measured: roll=-90, pitch=0). tilt_*_sign: flip if a known tilt comes
+        # out inverted during verification.
+        self.declare_parameter('publish_body_tilt', True)
+        self.declare_parameter('tilt_roll_offset', -90.0)   # deg, telemetry roll when level
+        self.declare_parameter('tilt_pitch_offset', 0.0)    # deg, telemetry pitch when level
+        self.declare_parameter('tilt_roll_sign', 1.0)
+        self.declare_parameter('tilt_pitch_sign', -1.0)   # nose-down -> +DEM pitch
 
     # =========================================================================
     # Kinematics & Coordinate Transformation Helpers
@@ -370,17 +418,32 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         odom_msg.pose.pose.position.y = transform['y'] / 100.0
         odom_msg.pose.pose.position.z = transform['z'] / 100.0
 
-        # Unreal's telemetry roll/pitch/yaw are in a non-standard, left-handed
-        # frame; fed straight into a ROS quaternion they produce garbage (roll
-        # ~= -84 deg on FLAT ground), which warps every consumer that reads
-        # orientation — the DEM tilt correction and the dashboard heading both
-        # needed hacks to compensate. Only the yaw->heading relation is reliable
-        # (measured by driving: heading = -U_yaw - 90). Publish a clean REP-103
-        # pure-yaw quaternion at the true heading. roll=pitch=0 is correct on
-        # flat ground; recovering real body tilt needs Unreal to send a standard
-        # frame (then set these from transform['roll']/['pitch']).
+        # Heading is reliable from Unreal's yaw (measured by driving).
         heading_deg = -transform['yaw'] - 90.0
-        odom_msg.pose.pose.orientation = self.euler_to_quaternion(0.0, 0.0, heading_deg)
+
+        # Body tilt: Unreal's telemetry attitude is in a non-standard left-handed
+        # frame (reads roll=-90 when the rover is level), so the numbers cannot be
+        # used directly. But the rotation RELATIVE to that level baseline is
+        # convention-independent and recovers true tilt (verified against 10 deg
+        # and 20 deg reference tilts). q_rel = q_level^-1 * q_current, with q_level
+        # = the level attitude at the current heading. The -90 roll offset lands
+        # the pitch component on q_rel's yaw axis, so body_pitch = q_rel.yaw.
+        # Signs/axis mapping are parameterised for one-shot verification.
+        if self.publish_body_tilt:
+            q_level = _q_from_euler(self.tilt_roll_offset, self.tilt_pitch_offset,
+                                    transform['yaw'])
+            q_cur = _q_from_euler(transform['roll'], transform['pitch'], transform['yaw'])
+            rr, _resid, yy = _q_to_euler(_q_mul(_q_inv(q_level), q_cur))
+            # Verified against a known nose-down tilt: the -90 telemetry roll
+            # offset maps body PITCH onto q_rel.roll and body ROLL onto q_rel.yaw
+            # (a nose-down 15 deg showed up on q_rel.roll and rammed the DEM).
+            body_roll  = self.tilt_roll_sign  * yy
+            body_pitch = self.tilt_pitch_sign * rr
+            odom_msg.pose.pose.orientation = self.euler_to_quaternion(
+                body_roll, body_pitch, heading_deg)
+        else:
+            # Pure-yaw fallback: flat-ground-correct, ignores body tilt.
+            odom_msg.pose.pose.orientation = self.euler_to_quaternion(0.0, 0.0, heading_deg)
 
         self._pub_odom.publish(odom_msg)
 
@@ -508,6 +571,11 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self.headlights_on = self.get_parameter('headlights_on').value
         self.max_linear_accel  = self.get_parameter('max_linear_accel').value
         self.max_angular_accel = self.get_parameter('max_angular_accel').value
+        self.publish_body_tilt = self.get_parameter('publish_body_tilt').value
+        self.tilt_roll_offset  = self.get_parameter('tilt_roll_offset').value
+        self.tilt_pitch_offset = self.get_parameter('tilt_pitch_offset').value
+        self.tilt_roll_sign    = self.get_parameter('tilt_roll_sign').value
+        self.tilt_pitch_sign   = self.get_parameter('tilt_pitch_sign').value
         self.transport   = self.get_parameter('transport').value.strip().lower()
         self.tcp_role    = self.get_parameter('tcp_role').value.strip().lower()
         self.tcp_port    = self.get_parameter('tcp_port').value

@@ -80,13 +80,12 @@ lc_component_local_mapping:
     min_elevation: -1.0    # metres below the rover base
     max_elevation:  1.5    # metres above the rover base
 
-    # Apply live rover roll/pitch from /odom to the DEM. Keep FALSE: the odom
-    # orientation is in a non-standard frame (the same one that mirrors the
-    # dashboard heading), so the extracted roll is spurious (~-84° on flat
-    # ground) and rotates the DEM into a narrow warped sliver. The fixed camera
-    # mounting tilt is already handled by camera_angle. Only set true once the
-    # odom orientation is republished in a standard REP-103 frame.
-    apply_rover_tilt: false
+    # Apply live rover roll/pitch from /odom to the DEM. Now TRUE: the rover node
+    # recovers real body tilt from Unreal telemetry (relative-to-level method) and
+    # publishes it in a clean REP-103 odom, so the roll/pitch here are genuine and
+    # correct rough-terrain compensation. (It was disabled while odom carried the
+    # spurious ~-84° roll from the raw non-standard frame.)
+    apply_rover_tilt: true
 
     # ── Debug DEM visualisation ───────────────────────────────────────────────
     # Off: the container runs headless and the mission control dashboard now
