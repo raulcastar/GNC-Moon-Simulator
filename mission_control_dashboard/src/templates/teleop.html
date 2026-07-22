@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GNC MOON SIM — Teleop</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+<style>
+  :root {
+    --bg:      #10151c;
+    --panel:   #18212e;
+    --panel2:  #202b3a;
+    --line:    #2c3a4e;
+    --text:    #e6edf5;
+    --dim:     #8aa0b8;
+    --accent:  #33d6a6;
+    --cyan:    #59b0ff;
+    --amber:   #ffbe5c;
+    --red:     #ff6b7d;
+    --mono:    'Consolas','Menlo','DejaVu Sans Mono',monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--mono);
+    font-size: 13px; overflow: hidden;
+    display: grid; grid-template-rows: 46px 1fr; gap: 6px; padding: 6px;
+  }
+
+  /* ============ HEADER ============ */
+  header {
+    display: flex; align-items: center; gap: 16px; padding: 0 14px;
+    background: linear-gradient(180deg, var(--panel2), var(--panel));
+    border: 1px solid var(--line); border-radius: 4px;
+  }
+  .brand { color: var(--amber); font-weight: bold; letter-spacing: 3px; font-size: 15px;
+           text-shadow: 0 0 12px rgba(255,180,84,.3); white-space: nowrap; }
+  .brand small { color: var(--dim); letter-spacing: 1px; font-size: 10px; display: block; }
+  a.back { color: var(--dim); text-decoration: none; font-size: 11px; letter-spacing: 1px;
+           border: 1px solid var(--line); padding: 5px 10px; border-radius: 4px; }
+  a.back:hover { color: var(--cyan); border-color: var(--cyan); }
+  .spacer { flex: 1; }
+  .conn { display: flex; align-items: center; gap: 7px; font-size: 10px; letter-spacing: 1px;
+          color: var(--dim); }
+  .conn .dot { width: 10px; height: 10px; border-radius: 50%; background: #402028; }
+  .conn .dot.ok { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+
+  button.hdr {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 1px; cursor: pointer;
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 4px; padding: 7px 12px;
+  }
+  button.hdr:hover { border-color: var(--cyan); color: var(--cyan); }
+  button.hdr.on { border-color: var(--amber); color: var(--amber);
+                  box-shadow: 0 0 8px rgba(255,180,84,.25); }
+  button.estop {
+    background: #2a0d12; color: var(--red); border: 1px solid var(--red); font-weight: bold;
+    letter-spacing: 2px; padding: 7px 16px;
+  }
+  button.estop:hover { background: var(--red); color: #120305; }
+
+  /* ============ MAIN ============ */
+  main { display: grid; grid-template-columns: 1fr 340px; gap: 6px; min-height: 0; }
+  .col { display: flex; flex-direction: column; gap: 6px; min-height: 0; min-width: 0; }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+    display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  }
+  .panel-title {
+    padding: 4px 10px; font-size: 10px; letter-spacing: 2px; color: var(--dim);
+    border-bottom: 1px solid var(--line); background: var(--panel2);
+    display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
+  }
+  .panel-title .tag { color: var(--amber); }
+
+  /* ---- cameras ---- */
+  #cam-top { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; min-height: 0; }
+  .feed { position: relative; background: #000; min-height: 0; overflow: hidden; flex: 1; }
+  .feed img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .feed .nosig {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: #24344a; font-size: 12px; letter-spacing: 4px;
+    background: repeating-linear-gradient(0deg, #10151c 0 2px, #161d28 2px 4px);
+  }
+  #cam-side { flex: 0 0 150px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  #cam-side .panel { min-height: 0; }
+  #cam-side .feed { flex: 1; }
+
+  /* ---- telemetry ---- */
+  .tl { display: flex; justify-content: space-between; padding: 5px 12px;
+        border-bottom: 1px dashed #131e2c; }
+  .tl .k { color: var(--dim); letter-spacing: 1px; font-size: 11px; }
+  .tl .v { color: var(--accent); font-size: 15px; }
+  .tl .v.cy { color: var(--cyan); }
+  .tl .v.am { color: var(--amber); }
+
+  /* ---- drive pad ---- */
+  #drive { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+  .pad { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr);
+         gap: 8px; }
+  .pad button {
+    font-family: var(--mono); font-size: 22px; cursor: pointer; user-select: none;
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; aspect-ratio: 1 / 1; display: flex; align-items: center;
+    justify-content: center; touch-action: none;
+  }
+  .pad button:active, .pad button.act {
+    background: rgba(53,224,181,.16); border-color: var(--accent); color: var(--accent);
+    box-shadow: 0 0 10px rgba(53,224,181,.25);
+  }
+  .pad button.stop { color: var(--red); }
+  .pad button.stop:active { background: rgba(255,85,102,.16); border-color: var(--red);
+                            color: var(--red); box-shadow: 0 0 10px rgba(255,85,102,.25); }
+  .pad .blank { visibility: hidden; }
+
+  .slider { display: flex; flex-direction: column; gap: 4px; }
+  .slider label { display: flex; justify-content: space-between; font-size: 10px;
+                  letter-spacing: 1px; color: var(--dim); }
+  .slider label b { color: var(--cyan); font-weight: normal; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+
+  .hint { font-size: 10px; color: var(--dim); line-height: 1.6; letter-spacing: .5px; }
+  .hint kbd { background: var(--panel2); border: 1px solid var(--line); border-radius: 3px;
+              padding: 1px 5px; color: var(--text); }
+  .warn { color: var(--amber); }
+
+  /* ---- console ---- */
+  #console { flex: 1; overflow-y: auto; padding: 6px 10px; font-size: 11px; min-height: 0; }
+  #console .ln { padding: 1px 0; border-bottom: 1px dashed #101a26; white-space: nowrap;
+                 overflow: hidden; text-overflow: ellipsis; }
+  #console .WARN { color: var(--amber); }
+  #console .ERROR, #console .FATAL { color: var(--red); }
+</style>
+</head>
+<body>
+  <header>
+    <a class="back" href="#" id="hublink">◀ HUB</a>
+    <div class="brand">TELEOP<small>MANUAL DRIVE-BY-WIRE</small></div>
+    <div class="spacer"></div>
+    <button class="hdr" id="lights">HEADLIGHTS</button>
+    <button class="hdr estop" id="estop">■ E-STOP</button>
+    <div class="conn"><span class="dot" id="cdot"></span><span id="cstate">OFFLINE</span></div>
+  </header>
+
+  <main>
+    <!-- LEFT: cameras -->
+    <div class="col">
+      <div id="cam-top">
+        <div class="panel" id="cam-main">
+          <div class="panel-title"><span class="tag">◈</span> FRONT CAMERA
+            <span style="margin-left:auto" id="drive-state" class="warn">IDLE</span></div>
+          <div class="feed"><div class="nosig" id="ns-central">NO SIGNAL</div>
+            <img id="cam_central" style="display:none"></div>
+        </div>
+        <div class="panel" id="cam-depth">
+          <div class="panel-title"><span class="tag">◈</span> STEREO DEPTH</div>
+          <div class="feed"><div class="nosig" id="ns-depth">—</div>
+            <img id="depth" style="display:none"></div>
+        </div>
+      </div>
+      <div id="cam-side">
+        <div class="panel">
+          <div class="panel-title">LEFT</div>
+          <div class="feed"><div class="nosig" id="ns-left">—</div>
+            <img id="cam_left" style="display:none"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">RIGHT</div>
+          <div class="feed"><div class="nosig" id="ns-right">—</div>
+            <img id="cam_right" style="display:none"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: telemetry + controls -->
+    <div class="col">
+      <div class="panel" style="flex:0 0 auto">
+        <div class="panel-title"><span class="tag">▸</span> TELEMETRY</div>
+        <div class="tl"><span class="k">SPEED</span><span class="v am" id="t-speed">0.00 m/s</span></div>
+        <div class="tl"><span class="k">HEADING</span><span class="v cy" id="t-yaw">—</span></div>
+        <div class="tl"><span class="k">POSITION X / Y</span><span class="v" id="t-pos">—</span></div>
+        <div class="tl"><span class="k">CMD lin / ang</span><span class="v" id="t-cmd">0.00 / 0.00</span></div>
+      </div>
+
+      <div class="panel" style="flex:0 0 auto">
+        <div class="panel-title"><span class="tag">✛</span> DRIVE</div>
+        <div id="drive">
+          <div class="pad">
+            <div class="blank"></div>
+            <button data-dir="fwd"   title="Forward (W)">▲</button>
+            <div class="blank"></div>
+            <button data-dir="left"  title="Spot turn left (A)">↺</button>
+            <button class="stop" id="pad-stop" title="Stop (Space)">■</button>
+            <button data-dir="right" title="Spot turn right (D)">↻</button>
+            <div class="blank"></div>
+            <button data-dir="back"  title="Reverse (S)">▼</button>
+            <div class="blank"></div>
+          </div>
+          <div class="slider">
+            <label>MAX LINEAR <b><span id="lin-val">0.30</span> m/s</b></label>
+            <input type="range" id="lin-max" min="0.05" max="0.3" step="0.05" value="0.3">
+          </div>
+          <div class="slider">
+            <label>MAX ANGULAR <b><span id="ang-val">0.10</span> rad/s</b></label>
+            <input type="range" id="ang-max" min="0.01" max="0.10" step="0.01" value="0.10">
+          </div>
+          <div class="hint">
+            <kbd>W</kbd>/<kbd>S</kbd> drive straight · <kbd>A</kbd>/<kbd>D</kbd> spot turn ·
+            <kbd>Space</kbd> stop.<br>
+            <span class="warn">Do not set a GNC goal in the overview while driving here —
+            both command the same rover.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="flex:1">
+        <div class="panel-title"><span class="tag">≡</span> CONSOLE</div>
+        <div id="console"></div>
+      </div>
+    </div>
+  </main>
+
+<script>
+  const host = window.location.hostname || 'localhost';
+  document.getElementById('hublink').href = `http://${host}:5000/`;
+
+  const socket = io();
+  const $ = id => document.getElementById(id);
+
+  // ---- connection state ----
+  socket.on('connect',    () => { $('cdot').classList.add('ok'); $('cstate').textContent = 'ONLINE'; });
+  socket.on('disconnect', () => { $('cdot').classList.remove('ok'); $('cstate').textContent = 'OFFLINE'; });
+
+  // ---- camera feeds ----
+  function showFeed(id, nsId, b64) {
+    const img = $(id); img.src = 'data:image/jpeg;base64,' + b64;
+    if (img.style.display === 'none') { img.style.display = 'block'; $(nsId).style.display = 'none'; }
+  }
+  socket.on('feed', m => {
+    if (m.id === 'cam_central') showFeed('cam_central', 'ns-central', m.image);
+    else if (m.id === 'cam_left')  showFeed('cam_left',  'ns-left',  m.image);
+    else if (m.id === 'cam_right') showFeed('cam_right', 'ns-right', m.image);
+    else if (m.id === 'depth')     showFeed('depth',     'ns-depth', m.image);
+  });
+
+  // ---- telemetry ----
+  socket.on('odom_update', m => {
+    $('t-speed').textContent = m.speed.toFixed(2) + ' m/s';
+    $('t-yaw').textContent   = m.yaw.toFixed(0) + '°';
+    $('t-pos').textContent   = m.x.toFixed(2) + ' / ' + m.y.toFixed(2) + ' m';
+  });
+
+  // ---- console ----
+  const con = $('console');
+  socket.on('log', m => {
+    const d = document.createElement('div');
+    d.className = 'ln ' + m.level;
+    d.textContent = `[${m.level}] ${m.node.split('.').pop()}: ${m.text}`;
+    con.appendChild(d);
+    while (con.childNodes.length > 100) con.removeChild(con.firstChild);
+    con.scrollTop = con.scrollHeight;
+  });
+
+  // ============ DRIVE CONTROL ============
+  // One motion at a time, no blended arcs:
+  //   fwd / back  → drive straight (angular = 0)
+  //   left / right → SPOT TURN, rotate in place (linear = 0)
+  // `held` is a stack of currently-pressed directions; the most recent one is
+  // active, and releasing it reverts to the previous. The send loop runs at
+  // 5 Hz and emits one trailing zero when everything is released so the rover
+  // stops promptly. (A node-side watchdog is the backstop if the tab dies.)
+  let maxLin = 0.3, maxAng = 0.10;
+  let held = [], loop = null;
+
+  // Soft start: the emitted velocity eases up toward the target from standstill
+  // instead of stepping straight to full speed. Per-tick (200 ms) increments —
+  // reversing uses a gentler step than forward (the rover pitches back harder
+  // under rearward accel). Slowing/stopping stay immediate for responsiveness.
+  const RAMP_LIN_FWD  = 0.05;   // m/s added per tick accelerating forward (~1.2 s to 0.3)
+  const RAMP_LIN_BACK = 0.02;   // m/s added per tick accelerating in reverse (~3 s to 0.3)
+  const RAMP_ANG = 0.03;        // rad/s added per tick while accelerating
+  let outLin = 0, outAng = 0;
+
+  function rampTo(cur, tgt, step) {
+    if (tgt === 0) return 0;                                   // stop: immediate
+    if (Math.sign(tgt) !== Math.sign(cur))                    // reverse: start soft
+      return Math.sign(tgt) * Math.min(step, Math.abs(tgt));
+    if (Math.abs(tgt) < Math.abs(cur)) return tgt;            // decelerate: immediate
+    return cur + Math.sign(tgt) * Math.min(step, Math.abs(tgt) - Math.abs(cur));
+  }
+
+  const active = () => (held.length ? held[held.length - 1] : null);
+
+  function cmd() {
+    switch (active()) {
+      case 'fwd':   return [ maxLin, 0];
+      case 'back':  return [-maxLin, 0];
+      case 'left':  return [0,  maxAng];   // spot turn CCW
+      case 'right': return [0, -maxAng];   // spot turn CW
+      default:      return [0, 0];
+    }
+  }
+
+  function tick() {
+    const [lin, ang] = cmd();
+    const linStep = lin < 0 ? RAMP_LIN_BACK : RAMP_LIN_FWD;   // gentler in reverse
+    outLin = rampTo(outLin, lin, linStep);
+    outAng = rampTo(outAng, ang, RAMP_ANG);
+    socket.emit('teleop_cmd', { lin: outLin, ang: outAng });
+    $('t-cmd').textContent = outLin.toFixed(2) + ' / ' + outAng.toFixed(2);
+    if (lin === 0 && ang === 0 && outLin === 0 && outAng === 0) {
+      clearInterval(loop); loop = null;
+    }
+  }
+  function recompute() {
+    const a = active();
+    const s = $('drive-state');
+    if (a) { s.textContent = 'DRIVING'; s.style.color = 'var(--accent)'; }
+    else   { s.textContent = 'IDLE';    s.style.color = 'var(--amber)'; }
+    paint();
+    if (!loop) loop = setInterval(tick, 200);   // 5 Hz + a trailing zero
+  }
+  function pushDir(d) { if (!held.includes(d)) held.push(d); recompute(); }
+  function popDir(d)  { held = held.filter(x => x !== d); recompute(); }
+  function clearDrive() { held = []; recompute(); }
+
+  function paint() {
+    const a = active();
+    document.querySelectorAll('.pad button[data-dir]').forEach(b =>
+      b.classList.toggle('act', b.dataset.dir === a));
+  }
+
+  // ---- keyboard ----
+  const KEYMAP = { w: 'fwd', arrowup: 'fwd', s: 'back', arrowdown: 'back',
+                   a: 'left', arrowleft: 'left', d: 'right', arrowright: 'right' };
+  const down = {};
+  window.addEventListener('keydown', e => {
+    const k = e.key.toLowerCase();
+    if (k === ' ') { e.preventDefault(); for (const kk in down) down[kk] = false;
+                     clearDrive(); return; }
+    const d = KEYMAP[k];
+    if (d) { e.preventDefault(); if (!down[k]) { down[k] = true; pushDir(d); } }
+  });
+  window.addEventListener('keyup', e => {
+    const k = e.key.toLowerCase(), d = KEYMAP[k];
+    if (d && down[k]) {
+      down[k] = false;
+      // only release the direction if no other held key still maps to it
+      const stillHeld = Object.keys(down).some(kk => down[kk] && KEYMAP[kk] === d);
+      if (!stillHeld) popDir(d);
+    }
+  });
+  window.addEventListener('blur', () => {   // lost focus → drop everything
+    for (const kk in down) down[kk] = false; clearDrive();
+  });
+
+  // ---- on-screen pad (press & hold) ----
+  document.querySelectorAll('.pad button[data-dir]').forEach(b => {
+    const d = b.dataset.dir;
+    b.addEventListener('pointerdown', e => { e.preventDefault(); pushDir(d); });
+    const rel = () => popDir(d);
+    b.addEventListener('pointerup', rel);
+    b.addEventListener('pointerleave', rel);
+    b.addEventListener('pointercancel', rel);
+  });
+  $('pad-stop').addEventListener('pointerdown', e => { e.preventDefault();
+    for (const kk in down) down[kk] = false; clearDrive(); });
+
+  // ---- sliders ----
+  $('lin-max').addEventListener('input', e => {
+    maxLin = +e.target.value; $('lin-val').textContent = maxLin.toFixed(2); if (loop) tick(); });
+  $('ang-max').addEventListener('input', e => {
+    maxAng = +e.target.value; $('ang-val').textContent = maxAng.toFixed(2); if (loop) tick(); });
+
+  // ---- E-STOP / headlights ----
+  $('estop').addEventListener('click', () => {
+    for (const kk in down) down[kk] = false; clearDrive();
+    socket.emit('stop_rover', {});
+  });
+  let lightsOn = false;
+  $('lights').addEventListener('click', () => {
+    lightsOn = !lightsOn;
+    socket.emit('headlights', { on: lightsOn });
+    $('lights').classList.toggle('on', lightsOn);
+    $('lights').textContent = lightsOn ? 'HEADLIGHTS ON' : 'HEADLIGHTS';
+  });
+
+  paint();
+</script>
+</body>
+</html>

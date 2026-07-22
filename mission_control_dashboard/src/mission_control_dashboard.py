@@ -43,11 +43,40 @@ from flask_socketio import SocketIO
 pkg_share = get_package_share_directory('mission_control_dashboard')
 template_dir = os.path.join(pkg_share, 'templates')
 
-app = Flask(__name__, template_folder=template_dir)
-app.config['SECRET_KEY'] = 'lunar_mission_secure'
+# Three independent web servers, one ROS node behind them all:
+#   5000  hub      — a menu that links to the other screens
+#   5001  overview — the full GNC mission-control dashboard
+#   5002  teleop   — manual drive-by-wire, bypassing the GNC planner
+# network_mode: host means each port is reachable on the host directly, so no
+# compose port mapping is needed. Each Flask app gets its own SocketIO server;
+# the ROS node fans shared feeds (cameras, telemetry) out to whichever servers
+# need them via emit_over()/emit_all().
 
+app = Flask('overview', template_folder=template_dir)
+app.config['SECRET_KEY'] = 'lunar_mission_secure'
 socketio = SocketIO(app, async_mode='threading', cors_allowed_origins="*",
                     max_http_buffer_size=10000000)
+
+app_hub = Flask('hub', template_folder=template_dir)
+app_hub.config['SECRET_KEY'] = 'lunar_hub'
+sio_hub = SocketIO(app_hub, async_mode='threading', cors_allowed_origins="*")
+
+app_teleop = Flask('teleop', template_folder=template_dir)
+app_teleop.config['SECRET_KEY'] = 'lunar_teleop'
+sio_teleop = SocketIO(app_teleop, async_mode='threading', cors_allowed_origins="*",
+                      max_http_buffer_size=10000000)
+
+
+def emit_over(event, data):
+    """Emit only to the overview dashboard (5001)."""
+    socketio.emit(event, data)
+
+
+def emit_all(event, data):
+    """Emit to every operator screen that shares this feed (overview + teleop)."""
+    socketio.emit(event, data)
+    sio_teleop.emit(event, data)
+
 
 ros_node = None
 
@@ -112,6 +141,13 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         self._last_traj = 0.0
         self._prev_odom = None      # (t, x, y) for speed estimation
 
+        # Manual teleop (5002). The rover holds its last cmd_vel, so a dropped
+        # browser or a stuck key must not leave it driving: engage on any
+        # non-zero command and let a watchdog zero it if commands stop arriving.
+        self._teleop_watchdog = None
+        self._last_teleop = 0.0
+        self._teleop_engaged = False
+
         self.declare_parameter('global_res', 1.0)
         self.declare_parameter('camera_namespace', 'navcam')
         self.map_resolution = self.get_parameter('global_res').value
@@ -154,10 +190,13 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         # Already-colourised products only need JPEG encoding.
         self._subs.append(sub(
             Image, f'{ns}/central/image_depth/visualization',
-            self._make_image_relay('depth'), qos_profile_sensor_data))
+            self._make_image_relay('depth', both=True), qos_profile_sensor_data))
         self._subs.append(sub(
             Image, f'{ns}/central/object_mask',
             self._make_image_relay('mask'), qos_profile_sensor_data))
+
+        # 5 Hz teleop deadman: stop the rover if manual commands stop arriving.
+        self._teleop_watchdog = self.create_timer(0.2, self._teleop_watchdog_cb)
 
         return TransitionCallbackReturn.SUCCESS
 
@@ -170,6 +209,9 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         return super().on_deactivate(state)
 
     def on_cleanup(self, state: State) -> TransitionCallbackReturn:
+        if self._teleop_watchdog is not None:
+            self.destroy_timer(self._teleop_watchdog)
+            self._teleop_watchdog = None
         for s in self._subs:
             self.destroy_subscription(s)
         self._subs = []
@@ -193,13 +235,19 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         def cb(msg: CompressedImage):
             if not self._is_active():
                 return
-            socketio.emit('feed', {
+            emit_all('feed', {
                 'id': feed_id,
                 'image': base64.b64encode(bytes(msg.data)).decode('ascii')})
         return cb
 
-    def _make_image_relay(self, feed_id: str):
-        """Relay a raw colour Image, JPEG-encoding it first."""
+    def _make_image_relay(self, feed_id: str, both: bool = False):
+        """Relay a raw colour Image, JPEG-encoding it first.
+
+        both=True also mirrors the feed to the teleop screen (used for the
+        stereo depth view); otherwise it is overview-only.
+        """
+        emit = emit_all if both else emit_over
+
         def cb(msg: Image):
             if not self._is_active():
                 return
@@ -208,7 +256,7 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
                 ok, buf = cv2.imencode('.jpg', img,
                                        [cv2.IMWRITE_JPEG_QUALITY, 80])
                 if ok:
-                    socketio.emit('feed', {
+                    emit('feed', {
                         'id': feed_id,
                         'image': base64.b64encode(buf).decode('ascii')})
             except Exception as e:
@@ -309,7 +357,7 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
                 speed = float(np.hypot(p.x - x0, p.y - y0) / dt)
         self._prev_odom = (now, p.x, p.y)
 
-        socketio.emit('odom_update', {
+        emit_all('odom_update', {
             'x': round(p.x, 3), 'y': round(p.y, 3), 'z': round(p.z, 3),
             'yaw': round(float(yaw), 1), 'speed': round(speed, 3),
         })
@@ -353,7 +401,13 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
             return
         if msg.level < 20:                      # drop DEBUG chatter
             return
-        socketio.emit('log', {
+        # Suppress the stereo node's per-frame coverage report ("matched X% of
+        # the left frame | Y% of the central frame received depth"): it fires
+        # every frame and floods the operator console. Filtered here so it still
+        # appears in the raw ROS log, just not on any dashboard.
+        if 'received depth' in msg.msg and 'matched' in msg.msg:
+            return
+        emit_all('log', {
             'level': _LOG_LEVELS.get(msg.level, str(msg.level)),
             'node': msg.name,
             'text': msg.msg,
@@ -455,10 +509,43 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
 
     def stop_rover(self) -> None:
         """Zero twist, sent thrice for luck — the rover holds the last command."""
+        self._teleop_engaged = False
         if self._pub_cmdvel and self._pub_cmdvel.is_activated:
             for _ in range(3):
                 self._pub_cmdvel.publish(Twist())
             self.get_logger().warn("ALL STOP commanded from the console.")
+
+    def teleop_drive(self, lin: float, ang: float) -> None:
+        """
+        Publish a manual cmd_vel from the teleop screen (5002).
+
+        This shares the cmd_vel bus with the GNC planner, which only commands
+        while it is chasing a goal — so manual driving is unobstructed as long as
+        no goal is active. Engaging arms the watchdog so a dropped connection
+        cannot leave the rover running.
+        """
+        if not (self._pub_cmdvel and self._pub_cmdvel.is_activated):
+            return
+        lin = float(lin)
+        ang = float(ang)
+        t = Twist()
+        t.linear.x = lin
+        t.angular.z = ang
+        self._pub_cmdvel.publish(t)
+        self._last_teleop = time.monotonic()
+        self._teleop_engaged = self._teleop_engaged or lin != 0.0 or ang != 0.0
+
+    def _teleop_watchdog_cb(self) -> None:
+        """Zero the rover if a teleop session goes quiet (dropped tab, stuck key)."""
+        if not self._teleop_engaged:
+            return
+        if time.monotonic() - self._last_teleop <= 0.6:
+            return
+        self._teleop_engaged = False
+        if self._pub_cmdvel and self._pub_cmdvel.is_activated:
+            self._pub_cmdvel.publish(Twist())
+            self.get_logger().warn("Teleop watchdog: manual commands stopped — "
+                                   "rover halted.")
 
     def dispatch_goal(self, x: float, y: float) -> None:
         if self._pub_goal and self._pub_goal.is_activated:
@@ -475,7 +562,43 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
 
 
 # =========================================================================
-# Flask routing
+# Flask routing — hub (5000)
+# =========================================================================
+
+@app_hub.route('/')
+def hub():
+    return render_template('hub.html')
+
+
+# =========================================================================
+# Flask routing — teleop (5002)
+# =========================================================================
+
+@app_teleop.route('/')
+def teleop():
+    return render_template('teleop.html')
+
+
+@sio_teleop.on('teleop_cmd')
+def handle_teleop_cmd(json_data):
+    if ros_node is not None:
+        ros_node.teleop_drive(json_data.get('lin', 0.0), json_data.get('ang', 0.0))
+
+
+@sio_teleop.on('headlights')
+def handle_teleop_headlights(json_data):
+    if ros_node is not None:
+        ros_node.set_headlights(json_data.get('on', False))
+
+
+@sio_teleop.on('stop_rover')
+def handle_teleop_stop(json_data=None):
+    if ros_node is not None:
+        ros_node.stop_rover()
+
+
+# =========================================================================
+# Flask routing — overview (5001)
 # =========================================================================
 
 @app.route('/')
@@ -530,8 +653,20 @@ def main(args=None):
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
 
+    # Hub (5000) and teleop (5002) run in background threads; the overview (5001)
+    # holds the main thread. All three share ros_node via the module globals.
+    def _serve(sio, flask_app, port):
+        sio.run(flask_app, host='0.0.0.0', port=port, allow_unsafe_werkzeug=True)
+
+    threading.Thread(target=_serve, args=(sio_hub, app_hub, 5000),
+                     daemon=True).start()
+    threading.Thread(target=_serve, args=(sio_teleop, app_teleop, 5002),
+                     daemon=True).start()
+    ros_node.get_logger().info(
+        "Mission control up: hub :5000  overview :5001  teleop :5002")
+
     try:
-        socketio.run(app, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
+        socketio.run(app, host='0.0.0.0', port=5001, allow_unsafe_werkzeug=True)
     except KeyboardInterrupt:
         pass
     finally:

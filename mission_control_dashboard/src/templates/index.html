@@ -7,16 +7,16 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <style>
   :root {
-    --bg:      #05080d;
-    --panel:   #0a1018;
-    --panel2:  #0e1622;
-    --line:    #1b2a3d;
-    --text:    #b8c7d9;
-    --dim:     #5a6b80;
-    --accent:  #35e0b5;
-    --cyan:    #4fc3f7;
-    --amber:   #ffb454;
-    --red:     #ff5566;
+    --bg:      #10151c;
+    --panel:   #18212e;
+    --panel2:  #202b3a;
+    --line:    #2c3a4e;
+    --text:    #e6edf5;
+    --dim:     #8aa0b8;
+    --accent:  #33d6a6;
+    --cyan:    #59b0ff;
+    --amber:   #ffbe5c;
+    --red:     #ff6b7d;
     --mono:    'Consolas','Menlo','DejaVu Sans Mono',monospace;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -80,7 +80,7 @@
   .feed .nosig {
     position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
     color: #24344a; font-size: 12px; letter-spacing: 4px;
-    background: repeating-linear-gradient(0deg, #04070c 0 2px, #060a11 2px 4px);
+    background: repeating-linear-gradient(0deg, #10151c 0 2px, #161d28 2px 4px);
   }
 
   /* ============ MAP ============ */
@@ -247,9 +247,9 @@
         </div>
       </div>
       <div id="map-hint">
-        <span><b class="sw" style="background:#ff5566"></b>PLANNED</span>
-        <span><b class="sw" style="background:#4fc3f7"></b>DRIVEN</span>
-        <span><b style="color:#35e0b5">➤</b> ROVER + HEADING</span>
+        <span><b class="sw" style="background:#ff6b7d"></b>PLANNED</span>
+        <span><b class="sw" style="background:#59b0ff"></b>DRIVEN</span>
+        <span><b style="color:#33d6a6">➤</b> ROVER + HEADING</span>
         <span><b>⇕</b> WHEEL ZOOM · DRAG PAN</span>
       </div>
     </div>
@@ -420,7 +420,7 @@ function project(x, y, z, W, H) {
 function drawLidar() {
   lc.width = lc.clientWidth; lc.height = lc.clientHeight;
   const W = lc.width, H = lc.height;
-  lctx.fillStyle = '#04070c'; lctx.fillRect(0, 0, W, H);
+  lctx.fillStyle = '#10151c'; lctx.fillRect(0, 0, W, H);
 
   /* ground grid: 5 m squares out to 20 m, plus body axes */
   lctx.strokeStyle = '#12202f'; lctx.lineWidth = 1;
@@ -433,7 +433,7 @@ function drawLidar() {
   const o = project(0,0,0,W,H), ax = project(4,0,0,W,H), ay = project(0,4,0,W,H), az = project(0,0,3,W,H);
   const axis = (p, c) => { if (o && p) { lctx.strokeStyle = c; lctx.lineWidth = 2;
     lctx.beginPath(); lctx.moveTo(o[0],o[1]); lctx.lineTo(p[0],p[1]); lctx.stroke(); } };
-  axis(ax, '#35e0b5'); axis(ay, '#4fc3f7'); axis(az, '#ffb454');
+  axis(ax, '#33d6a6'); axis(ay, '#59b0ff'); axis(az, '#ffbe5c');
 
   if (!cloud) return;
   let zmin = 1e9, zmax = -1e9;
@@ -483,7 +483,7 @@ const V_EXAG = 1.5;                        /* vertical exaggeration */
 
 function demInit() {
   demScene = new THREE.Scene();
-  demScene.background = new THREE.Color(0x04070c);
+  demScene.background = new THREE.Color(0x10151c);
   demCam = new THREE.PerspectiveCamera(50, 1, 0.1, 500);
   demCam.up.set(0, 0, 1);                  /* z is up: grid x lateral, y forward */
   demRenderer = new THREE.WebGLRenderer({ antialias: true });
@@ -729,8 +729,8 @@ function drawOverlay() {
     });
     odomCtx.stroke();
   };
-  path(globalPath, '#ff5566');
-  path(drivenPath, '#4fc3f7');
+  path(globalPath, '#ff6b7d');
+  path(drivenPath, '#59b0ff');
 
   if (currentPose) {
     const x = currentPose.x/mapRes, y = mapH - currentPose.y/mapRes;
@@ -745,7 +745,7 @@ function drawOverlay() {
       const tx = x + dx*L,        ty = y + dy*L;        // arrow tip
       const bx = x + dx*(L - hl), by = y + dy*(L - hl); // base of the head
       const px = -dy, py = dx;                          // unit perpendicular
-      odomCtx.strokeStyle = '#35e0b5'; odomCtx.fillStyle = '#35e0b5';
+      odomCtx.strokeStyle = '#33d6a6'; odomCtx.fillStyle = '#33d6a6';
       odomCtx.lineWidth = 3; odomCtx.lineCap = 'round';
       odomCtx.beginPath(); odomCtx.moveTo(x, y); odomCtx.lineTo(bx, by); odomCtx.stroke();
       odomCtx.beginPath();
@@ -756,7 +756,7 @@ function drawOverlay() {
     }
     // Rover body marker, drawn on top of the arrow's tail.
     odomCtx.beginPath(); odomCtx.arc(x, y, 6, 0, 7);
-    odomCtx.fillStyle = '#35e0b5'; odomCtx.fill();
+    odomCtx.fillStyle = '#33d6a6'; odomCtx.fill();
     odomCtx.strokeStyle = '#fff'; odomCtx.lineWidth = 2; odomCtx.stroke();
   }
 }
