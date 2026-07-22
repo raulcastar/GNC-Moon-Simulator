@@ -126,7 +126,7 @@ def radial_to_planar(point_depth: np.ndarray, fx: float, fy: float,
 
 class FrameStreamReceiver:
     """
-    TCP server for the NavcamStreamer plugin (unreal/NavcamStreamer/).
+    TCP server for the StereoCamStreamer plugin (unreal/StereoCamStreamer/).
 
     Unreal renders the navcams with each frame and pushes them here over one
     connection, so no UnrealCV render-on-demand — and no game-thread stall —
@@ -160,7 +160,7 @@ class FrameStreamReceiver:
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
         self._log.info(f'Frame stream: listening on {self._addr[0]}:{self._addr[1]} '
-                       f'for the NavcamStreamer plugin.')
+                       f'for the StereoCamStreamer plugin.')
 
     def stop(self) -> None:
         self._stop.set()
@@ -294,7 +294,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self.cv_bridge = CvBridge()
         self._is_active = False
 
-        # 'stream' image source (NavcamStreamer plugin pushes frames).
+        # 'stream' image source (StereoCamStreamer plugin pushes frames).
         self._stream: Optional[FrameStreamReceiver] = None
         self._last_stream_fid: int = -1
 
@@ -328,14 +328,14 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                 ('port',                    rclpy.Parameter.Type.INTEGER),
                 # 'unrealcv' renders on demand (stalls the game ~300 ms per
                 # camera); 'stream' receives pushed frames from the
-                # NavcamStreamer plugin (unreal/NavcamStreamer/) — no stall.
+                # StereoCamStreamer plugin (unreal/StereoCamStreamer/) — no stall.
                 ('image_source',            rclpy.Parameter.Type.STRING),
                 ('stream_bind_ip',          rclpy.Parameter.Type.STRING),
                 ('stream_port',             rclpy.Parameter.Type.INTEGER),
                 ('left_camera_id',          rclpy.Parameter.Type.INTEGER),
                 ('right_camera_id',         rclpy.Parameter.Type.INTEGER),
                 ('center_camera_id',        rclpy.Parameter.Type.INTEGER),
-                # Stream cam id of the object-segmentation capture (NavcamStreamer
+                # Stream cam id of the object-segmentation capture (StereoCamStreamer
                 # MaskCamId). < 0 disables the mask. Stream mode only.
                 ('mask_camera_id',          rclpy.Parameter.Type.INTEGER),
                 # Legend for the object mask: "<stencil_id>:<name>" entries, one
@@ -1073,7 +1073,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
 
         Stream mode has no UnrealCV to measure, so the geometry is declared:
         baseline_m and hfov_deg from parameters, image size from the frames,
-        the eyes co-rotated (SGBM requires it anyway — the NavcamStreamer
+        the eyes co-rotated (SGBM requires it anyway — the StereoCamStreamer
         captures must share a rotation), and the centre camera on the baseline
         at center_offset_m from the left eye (midpoint when negative).
         """
@@ -1104,7 +1104,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
 
     def _capture_from_stream(self):
         """
-        Take the newest same-tick pair from the NavcamStreamer plugin.
+        Take the newest same-tick pair from the StereoCamStreamer plugin.
 
         Frames were rendered with the game frame and pushed here — no UnrealCV,
         no game-thread stall. Returns None when there is nothing new to
@@ -1116,7 +1116,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                                        self.center_camera_id)
         if got is None:
             self.get_logger().warn(
-                'No streamed frames yet. Is the NavcamStreamer component in '
+                'No streamed frames yet. Is the StereoCamStreamer component in '
                 'the level, and the game playing?', throttle_duration_sec=15.0)
             return None
         left, right, center, fid, age = got
@@ -1586,7 +1586,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                 f"not '{self.image_source}'")
 
         if self.image_source == 'stream':
-            # No UnrealCV at all: frames come from the NavcamStreamer plugin
+            # No UnrealCV at all: frames come from the StereoCamStreamer plugin
             # and the rig geometry from parameters. Nothing can be measured,
             # so the two geometry inputs are mandatory.
             if self.baseline_m_param <= 0.0 or self.hfov_deg_param <= 0.0:
@@ -1601,20 +1601,20 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                     'depth_gt needs UnrealCV and is disabled in stream mode.')
                 self.validate_against_ground_truth = False
             # The object mask, by contrast, is served by a dedicated
-            # NavcamStreamer capture (post-process material over the Custom
+            # StereoCamStreamer capture (post-process material over the Custom
             # Depth-Stencil buffer). It works in stream mode as long as
             # mask_camera_id names that capture.
             if self.enable_object_mask:
                 if self.mask_camera_id is None or self.mask_camera_id < 0:
                     self.get_logger().warn(
                         'enable_object_mask is on but mask_camera_id is unset '
-                        '(< 0): the mask needs the NavcamStreamer segmentation '
+                        '(< 0): the mask needs the StereoCamStreamer segmentation '
                         'capture. Disabling the object mask.')
                     self.enable_object_mask = False
                 else:
                     self.get_logger().info(
                         f'Object mask served from stream cam id '
-                        f'{self.mask_camera_id} (NavcamStreamer segmentation '
+                        f'{self.mask_camera_id} (StereoCamStreamer segmentation '
                         f'capture).')
             self._baseline_m = self.baseline_m_param
             self._swap_lr = False

@@ -1,4 +1,4 @@
-#include "NavcamStreamer.h"
+#include "StereoCamStreamer.h"
 
 #include "Sockets.h"
 #include "SocketSubsystem.h"
@@ -29,12 +29,12 @@ namespace
 	static_assert(sizeof(FNavFrameHeader) == 24, "header must be 24 bytes");
 }
 
-UNavcamStreamer::UNavcamStreamer()
+UStereoCamStreamer::UStereoCamStreamer()
 {
 	PrimaryComponentTick.bCanEverTick = true;
 }
 
-void UNavcamStreamer::BeginPlay()
+void UStereoCamStreamer::BeginPlay()
 {
 	Super::BeginPlay();
 
@@ -44,15 +44,15 @@ void UNavcamStreamer::BeginPlay()
 	ResolveCapture(CenterCaptureName, CenterCamId);
 	ResolveCapture(MaskCaptureName, MaskCamId);   // optional; skipped if blank
 
-	Stream = MakeShared<FNavcamStreamState, ESPMode::ThreadSafe>();
+	Stream = MakeShared<FStereoCamStreamState, ESPMode::ThreadSafe>();
 
 	// The sender thread runs regardless; it (re)dials the node every few
 	// seconds, so the start order of Unreal and ROS is irrelevant.
 	bStopSender = false;
-	SenderThread = FRunnableThread::Create(this, TEXT("NavcamSender"));
+	SenderThread = FRunnableThread::Create(this, TEXT("StereoCamSender"));
 }
 
-void UNavcamStreamer::EndPlay(const EEndPlayReason::Type Reason)
+void UStereoCamStreamer::EndPlay(const EEndPlayReason::Type Reason)
 {
 	bStopSender = true;
 	if (SenderThread)
@@ -76,7 +76,7 @@ void UNavcamStreamer::EndPlay(const EEndPlayReason::Type Reason)
 	Super::EndPlay(Reason);
 }
 
-TArray<FString> UNavcamStreamer::GetSceneCaptureNames() const
+TArray<FString> UStereoCamStreamer::GetSceneCaptureNames() const
 {
 	TSet<FString> Names;
 
@@ -147,7 +147,7 @@ namespace
 	}
 }
 
-void UNavcamStreamer::ResolveCapture(const FName& Name, int32 CamId)
+void UStereoCamStreamer::ResolveCapture(const FName& Name, int32 CamId)
 {
 	if (Name.IsNone())
 	{
@@ -184,7 +184,7 @@ void UNavcamStreamer::ResolveCapture(const FName& Name, int32 CamId)
 			{
 				Found = C;
 				UE_LOG(LogTemp, Log,
-				       TEXT("NavcamStreamer: '%s' matched component '%s' on "
+				       TEXT("StereoCamStreamer: '%s' matched component '%s' on "
 				            "'%s' (underscores/case ignored)."),
 				       *Name.ToString(), *C->GetName(),
 				       *GetNameSafe(C->GetOwner()));
@@ -201,7 +201,7 @@ void UNavcamStreamer::ResolveCapture(const FName& Name, int32 CamId)
 			                          *GetNameSafe(C->GetOwner())));
 		}
 		UE_LOG(LogTemp, Error,
-		       TEXT("NavcamStreamer: no SceneCapture2D named '%s' anywhere in "
+		       TEXT("StereoCamStreamer: no SceneCapture2D named '%s' anywhere in "
 		            "the world. Available: [%s]"),
 		       *Name.ToString(), *FString::Join(Names, TEXT(", ")));
 		return;
@@ -217,7 +217,7 @@ void UNavcamStreamer::ResolveCapture(const FName& Name, int32 CamId)
 		RT->UpdateResourceImmediate(true);
 		Found->TextureTarget = RT;
 		UE_LOG(LogTemp, Log,
-		       TEXT("NavcamStreamer: created a %dx%d RGBA8 render target for '%s'."),
+		       TEXT("StereoCamStreamer: created a %dx%d RGBA8 render target for '%s'."),
 		       CaptureWidth, CaptureHeight, *Name.ToString());
 	}
 
@@ -245,17 +245,35 @@ void UNavcamStreamer::ResolveCapture(const FName& Name, int32 CamId)
 		PP.bOverride_AutoExposureBias = true;
 		PP.AutoExposureBias = ExposureCompensationEV;
 	}
+	else if (bLimitAutoExposure)
+	{
+		// Keep auto-exposure, but clamp the EV100 range it may adapt into.
+		// AutoExposureMin/MaxBrightness carry EV100 under UE5's extended
+		// luminance range (the editor's "Min/Max EV100"). Setting the two
+		// equal pins a fixed exposure identical on both stereo eyes.
+		FPostProcessSettings& PP = Found->PostProcessSettings;
+		const float MinEv = FMath::Min(MinEV100, MaxEV100);
+		const float MaxEv = FMath::Max(MinEV100, MaxEV100);
+		PP.bOverride_AutoExposureMinBrightness = true;
+		PP.AutoExposureMinBrightness = MinEv;
+		PP.bOverride_AutoExposureMaxBrightness = true;
+		PP.AutoExposureMaxBrightness = MaxEv;
+		UE_LOG(LogTemp, Log,
+		       TEXT("StereoCamStreamer: '%s' auto-exposure clamped to EV100 "
+		            "[%.2f, %.2f]."),
+		       *Name.ToString(), MinEv, MaxEv);
+	}
 
-	FNavcamResolved Entry;
+	FStereoCamResolved Entry;
 	Entry.Capture = Found;
 	Entry.CamId = CamId;
 	Active.Add(Entry);
-	UE_LOG(LogTemp, Log, TEXT("NavcamStreamer: '%s' -> cam id %d (%dx%d)."),
+	UE_LOG(LogTemp, Log, TEXT("StereoCamStreamer: '%s' -> cam id %d (%dx%d)."),
 	       *Name.ToString(), CamId,
 	       Found->TextureTarget->SizeX, Found->TextureTarget->SizeY);
 }
 
-bool UNavcamStreamer::TryConnect()
+bool UStereoCamStreamer::TryConnect()
 {
 	// Called only from Run() (background thread). Non-blocking connect with a
 	// short bounded wait: FSocket::Connect() on a BLOCKING socket can take the
@@ -268,14 +286,14 @@ bool UNavcamStreamer::TryConnect()
 	FIPv4Address Ip;
 	if (!FIPv4Address::Parse(ServerIp, Ip))
 	{
-		UE_LOG(LogTemp, Error, TEXT("NavcamStreamer: bad ServerIp '%s'."), *ServerIp);
+		UE_LOG(LogTemp, Error, TEXT("StereoCamStreamer: bad ServerIp '%s'."), *ServerIp);
 		return false;
 	}
 	TSharedRef<FInternetAddr> Addr = Subsystem->CreateInternetAddr();
 	Addr->SetIp(Ip.Value);
 	Addr->SetPort(ServerPort);
 
-	FSocket* NewSocket = Subsystem->CreateSocket(NAME_Stream, TEXT("NavcamStream"), false);
+	FSocket* NewSocket = Subsystem->CreateSocket(NAME_Stream, TEXT("StereoCamStream"), false);
 	NewSocket->SetNonBlocking(true);
 	NewSocket->SetNoDelay(true);
 	int32 Unused;
@@ -294,7 +312,7 @@ bool UNavcamStreamer::TryConnect()
 		if (!bLoggedWaiting)
 		{
 			UE_LOG(LogTemp, Warning,
-			       TEXT("NavcamStreamer: cannot reach %s:%d yet — retrying "
+			       TEXT("StereoCamStreamer: cannot reach %s:%d yet — retrying "
 			            "every 3 s until the ROS stereo node is up."),
 			       *ServerIp, ServerPort);
 			bLoggedWaiting = true;
@@ -307,11 +325,11 @@ bool UNavcamStreamer::TryConnect()
 	bLoggedWaiting = false;
 	Socket = NewSocket;
 	bConnected = true;
-	UE_LOG(LogTemp, Log, TEXT("NavcamStreamer: connected to %s:%d."), *ServerIp, ServerPort);
+	UE_LOG(LogTemp, Log, TEXT("StereoCamStreamer: connected to %s:%d."), *ServerIp, ServerPort);
 	return true;
 }
 
-void UNavcamStreamer::TickComponent(float DeltaTime, ELevelTick TickType,
+void UStereoCamStreamer::TickComponent(float DeltaTime, ELevelTick TickType,
                                     FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
@@ -336,7 +354,7 @@ namespace
 	// One camera's render target, resolved on the game thread and handed to
 	// the render command. File scope so the ENQUEUE_RENDER_COMMAND lambda can
 	// name the type.
-	struct FNavcamCap
+	struct FStereoCamCap
 	{
 		FTextureRenderTargetResource* Resource;
 		int32 CamId;
@@ -345,14 +363,14 @@ namespace
 	};
 }
 
-void UNavcamStreamer::PumpCaptures()
+void UStereoCamStreamer::PumpCaptures()
 {
 	// Gather render-target pointers on the game thread (the only step that
 	// must be here), then post ONE render command that owns the whole readback
 	// lifecycle. bCaptureEveryFrame means each target already holds this
 	// frame's render; the readback of it completes asynchronously on the GPU.
-	TArray<FNavcamCap> Caps;
-	for (FNavcamResolved& Cam : Active)
+	TArray<FStereoCamCap> Caps;
+	for (FStereoCamResolved& Cam : Active)
 	{
 		if (!Cam.Capture || !Cam.Capture->TextureTarget)
 		{
@@ -374,9 +392,9 @@ void UNavcamStreamer::PumpCaptures()
 
 	// One tick, one frame id: this is what pairs left/right as a rig.
 	const uint64 FrameId = GFrameCounter;
-	TSharedPtr<FNavcamStreamState, ESPMode::ThreadSafe> S = Stream;
+	TSharedPtr<FStereoCamStreamState, ESPMode::ThreadSafe> S = Stream;
 
-	ENQUEUE_RENDER_COMMAND(NavcamPump)(
+	ENQUEUE_RENDER_COMMAND(StereoCamPump)(
 		[S, Caps, FrameId](FRHICommandListImmediate& RHICmdList)
 		{
 			// 1. Drain the readbacks started on a previous pump. At any real
@@ -431,14 +449,14 @@ void UNavcamStreamer::PumpCaptures()
 			}
 
 			// 2. Start this frame's readbacks (async GPU copy; nothing waits).
-			for (const FNavcamCap& C : Caps)
+			for (const FStereoCamCap& C : Caps)
 			{
 				FPendingReadback Job;
 				Job.CamId = C.CamId;
 				Job.Width = C.W;
 				Job.Height = C.H;
 				Job.FrameId = FrameId;
-				Job.Readback = MakeUnique<FRHIGPUTextureReadback>(TEXT("NavcamReadback"));
+				Job.Readback = MakeUnique<FRHIGPUTextureReadback>(TEXT("StereoCamReadback"));
 				Job.Readback->EnqueueCopy(RHICmdList, C.Resource->GetRenderTargetTexture());
 				S->Pending.Add(MoveTemp(Job));
 			}
@@ -458,11 +476,11 @@ namespace
 	}
 }
 
-uint32 UNavcamStreamer::Run()
+uint32 UStereoCamStreamer::Run()
 {
 	// Hold our own reference for the thread's lifetime, so the ready-frame
 	// queue stays valid even as the component drops its reference at EndPlay.
-	TSharedPtr<FNavcamStreamState, ESPMode::ThreadSafe> S = Stream;
+	TSharedPtr<FStereoCamStreamState, ESPMode::ThreadSafe> S = Stream;
 
 	TArray<uint8> Packet;
 	while (!bStopSender)
@@ -509,14 +527,14 @@ uint32 UNavcamStreamer::Run()
 				while (S->Ready.Dequeue(Discard)) {}    // stale frames, drop them
 			}
 			UE_LOG(LogTemp, Warning,
-			       TEXT("NavcamStreamer: link lost; redialling every 3 s."));
+			       TEXT("StereoCamStreamer: link lost; redialling every 3 s."));
 		}
 	}
 	CloseSocket(Socket);
 	return 0;
 }
 
-void UNavcamStreamer::Stop()
+void UStereoCamStreamer::Stop()
 {
 	bStopSender = true;
 }

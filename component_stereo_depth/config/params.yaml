@@ -9,8 +9,8 @@ lc_component_stereo_depth:
     # unrealcv  render on demand through UnrealCV. Each grab blocks Unreal's
     #           game thread ~300 ms (measured), freezing the simulation ~40%
     #           of wall time at 1 Hz with three cameras.
-    # stream    receive frames pushed by the NavcamStreamer plugin
-    #           (unreal/NavcamStreamer/): captures render with the frame and
+    # stream    receive frames pushed by the StereoCamStreamer plugin
+    #           (unreal/StereoCamStreamer/): captures render with the frame and
     #           reach this node with no game-thread stall. Left/right are
     #           paired by Unreal's frame counter, keeping the same-tick
     #           guarantee. UnrealCV stays connected for the one-time rig
@@ -34,7 +34,7 @@ lc_component_stereo_depth:
     right_camera_id:                         2
     center_camera_id:                        0   # Navcam_Sensor
 
-    # Object-segmentation capture (stream mode). Must equal the NavcamStreamer
+    # Object-segmentation capture (stream mode). Must equal the StereoCamStreamer
     # MaskCamId. Its SceneCapture uses a post-process material that colours the
     # Custom Depth-Stencil buffer — the UnrealCV object_mask, reproduced without
     # UnrealCV. Set < 0 to stream no mask (and set enable_object_mask: false).
@@ -43,7 +43,7 @@ lc_component_stereo_depth:
     # Legend for the object mask, published as JSON on object_mask_mapping.
     # One "<stencil_id>:<name>" per tagged class; the ids MUST match the
     # CustomDepth Stencil Value you set on the actors in Unreal (see the
-    # NavcamStreamer README). This is what tells a consumer / you what each
+    # StereoCamStreamer README). This is what tells a consumer / you what each
     # number in the scene is — the mask image itself only carries colours.
     # Example (edit to your scene):
     mask_labels:
@@ -81,7 +81,7 @@ lc_component_stereo_depth:
     # the pair's, and the reprojection uses its real intrinsics.
     # In unrealcv mode 0 means measure from the running game. In stream mode
     # nothing can be measured, so BOTH ARE REQUIRED there: set them to the
-    # NavcamStreamer captures' real geometry.
+    # StereoCamStreamer captures' real geometry.
     baseline_m:                            0.2   # metres between the eyes
     hfov_deg:                             90.0   # capture FOVAngle, degrees
 
@@ -154,7 +154,7 @@ lc_component_stereo_depth:
     # object -> colour).
     #   unrealcv mode  mask + name->colour legend come from UnrealCV (one extra
     #                  vget per frame, inside the pause window).
-    #   stream mode    mask comes from the NavcamStreamer segmentation capture
+    #   stream mode    mask comes from the StereoCamStreamer segmentation capture
     #                  named by mask_camera_id; colours are baked into the
     #                  Unreal post-process material, so the legend is empty.
     #                  Needs that capture to exist, or it self-disables.

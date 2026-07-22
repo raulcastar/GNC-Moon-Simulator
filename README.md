@@ -169,7 +169,7 @@ image encoding does not help (BMP took as long as PNG); the stall *is* the
 synchronous readback.
 
 `image_source: stream` in `component_stereo_depth/config/params.yaml` removes
-it. The **NavcamStreamer** component (`unreal/NavcamStreamer/` — build
+it. The **StereoCamStreamer** component (`unreal/StereoCamStreamer/` — build
 instructions in its README) renders the navcams with each frame on the render
 thread, reads them back asynchronously, and pushes them to the node over TCP
 port 3004. Left/right frames carry Unreal's frame counter and are paired only

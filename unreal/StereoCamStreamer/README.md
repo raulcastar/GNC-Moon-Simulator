@@ -1,4 +1,4 @@
-# NavcamStreamer — camera frames without game-thread stalls
+# StereoCamStreamer — camera frames without game-thread stalls
 
 UnrealCV renders on demand: each `vget` blocks the game thread for a full
 render + synchronous GPU readback (~300 ms per camera, measured — the sim was
@@ -26,28 +26,28 @@ This folder **is** the plugin — copy it whole.
    this folder into it:
 
    ```
-   <YourProject>/Plugins/NavcamStreamer/
-   ├── NavcamStreamer.uplugin
-   └── Source/NavcamStreamer/
-       ├── NavcamStreamer.Build.cs
-       ├── Public/NavcamStreamer.h
-       └── Private/{NavcamStreamer.cpp, NavcamStreamerModule.cpp}
+   <YourProject>/Plugins/StereoCamStreamer/
+   ├── StereoCamStreamer.uplugin
+   └── Source/StereoCamStreamer/
+       ├── StereoCamStreamer.Build.cs
+       ├── Public/StereoCamStreamer.h
+       └── Private/{StereoCamStreamer.cpp, StereoCamStreamerModule.cpp}
    ```
 
 3. Open the `.uproject`. The editor reports *"The following modules are
-   missing or built with a different engine version: NavcamStreamer. Would
+   missing or built with a different engine version: StereoCamStreamer. Would
    you like to rebuild them now?"* — answer **Yes**. It compiles in a minute
    or two and the editor opens. (If it fails, the build log is at
    `<YourProject>/Saved/Logs/UnrealBuildTool/`; the usual cause is the C++
    workload missing from Visual Studio.)
 4. Confirm it's active under **Edit → Plugins → Project → Other →
-   Navcam Streamer** (enabled by default).
+   Stereo Cam Streamer** (enabled by default).
 5. Add three **SceneCaptureComponent2D** components named exactly
    **NavcamLeft**, **NavcamRight**, **NavcamCenter**, posed like the three
    navcams (same transforms UnrealCV camera ids 1, 2, 0 have). Give each a
    **TextureRenderTarget2D** (640×480, RTF RGBA8). They can live on any actor
    — the rover pawn is the natural home so they move with it.
-6. Add the **NavcamStreamer** component to any actor (the rover pawn is fine;
+6. Add the **StereoCamStreamer** component to any actor (the rover pawn is fine;
    it appears in the *Add Component* search once the plugin is built). The
    captures are selected **by component name** — no pickers, no actor linking.
    Its own actor is searched first, then the whole world. If you used the
@@ -116,7 +116,7 @@ the RGB cameras.
 4. **Mask capture.** A fourth `SceneCaptureComponent2D` (e.g. **`Navcam_Mask`**),
    posed and FOV-matched to `NavcamCenter`, with `PPM_ObjectMask` added to its
    *Post Process Settings → Post Process Materials* (weight 1). Leave its render
-   target empty (auto-created). On the **NavcamStreamer** component set
+   target empty (auto-created). On the **StereoCamStreamer** component set
    **MaskCaptureName** to it; its **MaskCamId** (default 3, under *Advanced*)
    must equal `mask_camera_id` in the stereo node's params.
 
@@ -127,6 +127,31 @@ the RGB cameras.
    step 2**. The stereo node republishes them as JSON on
    `navcam/central/object_mask_mapping`; `ros2 topic echo` it to read the legend,
    e.g. `{"10": "landscape", "20": "boulder", "30": "crater"}`.
+
+## Exposure
+
+By default the captures auto-expose like any Unreal camera. Two optional
+controls on the **StereoCamStreamer** component (Details → *StereoCam | Cameras*)
+override that — pick **at most one**:
+
+- **Limit Auto Exposure** (`bLimitAutoExposure`) — keeps auto-exposure but clamps
+  the EV100 range it may adapt into, via **Min EV100** and **Max EV100**. This is
+  the usual fix for the two failure modes on a dim lunar surface: raising
+  **Min EV100** stops the shadows being amplified to grey noise; lowering
+  **Max EV100** stops bright regolith being blown to white. Set **Min EV100 ==
+  Max EV100** to pin a single fixed exposure — identical on both stereo eyes, so
+  their brightness matches (mismatched eye exposure poisons stereo matching)
+  without turning metering off. These map to the capture's PostProcess
+  *Auto Exposure → Min/Max Brightness*, which carry EV100 under UE5's extended
+  luminance range.
+- **Lock Exposure** (`bLockExposure`) — switches to fully manual metering
+  (`AEM_Manual`, no adapting range at all) with **Exposure Compensation EV** as a
+  plain brightness dial. Heavier-handed; use it only when you want to remove the
+  scene-luminance feedback loop entirely (e.g. a glare study).
+
+Both are off by default — verify the base image looks right before enabling
+either. Changing them takes effect at **Play** (they are applied when the
+captures are resolved at BeginPlay).
 
 ## Wire format
 

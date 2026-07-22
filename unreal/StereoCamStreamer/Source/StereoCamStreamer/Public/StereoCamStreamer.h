@@ -1,4 +1,4 @@
-// NavcamStreamer: pushes navcam frames to ROS without stalling the game.
+// StereoCamStreamer: pushes stereo/navcam frames to ROS without stalling the game.
 //
 // UnrealCV renders on demand: every vget blocks the game thread for a full
 // render + GPU readback (~300 ms per camera, measured). This component
@@ -36,13 +36,13 @@
 #include "HAL/Runnable.h"
 #include "HAL/RunnableThread.h"
 #include "Containers/Queue.h"
-#include "NavcamStreamer.generated.h"
+#include "StereoCamStreamer.generated.h"
 
 class FSocket;
 
 // A capture resolved and validated at BeginPlay, ready to stream.
 USTRUCT()
-struct NAVCAMSTREAMER_API FNavcamResolved
+struct STEREOCAMSTREAMER_API FStereoCamResolved
 {
 	GENERATED_BODY()
 
@@ -74,25 +74,25 @@ struct FPendingReadback
 // the FRHIGPUTextureReadback objects — on whatever thread that happens to be,
 // which for in-flight render commands is the render thread. Correct by
 // construction, with no FlushRenderingCommands / fence / join to stall on.
-struct FNavcamStreamState
+struct FStereoCamStreamState
 {
 	TArray<FPendingReadback> Pending;                      // render thread only
 	TQueue<TArray<uint8>, EQueueMode::Mpsc> Ready;         // render -> sender
 };
 
 UCLASS(ClassGroup = (Custom), meta = (BlueprintSpawnableComponent))
-class NAVCAMSTREAMER_API UNavcamStreamer : public UActorComponent, public FRunnable
+class STEREOCAMSTREAMER_API UStereoCamStreamer : public UActorComponent, public FRunnable
 {
 	GENERATED_BODY()
 
 public:
-	UNavcamStreamer();
+	UStereoCamStreamer();
 
 	// Where the ROS stereo node listens (see stream_port in its params.yaml).
-	UPROPERTY(EditAnywhere, Category = "Navcam|Network")
+	UPROPERTY(EditAnywhere, Category = "StereoCam|Network")
 	FString ServerIp = TEXT("127.0.0.1");
 
-	UPROPERTY(EditAnywhere, Category = "Navcam|Network")
+	UPROPERTY(EditAnywhere, Category = "StereoCam|Network")
 	int32 ServerPort = 3004;
 
 	// Frames per second pushed to ROS. The stereo node's default
@@ -101,7 +101,7 @@ public:
 	// for nothing — at 640x480x4 bytes x3 cameras, each extra Hz here is
 	// ~3.7 MB/s of wasted work. Keep this close to (a small margin above)
 	// the consumer's real rate, not high "for safety".
-	UPROPERTY(EditAnywhere, Category = "Navcam", meta = (ClampMin = "0.5", ClampMax = "30"))
+	UPROPERTY(EditAnywhere, Category = "StereoCam", meta = (ClampMin = "0.5", ClampMax = "30"))
 	float SendHz = 2.0f;
 
 	// The three navcam SceneCapture2Ds, selected by name from a dropdown
@@ -113,15 +113,15 @@ public:
 	// a plain component property at a per-instance component, which is why a
 	// pointer field only ever offered loaded templates (UnrealCV's internal
 	// "lit"/"normal" sensors).
-	UPROPERTY(EditAnywhere, Category = "Navcam|Cameras",
+	UPROPERTY(EditAnywhere, Category = "StereoCam|Cameras",
 	          meta = (GetOptions = "GetSceneCaptureNames"))
 	FName LeftCaptureName = TEXT("NavcamLeft");
 
-	UPROPERTY(EditAnywhere, Category = "Navcam|Cameras",
+	UPROPERTY(EditAnywhere, Category = "StereoCam|Cameras",
 	          meta = (GetOptions = "GetSceneCaptureNames"))
 	FName RightCaptureName = TEXT("NavcamRight");
 
-	UPROPERTY(EditAnywhere, Category = "Navcam|Cameras",
+	UPROPERTY(EditAnywhere, Category = "StereoCam|Cameras",
 	          meta = (GetOptions = "GetSceneCaptureNames"))
 	FName CenterCaptureName = TEXT("NavcamCenter");
 
@@ -132,7 +132,7 @@ public:
 	// frame id, so the ROS side overlays it on the central image. Nothing about
 	// the segmentation lives in this plugin — the colours come entirely from the
 	// material on the capture; here it is just another SceneCapture to read back.
-	UPROPERTY(EditAnywhere, Category = "Navcam|Cameras",
+	UPROPERTY(EditAnywhere, Category = "StereoCam|Cameras",
 	          meta = (GetOptions = "GetSceneCaptureNames"))
 	FName MaskCaptureName;
 
@@ -145,10 +145,10 @@ public:
 	// Captures with no TextureRenderTarget2D assigned get one created at this
 	// size automatically (RGBA8). Match the UnrealCV camera resolution: the
 	// ROS node solved the rig at that size and refuses mismatched frames.
-	UPROPERTY(EditAnywhere, Category = "Navcam|Cameras")
+	UPROPERTY(EditAnywhere, Category = "StereoCam|Cameras")
 	int32 CaptureWidth = 640;
 
-	UPROPERTY(EditAnywhere, Category = "Navcam|Cameras")
+	UPROPERTY(EditAnywhere, Category = "StereoCam|Cameras")
 	int32 CaptureHeight = 480;
 
 	// Lock the captures to manual exposure instead of auto-exposing. Useful
@@ -163,26 +163,47 @@ public:
 	// scene-dependent feedback loop to fight. ExposureCompensationEV is a
 	// plain brightness dial: 0 = neutral, positive = brighter, negative =
 	// darker.
-	UPROPERTY(EditAnywhere, Category = "Navcam|Cameras")
+	UPROPERTY(EditAnywhere, Category = "StereoCam|Cameras")
 	bool bLockExposure = false;
 
-	UPROPERTY(EditAnywhere, Category = "Navcam|Cameras",
+	UPROPERTY(EditAnywhere, Category = "StereoCam|Cameras",
 	          meta = (EditCondition = "bLockExposure"))
 	float ExposureCompensationEV = 0.0f;
 
+	// Constrain the AUTO-exposure range. Ignored when bLockExposure is on (that
+	// switches to manual metering, which has no adapting range). Unreal's auto-
+	// exposure adapts brightness between a min and max EV100; clamping the range
+	// stops the dim lunar surface from being driven to white (max too high) or
+	// crushed to black (min too low). Setting MinEV100 == MaxEV100 pins a fixed
+	// exposure — the same on both stereo eyes, so their brightness matches
+	// without disabling metering entirely. These map onto the capture's
+	// PostProcessSettings AutoExposure Min/Max Brightness, which carry EV100
+	// values under UE5's extended luminance range (the editor labels them
+	// "Min EV100" / "Max EV100").
+	UPROPERTY(EditAnywhere, Category = "StereoCam|Cameras")
+	bool bLimitAutoExposure = false;
+
+	UPROPERTY(EditAnywhere, Category = "StereoCam|Cameras",
+	          meta = (EditCondition = "bLimitAutoExposure", DisplayName = "Min EV100"))
+	float MinEV100 = -2.0f;
+
+	UPROPERTY(EditAnywhere, Category = "StereoCam|Cameras",
+	          meta = (EditCondition = "bLimitAutoExposure", DisplayName = "Max EV100"))
+	float MaxEV100 = 4.0f;
+
 	// Ids the ROS side knows the cameras by (left/right/center_camera_id in
 	// component_stereo_depth/config/params.yaml). Defaults match its defaults.
-	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Navcam|Cameras")
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "StereoCam|Cameras")
 	int32 LeftCamId = 1;
 
-	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Navcam|Cameras")
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "StereoCam|Cameras")
 	int32 RightCamId = 2;
 
-	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Navcam|Cameras")
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "StereoCam|Cameras")
 	int32 CenterCamId = 0;
 
 	// Must match mask_camera_id in component_stereo_depth/config/params.yaml.
-	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Navcam|Cameras")
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "StereoCam|Cameras")
 	int32 MaskCamId = 3;
 
 	virtual void BeginPlay() override;
@@ -215,7 +236,7 @@ private:
 
 	// Captures found by name at BeginPlay.
 	UPROPERTY(Transient)
-	TArray<FNavcamResolved> Active;
+	TArray<FStereoCamResolved> Active;
 
 	FSocket* Socket = nullptr;                  // Run()'s thread only.
 	FRunnableThread* SenderThread = nullptr;
@@ -228,7 +249,7 @@ private:
 
 	// Readback + ready-frame state, shared with render commands and the sender
 	// thread. Created in BeginPlay, released (not blocked-on) in EndPlay.
-	TSharedPtr<FNavcamStreamState, ESPMode::ThreadSafe> Stream;
+	TSharedPtr<FStereoCamStreamState, ESPMode::ThreadSafe> Stream;
 
 	double LastSendTime = 0.0;
 };

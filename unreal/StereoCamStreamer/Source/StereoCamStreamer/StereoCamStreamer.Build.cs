@@ -1,8 +1,8 @@
 using UnrealBuildTool;
 
-public class NavcamStreamer : ModuleRules
+public class StereoCamStreamer : ModuleRules
 {
-	public NavcamStreamer(ReadOnlyTargetRules Target) : base(Target)
+	public StereoCamStreamer(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 
