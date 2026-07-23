@@ -1,0 +1,22 @@
+# Reference copy of the WSL2 configuration this project expects.
+# Place it at  C:\Users\<YourUsername>\.wslconfig  (not in the repo) and run
+# `wsl --shutdown` for changes to take effect. See the README's "WSL2 System
+# Configuration" section.
+
+[wsl2]
+# Merges the WSL network with the Windows network
+networkingMode=mirrored
+
+# Ensures localhost ports are shared between Windows and WSL
+localhostForwarding=true
+
+# (Optional) Forces WSL to use the exact same DNS as Windows
+dnsTunneling=true
+
+# Resource caps. On startup every component container runs `colcon build`, so a
+# full `docker compose up` triggers ~10 simultaneous builds — an unbounded WSL VM
+# can grab all host RAM/CPU and destabilise it (a contributor to the VM reboot
+# loop we hit). Leave a few GB and cores for Windows; tune to your machine.
+memory=10GB
+processors=6
+swap=4GB

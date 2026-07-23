@@ -1,0 +1,67 @@
+lc_component_spad_camera:
+  ros__parameters:
+    # ── Intensity stream ──────────────────────────────────────────────────────
+    # TCP server the UnrealSPADCam plugin (unreal/UnrealSPADCam/) connects to.
+    # Must match the plugin's ServerIp / ServerPort. Only 127.0.0.1 crosses into
+    # WSL under mirrored networking, so bind 0.0.0.0 and let Unreal dial in.
+    stream_bind_ip:                    0.0.0.0
+    stream_port:                          3006
+
+    # Only packets tagged with this cam id are consumed (the plugin's CamId).
+    cam_id:                                  0
+
+    # ── spadSim photon model ──────────────────────────────────────────────────
+    # Ported from spadSim (David Rodriguez-Martinez, MIT). Defaults match it.
+    #   lambda = rgb_photons * (I/255) * QE * (t_spad / t_rgb)  (+ dark counts)
+    #   n ~ Poisson(lambda);  bit = (n >= detection_threshold)
+    #
+    # rgb_photons: photons collected by a pixel at full saturation over one RGB
+    #   exposure. Higher = brighter scene = denser single-photon frames.
+    rgb_photons:                        1000.0
+
+    # Quantum efficiency (fraction of photons that trigger an avalanche).
+    quantum_efficiency:                    0.5
+
+    # spad_fps / rgb_fps set the exposure ratio t_spad/t_rgb = rgb_fps/spad_fps.
+    # rgb_photons is defined per RGB exposure (1/rgb_fps); each SPAD frame
+    # integrates for the shorter 1/spad_fps, so a large spad_fps makes the
+    # per-frame photon count small and the binary frames sparse — the real
+    # single-photon regime. Lower spad_fps toward rgb_fps for denser frames.
+    spad_fps:                          10000.0
+    rgb_fps:                              30.0
+
+    # Dark-count rate (counts/second/pixel) — thermal noise. Off by default.
+    dcr:                                 100.0
+    include_dcr:                         false
+
+    # Photons needed to register a detection (SPADs fire on the first photon).
+    detection_threshold:                     1
+
+    # ── Output ────────────────────────────────────────────────────────────────
+    # How the digitised reconstruction (spad/image) is built from binary frames:
+    #   subframes  each readout integrates `digitize_frames` fresh single-photon
+    #              exposures of the current intensity. Rate-independent: the
+    #              reconstruction stays rich even at a low readout rate — a real
+    #              SPAD integrating many fast frames between readouts. (Default.)
+    #   rolling    one binary frame per readout, summed over a rolling window of
+    #              the last `digitize_frames` readouts. Temporal: the image
+    #              builds up / reacts over ~N readouts (spadSim's digitisation of
+    #              a frame sequence). At a low readout rate it lags.
+    digitize_mode:                    subframes
+
+    # Binary frames per reconstruction: exposures integrated per readout in
+    # 'subframes' mode, or the rolling-window length in 'rolling' mode. More
+    # frames = brighter, less noisy reconstruction.
+    digitize_frames:                        64
+
+    # Readout rate: how often a binary frame + the digitised reconstruction are
+    # published (Hz). Matched to the navcam (component_stereo_depth
+    # image_reading_hz_rate = 1.0) so the sensors share a cadence.
+    publish_rate_hz:                       1.0
+
+    # spad/binary : raw single-photon frame (mono8, 0/255)
+    # spad/image  : digitised grayscale reconstruction (mono8), viewable feed
+    binary_topic:                 spad/binary
+    image_topic:                   spad/image
+
+    frame_id:                            spad

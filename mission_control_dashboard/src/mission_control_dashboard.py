@@ -48,6 +48,7 @@ template_dir = os.path.join(pkg_share, 'templates')
 #   5001  overview — the full GNC mission-control dashboard
 #   5002  teleop   — manual drive-by-wire, bypassing the GNC planner
 #   5003  cameras  — a camera wall with per-feed show/hide toggles
+#   5005  map3d    — LiDAR 3D + local DEM side by side, with labelled axes
 # network_mode: host means each port is reachable on the host directly, so no
 # compose port mapping is needed. Each Flask app gets its own SocketIO server;
 # the ROS node fans shared feeds (cameras, telemetry) out to whichever servers
@@ -72,6 +73,11 @@ app_cams.config['SECRET_KEY'] = 'lunar_cameras'
 sio_cams = SocketIO(app_cams, async_mode='threading', cors_allowed_origins="*",
                     max_http_buffer_size=10000000)
 
+app_map = Flask('map3d', template_folder=template_dir)
+app_map.config['SECRET_KEY'] = 'lunar_map3d'
+sio_map = SocketIO(app_map, async_mode='threading', cors_allowed_origins="*",
+                   max_http_buffer_size=10000000)
+
 
 def emit_over(event, data):
     """Emit only to the overview dashboard (5001)."""
@@ -82,6 +88,13 @@ def emit_all(event, data):
     """Emit telemetry/log to the screens that show it (overview + teleop)."""
     socketio.emit(event, data)
     sio_teleop.emit(event, data)
+
+
+def emit_map(event, data):
+    """Fan a spatial feed (lidar / DEM / pose) out to the overview and the
+    dedicated 3D map window (5004)."""
+    socketio.emit(event, data)
+    sio_map.emit(event, data)
 
 
 def emit_feeds(event, data, teleop=True):
@@ -101,7 +114,7 @@ _LOG_LEVELS = {10: 'DEBUG', 20: 'INFO', 30: 'WARN', 40: 'ERROR', 50: 'FATAL'}
 # Push rates deliberately low: the browser renders the lidar and DEM in WebGL,
 # which competes with Unreal for the same (laptop) GPU. Higher rates here buy
 # nothing the operator can perceive and risk stalling the desktop compositor.
-_MAX_LIDAR_POINTS = 4000       # per frame pushed to the browser
+_MAX_LIDAR_POINTS = 9000       # per frame pushed to the browser
 _LIDAR_MIN_PERIOD = 1.0        # seconds between lidar frames
 _ODOM_MIN_PERIOD = 0.15        # seconds between telemetry emits
 _GRID_MIN_PERIOD = 2.0         # seconds between local DEM frames
@@ -112,6 +125,10 @@ _GRID_MIN_PERIOD = 2.0         # seconds between local DEM frames
 # shape is preserved) and throttle. Bounds payload and client redraw cost.
 _TRAJ_MAX_POINTS = 1500        # points per driven-path push (decimated)
 _TRAJ_MIN_PERIOD = 0.5         # seconds between driven-path frames
+# The event and SPAD cameras publish at ~30 Hz. Relaying every frame to the
+# browser as a base64 JPEG floods the websocket and stalls the UI, so cap their
+# browser-facing rate. 0.16 s ~= 6 fps, plenty for these visualisations.
+_CAM_PRODUCT_MIN_PERIOD = 0.16
 
 
 def _cloud_xyz(msg: PointCloud2, max_points: int) -> np.ndarray:
@@ -210,10 +227,18 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
             Image, f'{ns}/central/object_mask',
             self._make_image_relay('mask'), qos_profile_sensor_data))
 
-        # Event (DVS) camera frame from component_event_camera.
+        # Event (DVS) and SPAD cameras publish at ~30 Hz; throttle their
+        # browser-facing rate so the websocket / UI does not stall (~6 fps).
         self._subs.append(sub(
             Image, 'event_camera/image_events',
-            self._make_image_relay('events'), qos_profile_sensor_data))
+            self._make_image_relay('events', min_period=_CAM_PRODUCT_MIN_PERIOD),
+            qos_profile_sensor_data))
+
+        # SPAD camera digitised reconstruction from component_spad_camera.
+        self._subs.append(sub(
+            Image, 'spad/image',
+            self._make_image_relay('spad', min_period=_CAM_PRODUCT_MIN_PERIOD),
+            qos_profile_sensor_data))
 
         # 5 Hz teleop deadman: stop the rover if manual commands stop arriving.
         self._teleop_watchdog = self.create_timer(0.2, self._teleop_watchdog_cb)
@@ -260,18 +285,30 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
                 'image': base64.b64encode(bytes(msg.data)).decode('ascii')})
         return cb
 
-    def _make_image_relay(self, feed_id: str, both: bool = False):
+    def _make_image_relay(self, feed_id: str, both: bool = False,
+                          min_period: float = 0.0):
         """Relay a raw colour Image, JPEG-encoding it first.
 
         Always goes to the overview and the camera wall (5003). both=True also
         mirrors it to the teleop screen (used for the stereo depth view).
+        min_period caps the browser-facing rate (seconds between frames): the
+        event and SPAD cameras publish at ~30 Hz, and pushing every one as a
+        base64 JPEG over the websocket floods the browser and stalls the UI.
+        The throttle is checked before the JPEG encode, so it also saves CPU.
         """
         def emit(event, data):
             emit_feeds(event, data, teleop=both)
 
+        last = [0.0]        # mutable cell for the per-feed last-emit time
+
         def cb(msg: Image):
             if not self._is_active():
                 return
+            if min_period > 0.0:
+                now = time.monotonic()
+                if now - last[0] < min_period:
+                    return
+                last[0] = now
             try:
                 img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
                 ok, buf = cv2.imencode('.jpg', img,
@@ -300,7 +337,7 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         xyz = _cloud_xyz(msg, _MAX_LIDAR_POINTS)
         if len(xyz) == 0:
             return
-        socketio.emit('lidar', {
+        emit_map('lidar', {
             'points': np.round(xyz, 2).ravel().tolist(),
             'count': int(len(xyz)),
             'frame': msg.header.frame_id,
@@ -342,7 +379,7 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
             if known.size:
                 hmin, hmax = float(known.min()), float(known.max())
 
-        socketio.emit('local_grid', {
+        emit_map('local_grid', {
             'w': msg.info.width,
             'h': msg.info.height,
             'res': round(msg.info.resolution, 4),
@@ -378,10 +415,12 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
                 speed = float(np.hypot(p.x - x0, p.y - y0) / dt)
         self._prev_odom = (now, p.x, p.y)
 
-        emit_all('odom_update', {
+        odom_payload = {
             'x': round(p.x, 3), 'y': round(p.y, 3), 'z': round(p.z, 3),
             'yaw': round(float(yaw), 1), 'speed': round(speed, 3),
-        })
+        }
+        emit_all('odom_update', odom_payload)
+        sio_map.emit('odom_update', odom_payload)
 
     def global_path_callback(self, msg: Path) -> None:
         if not self._is_active():
@@ -628,6 +667,15 @@ def cameras():
 
 
 # =========================================================================
+# Flask routing — map3d (5004): LiDAR 3D + local DEM
+# =========================================================================
+
+@app_map.route('/')
+def map3d():
+    return render_template('map3d.html')
+
+
+# =========================================================================
 # Flask routing — overview (5001)
 # =========================================================================
 
@@ -683,8 +731,16 @@ def main(args=None):
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
 
-    # Hub (5000), teleop (5002) and cameras (5003) run in background threads; the
-    # overview (5001) holds the main thread. All share ros_node via the globals.
+    # Hub (5000), teleop (5002), cameras (5003) and map3d (5005) run in background
+    # threads; the overview (5001) holds the main thread. All share ros_node via
+    # the globals.
+    #
+    # The map window uses 5005, not the sequential 5004: under this machine's WSL2
+    # mirrored networking, port 5004 specifically would not mirror to the Windows
+    # host — a listener bound there was live inside the container's netns but
+    # localhost:5004 refused from both Windows and WSL loopback, while every
+    # neighbouring port (5005, 5006, 5010) mirrored instantly. Most likely a stale
+    # Windows-side reservation on 5004. 5005 sidesteps it.
     def _serve(sio, flask_app, port):
         sio.run(flask_app, host='0.0.0.0', port=port, allow_unsafe_werkzeug=True)
 
@@ -694,8 +750,11 @@ def main(args=None):
                      daemon=True).start()
     threading.Thread(target=_serve, args=(sio_cams, app_cams, 5003),
                      daemon=True).start()
+    threading.Thread(target=_serve, args=(sio_map, app_map, 5005),
+                     daemon=True).start()
     ros_node.get_logger().info(
-        "Mission control up: hub :5000  overview :5001  teleop :5002  cameras :5003")
+        "Mission control up: hub :5000  overview :5001  teleop :5002  "
+        "cameras :5003  map3d :5005")
 
     try:
         socketio.run(app, host='0.0.0.0', port=5001, allow_unsafe_werkzeug=True)

@@ -1,0 +1,20 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "Unreal SPAD Cam",
+	"Description": "Simulated single-photon (SPAD) camera front-end. Renders an intensity image per frame with asynchronous GPU readback and streams it to a ROS node over TCP, where the spadSim photon model (MIT) turns it into single-photon binary frames.",
+	"Category": "Other",
+	"CreatedBy": "GNC Moon Simulator",
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"Installed": false,
+	"EnabledByDefault": true,
+	"Modules": [
+		{
+			"Name": "UnrealSPADCam",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

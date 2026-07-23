@@ -17,7 +17,11 @@ source /opt/ros/jazzy/setup.bash
 set -u
 
 echo "Building the local ROS 2 workspace..."
-colcon build
+if [ -f install/setup.bash ] && [ "${FORCE_BUILD:-0}" != "1" ]; then
+    echo "Workspace already built; skipping colcon build (set FORCE_BUILD=1 to force a rebuild)."
+else
+    colcon build
+fi
 
 if [ -f install/setup.bash ]; then
     set +u

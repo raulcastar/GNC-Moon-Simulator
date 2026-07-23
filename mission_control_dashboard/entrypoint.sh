@@ -30,7 +30,11 @@ echo "Building the local ROS 2 workspace..."
 # ------------------------------------------------------------------------------
 # 3. Compile the Workspace (The "Overlay")
 # ------------------------------------------------------------------------------
-colcon build
+if [ -f install/setup.bash ] && [ "${FORCE_BUILD:-0}" != "1" ]; then
+    echo "Workspace already built; skipping colcon build (set FORCE_BUILD=1 to force a rebuild)."
+else
+    colcon build
+fi
 
 # ------------------------------------------------------------------------------
 # 4. Source the Local Overlay

@@ -399,7 +399,7 @@ $('btn-clear').onclick = () => logDiv.innerHTML = '';
 /* ---------------- lidar: 3D orbit view ---------------- */
 const lc = $('lidarCanvas'), lctx = lc.getContext('2d');
 let cloud = null;                                   /* last flat xyz list */
-const cam = { yaw: -2.35, pitch: 0.45, dist: 28 };  /* orbit state */
+const cam = { yaw: -2.35, pitch: 0.45, dist: 45 };  /* orbit state (zoomed out) */
 
 function heightColor(z, zmin, zmax) {
   const t = Math.max(0, Math.min(1, (z - zmin) / Math.max(0.01, zmax - zmin)));
@@ -428,12 +428,12 @@ function drawLidar() {
   const W = lc.width, H = lc.height;
   lctx.fillStyle = '#10151c'; lctx.fillRect(0, 0, W, H);
 
-  /* ground grid: 5 m squares out to 20 m, plus body axes */
+  /* ground grid: 5 m squares out to 40 m, plus body axes */
   lctx.strokeStyle = '#12202f'; lctx.lineWidth = 1;
-  for (let g = -20; g <= 20; g += 5) {
-    let a = project(g, -20, 0, W, H), b = project(g, 20, 0, W, H);
+  for (let g = -40; g <= 40; g += 5) {
+    let a = project(g, -40, 0, W, H), b = project(g, 40, 0, W, H);
     if (a && b) { lctx.beginPath(); lctx.moveTo(a[0],a[1]); lctx.lineTo(b[0],b[1]); lctx.stroke(); }
-    a = project(-20, g, 0, W, H); b = project(20, g, 0, W, H);
+    a = project(-40, g, 0, W, H); b = project(40, g, 0, W, H);
     if (a && b) { lctx.beginPath(); lctx.moveTo(a[0],a[1]); lctx.lineTo(b[0],b[1]); lctx.stroke(); }
   }
   const o = project(0,0,0,W,H), ax = project(4,0,0,W,H), ay = project(0,4,0,W,H), az = project(0,0,3,W,H);
@@ -477,7 +477,7 @@ window.addEventListener('mousemove', e => {
 });
 lc.addEventListener('wheel', e => {
   e.preventDefault();
-  cam.dist = Math.max(6, Math.min(90, cam.dist * (e.deltaY > 0 ? 1.12 : 0.89)));
+  cam.dist = Math.max(6, Math.min(150, cam.dist * (e.deltaY > 0 ? 1.12 : 0.89)));
   drawLidar();
 }, { passive: false });
 

@@ -13,12 +13,16 @@ lc_component_event_camera:
     # ── Visualisation ─────────────────────────────────────────────────────────
     # Events accumulated into each rendered frame, in seconds. Longer windows
     # give brighter, more persistent trails; shorter windows track fast motion
-    # more crisply. ~1 frame at the publish rate is a good start.
-    accumulation_window_s:               0.033
+    # more crisply. Set to ~one publish period so each frame shows all the
+    # events since the last one (at 1 Hz that is ~1 s) — a short window at a low
+    # publish rate leaves most frames black.
+    accumulation_window_s:                 1.0
 
-    # Rate at which the event-frame image is rendered and published (Hz). The
-    # event stream itself is asynchronous; this only sets the viewing cadence.
-    publish_rate_hz:                      30.0
+    # Rate at which the event-frame image is rendered and published (Hz). Matched
+    # to the navcam (component_stereo_depth image_reading_hz_rate = 1.0) so the
+    # sensors share a cadence. The event stream itself is asynchronous; this only
+    # sets the viewing/publish cadence.
+    publish_rate_hz:                       1.0
 
     # Colour-by-polarity event frame (rgb8). ON events (brightness increase) and
     # OFF events (decrease) on a dark background. Viewable in the dashboard.

@@ -12,13 +12,26 @@ for the rover); every component runs in its own container and talks over Zenoh.
 docker compose logs -f component_stereo_depth
 ```
 
-`docker_build.sh` pulls `ros:jazzy`, so it needs network access. Once the images
-exist, code changes land on a plain restart — each component mounts its source as
-a volume and runs `colcon build` in its entrypoint:
+`docker_build.sh` pulls `ros:jazzy`, so it needs network access. Each component
+mounts its source as a volume and builds it once, in its entrypoint. To keep a
+container restart (and a WSL/Docker reboot) from re-running `colcon build` — a
+storm of simultaneous builds that can destabilise the WSL VM — the entrypoint
+**skips the build when the workspace is already built**. So a plain restart is
+near-instant but does **not** pick up code changes.
+
+To apply source changes, recreate the container — a fresh container has no build
+yet, so the entrypoint rebuilds it:
 
 ```bash
+# instant restart, keeps the existing build:
 docker compose restart component_stereo_depth
+
+# rebuild this component after editing its source:
+docker compose up -d --force-recreate component_stereo_depth
 ```
+
+(The entrypoint also honours `FORCE_BUILD=1` in the container's environment, if
+you prefer to wire it into a service's `environment:` for restart-based rebuilds.)
 
 The mission control web interface starts automatically — open
 **http://localhost:5000**. It shows all three navcam feeds, stereo depth,
@@ -218,10 +231,13 @@ where the ground plane lands.
 
 ## ⚙️ WSL2 System Configuration (`.wslconfig`)
 
-Here is the exact file path:
-C:\Users\<YourUsername>\.wslconfig
+A reference copy lives at the repo root as [`.wslconfig`](.wslconfig). Copy it to
+your Windows profile:
 
-(Make sure to replace <YourUsername> with your actual Windows login name).
+    C:\Users\<YourUsername>\.wslconfig
+
+(replace `<YourUsername>` with your Windows login), then run `wsl --shutdown` for
+it to take effect.
 
 ```ini
 [wsl2]
@@ -233,4 +249,29 @@ localhostForwarding=true
 
 # (Optional) Forces WSL to use the exact same DNS as Windows
 dnsTunneling=true
+
+# Resource caps. Every component container runs `colcon build` on startup, so a
+# full `docker compose up` triggers ~10 simultaneous builds; an unbounded WSL VM
+# can grab all host RAM/CPU and destabilise it (a contributor to VM reboot
+# loops). Leave a few GB and cores for Windows; tune to your machine.
+memory=10GB
+processors=6
+swap=4GB
 ```
+
+### ⚠️ Keep a WSL terminal open while running
+
+WSL2 shuts a distro down once nothing is holding it open, and a systemd distro
+running dockerd can still be caught by this — when the distro stops, systemd
+stops `docker.service`, every container goes down with it, and the dashboard
+becomes unreachable ("site cannot be reached"). Touching the distro again boots
+it, restarts docker and re-runs every container.
+
+**Keep an interactive WSL session open the whole time the stack is running:**
+
+    wsl -d Ubuntu-24.04
+
+Leave that window open in the background. As long as it is, the distro (and so
+docker + all containers) stays alive and the dashboard stays up. If drops
+persist, run `wsl --update` then `wsl --shutdown` — premature systemd-distro
+shutdowns are a known WSL bug fixed in newer builds.

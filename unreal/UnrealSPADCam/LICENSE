@@ -1,0 +1,44 @@
+UnrealSPADCam
+=============
+
+This Unreal plugin (frame capture, GPU readback, TCP streaming, the
+UActorComponent) is original to this repository and is offered under the MIT
+terms below. It does NOT contain the SPAD sensor model.
+
+The SPAD sensor model — photon-flux estimation, Poisson photon arrivals and
+binary thresholding — lives in the ROS component `component_spad_camera`, which
+ports spadSim by David Rodriguez-Martinez and carries spadSim's MIT license and
+attribution there:
+
+    Upstream: https://github.com/drodriguezSRL/spadSim
+    spadSim is MIT licensed, Copyright (c) 2025 David Rodriguez-Martinez.
+
+Related work (from the spadSim repository):
+
+    "Fast Vision in the Dark: A Case for Single-Photon Imaging in Planetary
+    Navigation", arXiv:2510.10597.
+
+
+================================================================================
+MIT License
+================================================================================
+
+Copyright (c) 2026 GNC Moon Simulator
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

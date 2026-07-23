@@ -198,8 +198,8 @@
             <div class="blank"></div>
           </div>
           <div class="slider">
-            <label>MAX LINEAR <b><span id="lin-val">0.30</span> m/s</b></label>
-            <input type="range" id="lin-max" min="0.05" max="0.3" step="0.05" value="0.3">
+            <label>MAX LINEAR <b><span id="lin-val">0.25</span> m/s</b></label>
+            <input type="range" id="lin-max" min="0.05" max="0.25" step="0.05" value="0.25">
           </div>
           <div class="slider">
             <label>MAX ANGULAR <b><span id="ang-val">0.10</span> rad/s</b></label>
@@ -270,15 +270,15 @@
   // active, and releasing it reverts to the previous. The send loop runs at
   // 5 Hz and emits one trailing zero when everything is released so the rover
   // stops promptly. (A node-side watchdog is the backstop if the tab dies.)
-  let maxLin = 0.3, maxAng = 0.10;
+  let maxLin = 0.25, maxAng = 0.10;
   let held = [], loop = null;
 
   // Soft start: the emitted velocity eases up toward the target from standstill
   // instead of stepping straight to full speed. Per-tick (200 ms) increments —
   // reversing uses a gentler step than forward (the rover pitches back harder
   // under rearward accel). Slowing/stopping stay immediate for responsiveness.
-  const RAMP_LIN_FWD  = 0.05;   // m/s added per tick accelerating forward (~1.2 s to 0.3)
-  const RAMP_LIN_BACK = 0.02;   // m/s added per tick accelerating in reverse (~3 s to 0.3)
+  const RAMP_LIN_FWD  = 0.05;   // m/s added per tick accelerating forward (~1 s to 0.25)
+  const RAMP_LIN_BACK = 0.02;   // m/s added per tick accelerating in reverse (~2.5 s to 0.25)
   const RAMP_ANG = 0.03;        // rad/s added per tick while accelerating
   let outLin = 0, outAng = 0;
 

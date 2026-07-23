@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GNC MOON SIM — 3D Map (LiDAR + DEM)</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  :root {
+    --bg:      #10151c;
+    --panel:   #18212e;
+    --panel2:  #202b3a;
+    --line:    #2c3a4e;
+    --text:    #e6edf5;
+    --dim:     #8aa0b8;
+    --accent:  #33d6a6;   /* X axis */
+    --cyan:    #59b0ff;   /* Y axis */
+    --amber:   #ffbe5c;   /* Z axis */
+    --red:     #ff6b7d;
+    --mono:    'Consolas','Menlo','DejaVu Sans Mono',monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body { background: var(--bg); color: var(--text); font-family: var(--mono);
+         display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+
+  header { display: flex; align-items: center; gap: 18px; padding: 10px 16px;
+           background: linear-gradient(180deg, var(--panel2), var(--panel));
+           border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+  .brand { color: var(--accent); font-weight: bold; letter-spacing: 3px; font-size: 15px; }
+  .brand small { color: var(--dim); letter-spacing: 2px; font-size: 10px; font-weight: normal; }
+  a.hub { text-decoration: none; color: var(--text); border: 1px solid var(--line);
+          background: var(--panel2); border-radius: 6px; padding: 7px 12px; font-size: 12px;
+          letter-spacing: 2px; transition: border-color .12s, color .12s; }
+  a.hub:hover { border-color: var(--accent); color: var(--accent); }
+  .status { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--dim); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--red);
+         box-shadow: 0 0 8px var(--red); }
+  .dot.ok { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  .tele { margin-left: auto; display: flex; gap: 16px; font-size: 12px; }
+  .tele .k { color: var(--dim); letter-spacing: 1px; }
+  .tele .v { color: var(--cyan); }
+
+  main { flex: 1 1 auto; display: flex; min-height: 0; gap: 8px; padding: 8px; }
+  .panel { flex: 1 1 0; min-width: 320px; display: flex; flex-direction: column;
+           background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+           overflow: hidden; position: relative; }
+  .panel-title { display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+                 border-bottom: 1px solid var(--line); font-size: 12px; letter-spacing: 2px;
+                 color: var(--dim); flex: 0 0 auto; }
+  .panel-title .tag { color: var(--accent); }
+  .panel-title .age { margin-left: auto; color: var(--dim); font-size: 11px; letter-spacing: 1px; }
+  .view { flex: 1 1 auto; position: relative; min-height: 0; }
+  .view canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+  /* axis legend, bottom-left of each view */
+  .legend { position: absolute; left: 10px; bottom: 10px; z-index: 5; font-size: 11px;
+            line-height: 1.7; background: rgba(16,21,28,.72); border: 1px solid var(--line);
+            border-radius: 6px; padding: 8px 10px; pointer-events: none; letter-spacing: .5px; }
+  .legend .row { display: flex; align-items: center; gap: 7px; }
+  .legend .sw { width: 16px; height: 3px; border-radius: 2px; display: inline-block; }
+  .legend .note { color: var(--dim); margin-top: 4px; font-size: 10px; }
+  .nosig { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+           color: var(--dim); font-size: 13px; letter-spacing: 2px; z-index: 4; }
+  .hint { position: absolute; right: 10px; top: 10px; z-index: 5; color: var(--dim);
+          font-size: 10px; letter-spacing: 1px; background: rgba(16,21,28,.6);
+          border: 1px solid var(--line); border-radius: 5px; padding: 4px 8px; pointer-events: none; }
+
+  @media (max-width: 900px) { main { flex-direction: column; } .panel { min-width: 0; } }
+</style>
+</head>
+<body>
+  <header>
+    <a class="hub" id="hub-link">◀ HUB</a>
+    <div class="brand">GNC&nbsp;MOON&nbsp;·&nbsp;3D&nbsp;MAP<br><small>LIDAR + LOCAL DEM</small></div>
+    <div class="status"><span class="dot" id="cdot"></span><span id="cstate">OFFLINE</span></div>
+    <div class="tele">
+      <div><span class="k">POS</span> <span class="v" id="t-pos">—</span> m</div>
+      <div><span class="k">HDG</span> <span class="v" id="t-yaw">—</span>°</div>
+      <div><span class="k">SPD</span> <span class="v" id="t-spd">—</span> m/s</div>
+    </div>
+  </header>
+
+  <main>
+    <!-- ============ LIDAR 3D ============ -->
+    <div class="panel">
+      <div class="panel-title"><span class="tag">◎</span>LIDAR — 3D · DRAG ORBIT · WHEEL ZOOM
+        <span class="age" id="lidar-info">no signal</span></div>
+      <div class="view" id="lidarView">
+        <canvas id="lidarCanvas" style="cursor:grab"></canvas>
+        <div class="nosig" id="lidar-nosig">waiting for /velodyne_points…</div>
+        <div class="hint">sensor frame · 5 m grid</div>
+        <div class="legend">
+          <div class="row"><span class="sw" style="background:var(--accent)"></span>X → forward</div>
+          <div class="row"><span class="sw" style="background:var(--cyan)"></span>Y → left</div>
+          <div class="row"><span class="sw" style="background:var(--amber)"></span>Z ↑ up</div>
+          <div class="note">ring labels &amp; grid in metres</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ LOCAL DEM ============ -->
+    <div class="panel">
+      <div class="panel-title"><span class="tag">▦</span>LOCAL DEM — 3D TERRAIN · DRAG · WHEEL
+        <span class="age" id="dem-info">no signal</span></div>
+      <div class="view" id="demView">
+        <div class="nosig" id="dem-nosig">waiting for /local_mapping/elevation_grid…</div>
+        <div class="hint">odom frame · ▲ rover</div>
+        <div class="legend">
+          <div class="row"><span class="sw" style="background:var(--accent)"></span>X → east (odom&nbsp;x)</div>
+          <div class="row"><span class="sw" style="background:var(--cyan)"></span>Y → north (odom&nbsp;y)</div>
+          <div class="row"><span class="sw" style="background:var(--amber)"></span>Z ↑ elevation</div>
+          <div class="note" id="dem-scale">edge ticks in metres · height ×1.5</div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const host = window.location.hostname || 'localhost';
+  $('hub-link').href = `http://${host}:5000/`;
+
+  const socket = io();
+  socket.on('connect',    () => { $('cdot').classList.add('ok'); $('cstate').textContent = 'ONLINE'; });
+  socket.on('disconnect', () => { $('cdot').classList.remove('ok'); $('cstate').textContent = 'OFFLINE'; });
+
+  let currentPose = null;
+  socket.on('odom_update', m => {
+    currentPose = m;
+    $('t-pos').textContent = `${m.x.toFixed(1)}, ${m.y.toFixed(1)}`;
+    $('t-yaw').textContent = m.yaw.toFixed(0);
+    $('t-spd').textContent = m.speed.toFixed(2);
+  });
+
+  /* ============================================================= *
+   *  LIDAR — 2D canvas orbit projection with labelled axes/rings  *
+   * ============================================================= */
+  const lc = $('lidarCanvas'), lctx = lc.getContext('2d');
+  let cloud = null;
+  const cam = { yaw: -2.35, pitch: 0.45, dist: 55 };   /* zoomed out to see range */
+
+  function heightColor(z, zmin, zmax) {
+    const t = Math.max(0, Math.min(1, (z - zmin) / Math.max(0.01, zmax - zmin)));
+    const r = Math.round(30 + 225 * t);
+    const g = Math.round(120 + 100 * (1 - Math.abs(t - .5) * 2));
+    const b = Math.round(255 - 225 * t);
+    return `rgb(${r},${g},${b})`;
+  }
+
+  function project(x, y, z, W, H) {
+    const cy_ = Math.cos(cam.yaw), sy_ = Math.sin(cam.yaw);
+    const cp_ = Math.cos(cam.pitch), sp_ = Math.sin(cam.pitch);
+    const rx =  x * cy_ + y * sy_;
+    const ry = -x * sy_ + y * cy_;
+    const vy =  ry * cp_ - z * sp_;
+    const vz =  ry * sp_ + z * cp_;
+    const d = vy + cam.dist;
+    if (d < 0.5) return null;
+    const f = 0.9 * Math.min(W, H) / (d / cam.dist * 1.2);
+    return [W/2 + rx * f / cam.dist * 10, H/2 - vz * f / cam.dist * 10, d];
+  }
+
+  const GRID_MAX = 40, GRID_STEP = 5;                 /* metres */
+
+  function drawLidar() {
+    lc.width = lc.clientWidth; lc.height = lc.clientHeight;
+    const W = lc.width, H = lc.height;
+    lctx.fillStyle = '#10151c'; lctx.fillRect(0, 0, W, H);
+
+    /* ground grid: GRID_STEP m squares out to GRID_MAX m */
+    lctx.strokeStyle = '#12202f'; lctx.lineWidth = 1;
+    for (let g = -GRID_MAX; g <= GRID_MAX; g += GRID_STEP) {
+      let a = project(g, -GRID_MAX, 0, W, H), b = project(g, GRID_MAX, 0, W, H);
+      if (a && b) { lctx.beginPath(); lctx.moveTo(a[0],a[1]); lctx.lineTo(b[0],b[1]); lctx.stroke(); }
+      a = project(-GRID_MAX, g, 0, W, H); b = project(GRID_MAX, g, 0, W, H);
+      if (a && b) { lctx.beginPath(); lctx.moveTo(a[0],a[1]); lctx.lineTo(b[0],b[1]); lctx.stroke(); }
+    }
+
+    /* distance labels along the +X and +Y grid lines, in metres */
+    lctx.fillStyle = '#6f8399'; lctx.font = '11px monospace';
+    lctx.textAlign = 'center'; lctx.textBaseline = 'middle';
+    for (let d = GRID_STEP; d <= GRID_MAX; d += GRID_STEP * 2) {
+      const px = project(d, 0, 0, W, H);
+      if (px) lctx.fillText(`${d}`, px[0], px[1] - 7);
+      const py = project(0, d, 0, W, H);
+      if (py) lctx.fillText(`${d}`, py[0] + 9, py[1]);
+    }
+
+    /* body axes with tip labels */
+    const o = project(0,0,0,W,H);
+    const ax = project(GRID_MAX*0.55,0,0,W,H),
+          ay = project(0,GRID_MAX*0.55,0,W,H),
+          az = project(0,0,8,W,H);
+    const axis = (p, c, label) => {
+      if (!o || !p) return;
+      lctx.strokeStyle = c; lctx.lineWidth = 2;
+      lctx.beginPath(); lctx.moveTo(o[0],o[1]); lctx.lineTo(p[0],p[1]); lctx.stroke();
+      lctx.fillStyle = c; lctx.font = 'bold 12px monospace';
+      lctx.fillText(label, p[0], p[1] - 10);
+    };
+    axis(ax, '#33d6a6', 'X→ FWD');
+    axis(ay, '#59b0ff', 'Y→ LEFT');
+    axis(az, '#ffbe5c', 'Z↑');
+
+    if (!cloud) return;
+    let zmin = 1e9, zmax = -1e9;
+    for (let i = 2; i < cloud.length; i += 3) {
+      if (cloud[i] < zmin) zmin = cloud[i];
+      if (cloud[i] > zmax) zmax = cloud[i];
+    }
+    for (let i = 0; i < cloud.length; i += 3) {
+      const p = project(cloud[i], cloud[i+1], cloud[i+2], W, H);
+      if (!p || p[0] < 0 || p[0] > W || p[1] < 0 || p[1] > H) continue;
+      const s = p[2] < cam.dist ? 3 : 2;
+      lctx.fillStyle = heightColor(cloud[i+2], zmin, zmax);
+      lctx.fillRect(p[0], p[1], s, s);
+    }
+  }
+
+  socket.on('lidar', m => {
+    $('lidar-nosig').style.display = 'none';
+    $('lidar-info').textContent = `${m.count} pts · ${m.frame}`;
+    cloud = m.points;
+    if (!document.hidden) drawLidar();
+  });
+
+  let dragging = false, lx = 0, ly = 0;
+  lc.addEventListener('mousedown', e => { dragging = true; lx = e.clientX; ly = e.clientY; lc.style.cursor = 'grabbing'; });
+  window.addEventListener('mouseup', () => { dragging = false; lc.style.cursor = 'grab'; });
+  window.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    cam.yaw   += (e.clientX - lx) * 0.008;
+    cam.pitch  = Math.max(0.05, Math.min(1.5, cam.pitch + (e.clientY - ly) * 0.008));
+    lx = e.clientX; ly = e.clientY;
+    drawLidar();
+  });
+  lc.addEventListener('wheel', e => {
+    e.preventDefault();
+    cam.dist = Math.max(6, Math.min(150, cam.dist * (e.deltaY > 0 ? 1.12 : 0.89)));
+    drawLidar();
+  }, { passive: false });
+
+  /* ============================================================= *
+   *  LOCAL DEM — three.js terrain with metre rulers + gnomon      *
+   * ============================================================= */
+  const demView = $('demView');
+  let demScene = null, demCam = null, demRenderer = null,
+      demMesh = null, demMarker = null, demGrid = null, demAxes = null;
+  const demOrbit = { yaw: -0.7, pitch: 0.55, dist: 16, cz: 0 };
+  const V_EXAG = 1.5;
+
+  function viridis(t) {
+    t = Math.max(0, Math.min(1, t));
+    const stops = [
+      [68,1,84],[59,82,139],[33,145,140],[94,201,98],[253,231,37]];
+    const f = t * (stops.length - 1), i = Math.floor(f), k = f - i;
+    const a = stops[i], b = stops[Math.min(i + 1, stops.length - 1)];
+    return [a[0]+(b[0]-a[0])*k, a[1]+(b[1]-a[1])*k, a[2]+(b[2]-a[2])*k];
+  }
+
+  function makeLabel(text, color) {
+    const c = document.createElement('canvas'), S = 128;
+    c.width = c.height = S;
+    const g = c.getContext('2d');
+    g.font = 'bold 54px monospace';
+    g.fillStyle = color || '#cfe0ee';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(text, S/2, S/2);
+    const tex = new THREE.CanvasTexture(c); tex.minFilter = THREE.LinearFilter;
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial(
+      { map: tex, transparent: true, depthTest: false }));
+    sp.scale.set(1.1, 1.1, 1);
+    return sp;
+  }
+
+  function niceStep(extent) {                 /* ~5-8 ticks across the extent */
+    const raw = extent / 6;
+    const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+    const n = raw / pow;
+    const step = n < 1.5 ? 1 : n < 3 ? 2 : n < 7 ? 5 : 10;
+    return step * pow;
+  }
+
+  function demInit() {
+    demScene = new THREE.Scene();
+    demScene.background = new THREE.Color(0x10151c);
+    demCam = new THREE.PerspectiveCamera(50, 1, 0.1, 2000);
+    demCam.up.set(0, 0, 1);
+    demRenderer = new THREE.WebGLRenderer({ antialias: true });
+    demView.appendChild(demRenderer.domElement);
+    demRenderer.domElement.style.cssText = 'position:absolute;inset:0';
+    demScene.add(new THREE.AmbientLight(0xffffff, 0.55));
+    const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+    sun.position.set(-10, -6, 20);
+    demScene.add(sun);
+    demMarker = new THREE.Mesh(
+      new THREE.ConeGeometry(0.18, 0.5, 12),
+      new THREE.MeshBasicMaterial({ color: 0x35e0b5 }));
+    demMarker.rotation.x = Math.PI / 2;
+    demMarker.visible = false;
+    demScene.add(demMarker);
+  }
+
+  /* Build the ruler frame: X/Y/Z axes anchored at the near-left corner, with
+     metre tick labels along the two ground edges and axis-direction labels.
+     Rebuilt each grid because the extent can change. */
+  function buildAxes(wm, hm, topZ) {
+    if (demAxes) { demScene.remove(demAxes); }
+    demAxes = new THREE.Group();
+    const x0 = -wm/2, y0 = -hm/2;             /* near-left corner */
+    const COL = { x: 0x33d6a6, y: 0x59b0ff, z: 0xffbe5c };
+
+    const line = (a, b, col) => {
+      const g = new THREE.BufferGeometry().setAttribute('position',
+        new THREE.BufferAttribute(new Float32Array([...a, ...b]), 3));
+      return new THREE.Line(g, new THREE.LineBasicMaterial({ color: col }));
+    };
+    demAxes.add(line([x0, y0, 0], [x0 + wm, y0, 0], COL.x));   /* X edge */
+    demAxes.add(line([x0, y0, 0], [x0, y0 + hm, 0], COL.y));   /* Y edge */
+    demAxes.add(line([x0, y0, 0], [x0, y0, Math.max(1, topZ)], COL.z)); /* Z up */
+
+    /* metre ticks + labels along X and Y edges */
+    const stepX = niceStep(wm), stepY = niceStep(hm);
+    for (let d = 0; d <= wm + 1e-6; d += stepX) {
+      demAxes.add(line([x0 + d, y0, 0], [x0 + d, y0 - 0.4, 0], COL.x));
+      const l = makeLabel(`${Math.round(d)}`, '#8fd8c4');
+      l.position.set(x0 + d, y0 - 1.1, 0); demAxes.add(l);
+    }
+    for (let d = 0; d <= hm + 1e-6; d += stepY) {
+      demAxes.add(line([x0, y0 + d, 0], [x0 - 0.4, y0 + d, 0], COL.y));
+      const l = makeLabel(`${Math.round(d)}`, '#9fcbf2');
+      l.position.set(x0 - 1.1, y0 + d, 0); demAxes.add(l);
+    }
+    /* axis-name labels at the far ends */
+    const lx = makeLabel('X+ (E) m', '#33d6a6'); lx.position.set(x0 + wm + 1.4, y0, 0); demAxes.add(lx);
+    const ly = makeLabel('Y+ (N) m', '#59b0ff'); ly.position.set(x0, y0 + hm + 1.4, 0); demAxes.add(ly);
+    const lz = makeLabel('Z', '#ffbe5c');        lz.position.set(x0, y0, Math.max(1, topZ) + 0.8); demAxes.add(lz);
+
+    demScene.add(demAxes);
+    $('dem-scale').textContent =
+      `edge ticks every ${stepX}/${stepY} m · height ×${V_EXAG}`;
+  }
+
+  function demDraw() {
+    if (!demRenderer) return;
+    const w = demView.clientWidth, h = demView.clientHeight;
+    demRenderer.setSize(w, h, false);
+    demCam.aspect = w / h; demCam.updateProjectionMatrix();
+    const o = demOrbit;
+    demCam.position.set(
+      o.dist * Math.cos(o.pitch) * Math.cos(o.yaw),
+      o.dist * Math.cos(o.pitch) * Math.sin(o.yaw),
+      o.cz + o.dist * Math.sin(o.pitch));
+    demCam.lookAt(0, 0, o.cz);
+    demRenderer.render(demScene, demCam);
+  }
+
+  socket.on('local_grid', m => {
+    if (document.hidden) return;
+    if (!window.THREE) return;
+    if (!demRenderer) demInit();
+    $('dem-nosig').style.display = 'none';
+    const span = Math.max(0.01, m.hmax - m.hmin);
+    $('dem-info').textContent = `${m.w}×${m.h} @ ${m.res} m · Δh ${span.toFixed(2)} m`;
+
+    const wm = m.w * m.res, hm = m.h * m.res;
+
+    const CAP = 56;
+    const step = Math.max(1, Math.ceil(Math.max(m.w, m.h) / CAP));
+    const gw = Math.floor((m.w + step - 1) / step);
+    const gh = Math.floor((m.h + step - 1) / step);
+
+    const geo = new THREE.PlaneGeometry(wm, hm, gw - 1, gh - 1);
+    const pos = geo.attributes.position;
+    const colors = new Float32Array(pos.count * 3);
+    for (let r = 0; r < gh; r++) {
+      for (let c = 0; c < gw; c++) {
+        const vi = r * gw + c;
+        const sc = Math.min(c * step, m.w - 1);
+        const sr = Math.min(r * step, m.h - 1);
+        const gi = (m.h - 1 - sr) * m.w + sc;
+        const v = m.data[gi];
+        if (v < 0) {
+          pos.setZ(vi, 0);
+          colors[vi*3] = 0.03; colors[vi*3+1] = 0.05; colors[vi*3+2] = 0.08;
+        } else {
+          pos.setZ(vi, (v / 100) * span * V_EXAG);
+          const cc = viridis(v / 100);
+          colors[vi*3] = cc[0]/255; colors[vi*3+1] = cc[1]/255; colors[vi*3+2] = cc[2]/255;
+        }
+      }
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geo.computeVertexNormals();
+
+    const P = pos.array;
+    const seg = new Float32Array((gh * (gw - 1) + gw * (gh - 1)) * 6);
+    let s = 0;
+    const edge = (a, b) => {
+      seg[s++] = P[a*3]; seg[s++] = P[a*3+1]; seg[s++] = P[a*3+2];
+      seg[s++] = P[b*3]; seg[s++] = P[b*3+1]; seg[s++] = P[b*3+2];
+    };
+    for (let r = 0; r < gh; r++)
+      for (let c = 0; c < gw - 1; c++) edge(r*gw + c, r*gw + c + 1);
+    for (let c = 0; c < gw; c++)
+      for (let r = 0; r < gh - 1; r++) edge(r*gw + c, (r+1)*gw + c);
+    const lgeo = new THREE.BufferGeometry();
+    lgeo.setAttribute('position', new THREE.BufferAttribute(seg, 3));
+
+    if (demMesh) { demScene.remove(demMesh); demMesh.geometry.dispose(); demMesh.material.dispose(); }
+    if (demGrid) { demScene.remove(demGrid); demGrid.geometry.dispose(); demGrid.material.dispose(); }
+    demMesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({
+      vertexColors: true, side: THREE.DoubleSide,
+      polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }));
+    demGrid = new THREE.LineSegments(lgeo, new THREE.LineBasicMaterial({
+      color: 0x9fe0f5, transparent: true, opacity: 0.30 }));
+    demScene.add(demMesh);
+    demScene.add(demGrid);
+
+    buildAxes(wm, hm, span * V_EXAG);
+    demOrbit.cz = span * V_EXAG / 2;
+
+    if (currentPose) {
+      const lx = (currentPose.x - m.ox) - wm / 2;
+      const ly = (currentPose.y - m.oy) - hm / 2;
+      demMarker.visible = Math.abs(lx) <= wm/2 && Math.abs(ly) <= hm/2;
+      demMarker.position.set(lx, ly, span * V_EXAG + 0.3);
+    }
+    demDraw();
+  });
+
+  let demDrag = false, dlx = 0, dly = 0;
+  demView.addEventListener('mousedown', e => { demDrag = true; dlx = e.clientX; dly = e.clientY; demView.style.cursor = 'grabbing'; });
+  window.addEventListener('mouseup', () => { demDrag = false; demView.style.cursor = 'grab'; });
+  window.addEventListener('mousemove', e => {
+    if (!demDrag) return;
+    demOrbit.yaw   -= (e.clientX - dlx) * 0.008;
+    demOrbit.pitch  = Math.max(0.08, Math.min(1.5, demOrbit.pitch + (e.clientY - dly) * 0.008));
+    dlx = e.clientX; dly = e.clientY;
+    demDraw();
+  });
+  demView.addEventListener('wheel', e => {
+    e.preventDefault();
+    demOrbit.dist = Math.max(3, Math.min(120, demOrbit.dist * (e.deltaY > 0 ? 1.12 : 0.89)));
+    demDraw();
+  }, { passive: false });
+
+  /* keep both views sized to the window */
+  window.addEventListener('resize', () => { drawLidar(); demDraw(); });
+  drawLidar();
+</script>
+</body>
+</html>
