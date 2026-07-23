@@ -163,6 +163,28 @@ services:
     volumes:
       - ./component_imu:/opt/ros/jazzy/src/component_imu
 
+  # Simulated event (DVS) camera: receives the UnrealEventCam plugin's TCP event
+  # stream (port 3005) and publishes an event-frame visualisation.
+  component_event_camera:
+    build:
+      context: ./component_event_camera
+      dockerfile: Dockerfile
+    image: gnc_moon_simulator/component_event_camera:dev
+    network_mode: host
+    ipc: host
+    restart: unless-stopped
+    entrypoint: >
+      bash -lc "/entrypoint.sh"
+    privileged: true
+    environment:
+      ROS_DOMAIN_ID: 0
+      ROBOT_NAMESPACE: ""
+      LAUNCH_ARGS: ""
+      RMW_IMPLEMENTATION: rmw_zenoh_cpp
+      RCUTILS_COLORIZED_OUTPUT: 1
+    volumes:
+      - ./component_event_camera:/opt/ros/jazzy/src/component_event_camera
+
   # Web mission control on http://localhost:5000 — starts automatically.
   mission_control_dashboard:
     build:

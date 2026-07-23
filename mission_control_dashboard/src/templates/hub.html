@@ -83,6 +83,15 @@
          readout, headlights and an emergency stop.</p>
       <div class="port">PORT <b>:5002</b></div>
     </a>
+
+    <a class="card" id="link-cameras">
+      <div class="ico">📷</div>
+      <h2>CAMERAS</h2>
+      <p>A camera wall you build yourself: toggle any of the navcam left / right /
+         central feeds, stereo depth, object segmentation and the event camera on
+         or off, laid out to fill the screen.</p>
+      <div class="port">PORT <b>:5003</b></div>
+    </a>
   </div>
 
   <footer>
@@ -96,6 +105,7 @@
   document.getElementById('host').textContent = host;
   document.getElementById('link-overview').href = `http://${host}:5001/`;
   document.getElementById('link-teleop').href   = `http://${host}:5002/`;
+  document.getElementById('link-cameras').href  = `http://${host}:5003/`;
 
   const clk = document.getElementById('clock');
   setInterval(() => { clk.textContent = new Date().toISOString().substr(11, 8); }, 1000);

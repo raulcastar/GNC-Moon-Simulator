@@ -43,14 +43,15 @@ from flask_socketio import SocketIO
 pkg_share = get_package_share_directory('mission_control_dashboard')
 template_dir = os.path.join(pkg_share, 'templates')
 
-# Three independent web servers, one ROS node behind them all:
+# Four independent web servers, one ROS node behind them all:
 #   5000  hub      — a menu that links to the other screens
 #   5001  overview — the full GNC mission-control dashboard
 #   5002  teleop   — manual drive-by-wire, bypassing the GNC planner
+#   5003  cameras  — a camera wall with per-feed show/hide toggles
 # network_mode: host means each port is reachable on the host directly, so no
 # compose port mapping is needed. Each Flask app gets its own SocketIO server;
 # the ROS node fans shared feeds (cameras, telemetry) out to whichever servers
-# need them via emit_over()/emit_all().
+# need them via emit_over() / emit_all() / emit_feeds().
 
 app = Flask('overview', template_folder=template_dir)
 app.config['SECRET_KEY'] = 'lunar_mission_secure'
@@ -66,6 +67,11 @@ app_teleop.config['SECRET_KEY'] = 'lunar_teleop'
 sio_teleop = SocketIO(app_teleop, async_mode='threading', cors_allowed_origins="*",
                       max_http_buffer_size=10000000)
 
+app_cams = Flask('cameras', template_folder=template_dir)
+app_cams.config['SECRET_KEY'] = 'lunar_cameras'
+sio_cams = SocketIO(app_cams, async_mode='threading', cors_allowed_origins="*",
+                    max_http_buffer_size=10000000)
+
 
 def emit_over(event, data):
     """Emit only to the overview dashboard (5001)."""
@@ -73,9 +79,18 @@ def emit_over(event, data):
 
 
 def emit_all(event, data):
-    """Emit to every operator screen that shares this feed (overview + teleop)."""
+    """Emit telemetry/log to the screens that show it (overview + teleop)."""
     socketio.emit(event, data)
     sio_teleop.emit(event, data)
+
+
+def emit_feeds(event, data, teleop=True):
+    """Fan a camera feed out to the screens that show it: overview and the
+    camera wall always; teleop too for the driving-relevant views."""
+    socketio.emit(event, data)
+    sio_cams.emit(event, data)
+    if teleop:
+        sio_teleop.emit(event, data)
 
 
 ros_node = None
@@ -195,6 +210,11 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
             Image, f'{ns}/central/object_mask',
             self._make_image_relay('mask'), qos_profile_sensor_data))
 
+        # Event (DVS) camera frame from component_event_camera.
+        self._subs.append(sub(
+            Image, 'event_camera/image_events',
+            self._make_image_relay('events'), qos_profile_sensor_data))
+
         # 5 Hz teleop deadman: stop the rover if manual commands stop arriving.
         self._teleop_watchdog = self.create_timer(0.2, self._teleop_watchdog_cb)
 
@@ -235,7 +255,7 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         def cb(msg: CompressedImage):
             if not self._is_active():
                 return
-            emit_all('feed', {
+            emit_feeds('feed', {
                 'id': feed_id,
                 'image': base64.b64encode(bytes(msg.data)).decode('ascii')})
         return cb
@@ -243,10 +263,11 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
     def _make_image_relay(self, feed_id: str, both: bool = False):
         """Relay a raw colour Image, JPEG-encoding it first.
 
-        both=True also mirrors the feed to the teleop screen (used for the
-        stereo depth view); otherwise it is overview-only.
+        Always goes to the overview and the camera wall (5003). both=True also
+        mirrors it to the teleop screen (used for the stereo depth view).
         """
-        emit = emit_all if both else emit_over
+        def emit(event, data):
+            emit_feeds(event, data, teleop=both)
 
         def cb(msg: Image):
             if not self._is_active():
@@ -598,6 +619,15 @@ def handle_teleop_stop(json_data=None):
 
 
 # =========================================================================
+# Flask routing — cameras (5003)
+# =========================================================================
+
+@app_cams.route('/')
+def cameras():
+    return render_template('cameras.html')
+
+
+# =========================================================================
 # Flask routing — overview (5001)
 # =========================================================================
 
@@ -653,8 +683,8 @@ def main(args=None):
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
 
-    # Hub (5000) and teleop (5002) run in background threads; the overview (5001)
-    # holds the main thread. All three share ros_node via the module globals.
+    # Hub (5000), teleop (5002) and cameras (5003) run in background threads; the
+    # overview (5001) holds the main thread. All share ros_node via the globals.
     def _serve(sio, flask_app, port):
         sio.run(flask_app, host='0.0.0.0', port=port, allow_unsafe_werkzeug=True)
 
@@ -662,8 +692,10 @@ def main(args=None):
                      daemon=True).start()
     threading.Thread(target=_serve, args=(sio_teleop, app_teleop, 5002),
                      daemon=True).start()
+    threading.Thread(target=_serve, args=(sio_cams, app_cams, 5003),
+                     daemon=True).start()
     ros_node.get_logger().info(
-        "Mission control up: hub :5000  overview :5001  teleop :5002")
+        "Mission control up: hub :5000  overview :5001  teleop :5002  cameras :5003")
 
     try:
         socketio.run(app, host='0.0.0.0', port=5001, allow_unsafe_werkzeug=True)

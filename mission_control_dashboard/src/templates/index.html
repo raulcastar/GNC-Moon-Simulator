@@ -181,6 +181,11 @@
 <body>
 
 <header>
+  <a href="#" id="menu-link" title="Back to the mission hub"
+     style="color:var(--dim);text-decoration:none;font-size:11px;letter-spacing:1px;
+            border:1px solid var(--line);padding:6px 11px;border-radius:4px;white-space:nowrap">◀ MENU</a>
+  <script>document.getElementById('menu-link').href =
+    'http://' + (window.location.hostname || 'localhost') + ':5000/';</script>
   <div class="brand">GNC MOON SIMULATOR<small>MISSION CONTROL // LUNAR SURFACE OPS</small></div>
   <div class="clock"><div class="lbl">MET</div><div class="val" id="met">T+ 00:00:00</div></div>
   <div class="clock"><div class="lbl">UTC</div><div class="val" id="utc">--:--:--</div></div>
@@ -216,9 +221,10 @@
           <div class="feed" id="f-cam_left"><div class="nosig">LEFT — NO SIGNAL</div><img></div>
           <div class="feed" id="f-cam_right"><div class="nosig">RIGHT — NO SIGNAL</div><img></div>
         </div>
-        <div class="cam-row">
+        <div class="cam-row" style="grid-template-columns:1fr 1fr 1fr">
           <div class="feed" id="f-depth"><div class="nosig">STEREO DEPTH</div><img></div>
           <div class="feed" id="f-mask"><div class="nosig">SEGMENTATION</div><img></div>
+          <div class="feed" id="f-events"><div class="nosig">EVENT CAM</div><img></div>
         </div>
       </div>
     </div>

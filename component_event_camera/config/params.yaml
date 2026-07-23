@@ -1,0 +1,28 @@
+lc_component_event_camera:
+  ros__parameters:
+    # ── Event stream ──────────────────────────────────────────────────────────
+    # TCP server the UnrealEventCam plugin (unreal/UnrealEventCam/) connects to.
+    # Must match the plugin's ServerIp / ServerPort. Only 127.0.0.1 crosses into
+    # WSL under mirrored networking, so bind 0.0.0.0 and let Unreal dial in.
+    stream_bind_ip:                    0.0.0.0
+    stream_port:                          3005
+
+    # Only packets tagged with this cam id are consumed (the plugin's CamId).
+    cam_id:                                  0
+
+    # ── Visualisation ─────────────────────────────────────────────────────────
+    # Events accumulated into each rendered frame, in seconds. Longer windows
+    # give brighter, more persistent trails; shorter windows track fast motion
+    # more crisply. ~1 frame at the publish rate is a good start.
+    accumulation_window_s:               0.033
+
+    # Rate at which the event-frame image is rendered and published (Hz). The
+    # event stream itself is asynchronous; this only sets the viewing cadence.
+    publish_rate_hz:                      30.0
+
+    # Colour-by-polarity event frame (rgb8). ON events (brightness increase) and
+    # OFF events (decrease) on a dark background. Viewable in the dashboard.
+    image_topic:              event_camera/image_events
+
+    # TF frame the image is stamped with.
+    frame_id:                       event_camera
