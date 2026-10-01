@@ -221,10 +221,13 @@
           <div class="feed" id="f-cam_left"><div class="nosig">LEFT — NO SIGNAL</div><img></div>
           <div class="feed" id="f-cam_right"><div class="nosig">RIGHT — NO SIGNAL</div><img></div>
         </div>
-        <div class="cam-row" style="grid-template-columns:1fr 1fr 1fr">
+        <div class="cam-row" style="grid-template-columns:1fr 1fr">
           <div class="feed" id="f-depth"><div class="nosig">STEREO DEPTH</div><img></div>
           <div class="feed" id="f-mask"><div class="nosig">SEGMENTATION</div><img></div>
+        </div>
+        <div class="cam-row" style="grid-template-columns:1fr 1fr">
           <div class="feed" id="f-events"><div class="nosig">EVENT CAM</div><img></div>
+          <div class="feed" id="f-spad"><div class="nosig">SPAD CAM</div><img></div>
         </div>
       </div>
     </div>
@@ -661,6 +664,12 @@ function viridis(t) {
 }
 
 socket.on('map_update', m => {
+  if (m.data_u16 !== undefined) {           /* uint16-quantised, base64; 65535 = no data */
+    const bin = atob(m.data_u16), q = new Uint16Array(bin.length / 2);
+    for (let i = 0; i < q.length; i++) q[i] = bin.charCodeAt(2*i) | (bin.charCodeAt(2*i + 1) << 8);
+    m.data = new Float32Array(q.length);
+    for (let i = 0; i < q.length; i++) m.data[i] = q[i] === 65535 ? 9999 : m.lo + q[i] * m.scale;
+  }
   mapW = m.width; mapH = m.height; mapRes = m.resolution;
   mapCanvas.width = odomCanvas.width = mapW;
   mapCanvas.height = odomCanvas.height = mapH;

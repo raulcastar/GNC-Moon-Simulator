@@ -37,7 +37,7 @@ from cv_bridge import CvBridge
 
 from custom_map_interfaces.srv import GetMatrices
 
-from flask import Flask, render_template
+from flask import Flask, render_template, request
 from flask_socketio import SocketIO
 
 pkg_share = get_package_share_directory('mission_control_dashboard')
@@ -478,28 +478,41 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
     # Map service + goal dispatch
     # =========================================================================
 
-    def fetch_maps(self) -> None:
+    def fetch_maps(self, sid=None) -> None:
+        """Request the elevation map and send it to `sid` (all clients if None)."""
         if self._cli_get_maps is None:
             return
         if not self._cli_get_maps.wait_for_service(timeout_sec=2.0):
             self.get_logger().warn("Planner map service is not available yet.")
             socketio.emit('log', {'level': 'WARN', 'node': 'dashboard',
                                   'text': 'Planner map service unavailable.',
-                                  'stamp': time.time()})
+                                  'stamp': time.time()}, to=sid)
             return
         self.get_logger().info("Requesting map from planner...")
         future = self._cli_get_maps.call_async(GetMatrices.Request())
-        future.add_done_callback(self.map_response_callback)
+        future.add_done_callback(lambda f: self.map_response_callback(f, sid))
 
-    def map_response_callback(self, future) -> None:
+    def map_response_callback(self, future, sid=None) -> None:
         try:
             response = future.result()
+            # Quantise to uint16 over the valid range and send as base64: the
+            # JSON float list for a 1000x1000 map is ~19 MB and stalls the
+            # socket. 65535 marks no-data (planner sentinel >= 9999).
+            elev = np.asarray(response.elevation_map.data, dtype=np.float32)
+            valid = np.isfinite(elev) & (elev < 9999.0)
+            lo = float(elev[valid].min()) if valid.any() else 0.0
+            hi = float(elev[valid].max()) if valid.any() else 0.0
+            scale = (hi - lo) / 65534.0 if hi > lo else 1.0
+            q = np.full(elev.shape, 65535, dtype='<u2')
+            q[valid] = np.round((elev[valid] - lo) / scale).astype('<u2')
             socketio.emit('map_update', {
-                'data': list(response.elevation_map.data),
+                'data_u16': base64.b64encode(q.tobytes()).decode('ascii'),
+                'lo': lo,
+                'scale': scale,
                 'width': response.elevation_map.layout.dim[1].size,
                 'height': response.elevation_map.layout.dim[0].size,
                 'resolution': self.map_resolution,
-            })
+            }, to=sid)
             self.get_logger().info("Map matrices delivered to the browser.")
         except Exception as e:
             self.get_logger().error(f"Map service call failed: {e}")
@@ -688,7 +701,7 @@ def index():
 def handle_connect(auth=None):
     if ros_node is not None:
         ros_node.get_logger().info("Operator console connected.")
-        ros_node.fetch_maps()
+        ros_node.fetch_maps(request.sid)
 
 
 @socketio.on('send_goal')
@@ -700,7 +713,7 @@ def handle_goal(json_data):
 @socketio.on('refresh_map')
 def handle_refresh(json_data=None):
     if ros_node is not None:
-        ros_node.fetch_maps()
+        ros_node.fetch_maps(request.sid)
 
 
 @socketio.on('headlights')
