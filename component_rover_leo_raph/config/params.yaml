@@ -33,7 +33,8 @@ lc_component_rover_leo_raph:
     # Wildcard here is correct: accept telemetry on every interface.
     listen_ip:                       0.0.0.0
     listen_port:                        3001
-    rover_width:                        35.0 # centimeters, distance between left and right wheels
+    wheel_speed_scale:                  3.45 # m/s -> Unreal wheel input units
+    rover_width:                        80.0 # centimeters, effective skid-steer track (physical: 35)
     headlights_on:                      true
 
     # Acceleration limits: a commanded velocity STEP (manual `ros2 topic pub`,
@@ -43,3 +44,7 @@ lc_component_rover_leo_raph:
     # — lower them if the rover still tips, raise them for snappier response.
     max_linear_accel:                    0.6  # m/s^2
     max_angular_accel:                   1.5  # rad/s^2
+
+    # Deceleration limits. The ramp completes even if cmd_vel stops arriving.
+    max_linear_decel:                    0.4  # m/s^2
+    max_angular_decel:                   3.0  # rad/s^2

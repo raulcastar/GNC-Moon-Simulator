@@ -100,6 +100,10 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self._v_cmd: float = 0.0
         self._w_cmd: float = 0.0
         self._last_cmd_t: Optional[float] = None
+        # Latest commanded twist; _ramp_tick keeps ramping toward it between messages.
+        self._v_tgt: float = 0.0
+        self._w_tgt: float = 0.0
+        self._ramp_timer = None
         
         # Network Utilities: Transmission
         self.udp_send_socket: Optional[socket.socket] = None
@@ -151,6 +155,10 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         # higher cap here is a safety net that leaves normal driving untouched.
         self.declare_parameter('max_linear_accel', 0.6)    # m/s^2
         self.declare_parameter('max_angular_accel', 1.5)   # rad/s^2
+        self.declare_parameter('max_linear_decel', 0.4)    # m/s^2
+        self.declare_parameter('max_angular_decel', 3.0)   # rad/s^2
+        self.declare_parameter('wheel_speed_scale', 1.0)   # m/s -> Unreal wheel units
+        self.wheel_speed_scale: float = 1.0
 
         # Body-tilt recovery from Unreal telemetry (see _publish_transform).
         # publish_body_tilt: off -> pure-yaw odom (flat-ground only); on ->
@@ -193,29 +201,52 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         return q
 
     @staticmethod
-    def _slew(cur: float, target: float, step: float) -> float:
+    def _slew(cur: float, target: float, up_step: float, down_step: float) -> float:
         """
-        Rate-limit ONLY acceleration; let deceleration/stop take effect at once.
-
-        Speeding up (larger |velocity| in the current direction) is what tips the
-        rover, so it is ramped by at most `step`. Slowing down, stopping, or
-        reversing is applied immediately: braking cannot tip the rover, and the
-        planner halts by commanding a single zero — which must stop the rover now,
-        not coast while it blocks on replanning (that was making a new-goal click
-        fail to stop the rover).
+        Step cur toward target by at most up_step when speeding up, or
+        down_step when slowing down, stopping or reversing.
         """
         speeding_up = abs(target) > abs(cur) and (cur == 0.0 or (cur > 0) == (target > 0))
-        if not speeding_up:
-            return target
-        return cur + max(-step, min(step, target - cur))
+        step = up_step if speeding_up else down_step
+        if abs(target - cur) <= step:
+            return target       # exact, so _ramp_tick can detect completion
+        return cur + step if target > cur else cur - step
+
+    def _ramp_step(self) -> None:
+        """Advance (v, w) toward the latest target by one rate-limited step and send it."""
+        now = time.monotonic()
+        dt = 0.1 if self._last_cmd_t is None else min(now - self._last_cmd_t, 0.2)
+        self._last_cmd_t = now
+
+        self._v_cmd = self._slew(self._v_cmd, self._v_tgt,
+                                 self.max_linear_accel * dt, self.max_linear_decel * dt)
+        self._w_cmd = self._slew(self._w_cmd, self._w_tgt,
+                                 self.max_angular_accel * dt, self.max_angular_decel * dt)
+
+        wheels = self.twist_to_wheels(self._v_cmd, self._w_cmd)
+        self._last_wheels = {k: wheels[k] for k in ("FL", "BL", "FR", "BR")}
+        self._send(wheels, "cmd_vel")
+
+    def _ramp_tick(self) -> None:
+        """Complete an unfinished ramp when cmd_vel is not arriving (e.g. a single stop)."""
+        if self._v_cmd == self._v_tgt and self._w_cmd == self._w_tgt:
+            return
+        if self._last_cmd_t is not None and time.monotonic() - self._last_cmd_t < 0.05:
+            return      # cmd_vel is already stepping the ramp
+        self._ramp_step()
 
     def twist_to_wheels(self, v: float, w: float) -> dict:
         """
         Computes Inverse Kinematics for a 4-wheel skid-steer/differential vehicle.
+
+        v [m/s], w [rad/s] -> Unreal wheel inputs. rover_width is the effective
+        (slip-calibrated) track in metres; wheel_speed_scale converts m/s to
+        wheel input units.
         """
         # Compute individual side velocities based on chassis track width
-        vel_left  = v - (w * self.rover_width / 2.0)
-        vel_right = v + (w * self.rover_width / 2.0)
+        k = self.wheel_speed_scale
+        vel_left  = k * (v - (w * self.rover_width / 2.0))
+        vel_right = k * (v + (w * self.rover_width / 2.0))
         
         # Apply mechanical inversion (negative input = forward motion in UE blueprint)
         return {
@@ -309,19 +340,10 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         """
         Processes incoming linear/angular velocity commands and dispatches them via UDP.
         """
-        # Ramp v and w toward the command instead of stepping to it. dt is the
-        # real gap between commands, capped so a long idle gap cannot allow one
-        # huge jump; the per-cycle change is bounded by accel * dt.
-        now = time.monotonic()
-        dt = 0.1 if self._last_cmd_t is None else min(now - self._last_cmd_t, 0.2)
-        self._last_cmd_t = now
-
-        self._v_cmd = self._slew(self._v_cmd, msg.linear.x,  self.max_linear_accel  * dt)
-        self._w_cmd = self._slew(self._w_cmd, msg.angular.z, self.max_angular_accel * dt)
-
-        wheels = self.twist_to_wheels(self._v_cmd, self._w_cmd)
-        self._last_wheels = {k: wheels[k] for k in ("FL", "BL", "FR", "BR")}
-        self._send(wheels, "cmd_vel")
+        # Set the target; _ramp_step applies the accel/decel limits.
+        self._v_tgt = msg.linear.x
+        self._w_tgt = msg.angular.z
+        self._ramp_step()
 
     def _udp_receive_loop(self) -> None:
         """
@@ -567,10 +589,13 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self.target_port = self.get_parameter('sending_port').value
         self.listen_ip   = self.get_parameter('listen_ip').value
         self.listen_port = self.get_parameter('listen_port').value
-        self.rover_width = self.get_parameter('rover_width').value
+        self.rover_width = self.get_parameter('rover_width').value / 100.0  # cm -> m
+        self.wheel_speed_scale = self.get_parameter('wheel_speed_scale').value
         self.headlights_on = self.get_parameter('headlights_on').value
         self.max_linear_accel  = self.get_parameter('max_linear_accel').value
         self.max_angular_accel = self.get_parameter('max_angular_accel').value
+        self.max_linear_decel  = self.get_parameter('max_linear_decel').value
+        self.max_angular_decel = self.get_parameter('max_angular_decel').value
         self.publish_body_tilt = self.get_parameter('publish_body_tilt').value
         self.tilt_roll_offset  = self.get_parameter('tilt_roll_offset').value
         self.tilt_pitch_offset = self.get_parameter('tilt_pitch_offset').value
@@ -623,7 +648,8 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         # Allocate standard pub/sub endpoints
         self._pub_odom    = self.create_lifecycle_publisher(Odometry, 'odom', 10)
         self._sub_cmd_vel = self.create_subscription(Twist, 'cmd_vel', self.cmd_vel_callback, 10)
-        
+        self._ramp_timer  = self.create_timer(0.05, self._ramp_tick)
+
         # Allocate headlights subscription
         self._sub_headlights = self.create_subscription(Bool, 'headlights_cmd', self.headlights_callback, 10)
 
@@ -655,6 +681,7 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         # Sent zeros directly, bypassing the ramp — zero its state too so the
         # next command ramps from a standstill instead of a phantom velocity.
         self._v_cmd = self._w_cmd = 0.0
+        self._v_tgt = self._w_tgt = 0.0
         self._last_cmd_t = None
 
         # 2. Assert thread termination and await its graceful exit (max 1 second block)
@@ -669,7 +696,11 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         Transition callback for node cleanup.
         """
         self.get_logger().info('Lifecycle state transition: CLEANING UP.')
-        
+
+        if self._ramp_timer:
+            self.destroy_timer(self._ramp_timer)
+            self._ramp_timer = None
+
         if self._sub_cmd_vel:
             self.destroy_subscription(self._sub_cmd_vel)
             
@@ -701,16 +732,20 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self._keep_listening = False
         if self._listen_thread and self._listen_thread.is_alive():
             self._listen_thread.join(timeout=1.0)
-            
+
+        if self._ramp_timer:
+            self.destroy_timer(self._ramp_timer)
+            self._ramp_timer = None
+
         if self._sub_cmd_vel:
             self.destroy_subscription(self._sub_cmd_vel)
-            
+
         if self._sub_headlights:
             self.destroy_subscription(self._sub_headlights)
-            
+
         if self._pub_odom:
             self.destroy_publisher(self._pub_odom)
-            
+
         if self.udp_send_socket:
             self.udp_send_socket.close()
         if self.udp_recv_socket:

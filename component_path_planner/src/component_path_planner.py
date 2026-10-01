@@ -89,6 +89,8 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
 
         # --- Internal State Tracking ---
         self.robot_pose = None      # Vector: [x, y, yaw, linear_vel, angular_vel]
+        # Last commanded (v, omega), used as the DWA velocity state
+        self._last_cmd = (0.0, 0.0)
         self.current_goal = None    # Vector: [x, y]
         self.global_path = None
         self.obstacles = np.array([])
@@ -99,6 +101,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         # between frames. Above this many metres in one step, treat it as a new
         # session and wipe the stale trajectory/goal so the map reflects the run.
         self._session_reset_dist = 2.0
+        self._tilt_deg = 0.0        # Angle between body z axis and vertical [deg]
         
         # --- Environmental Matrices ---
         self.elevationMap = None
@@ -113,7 +116,8 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 ('elevation_map_path', 'maps/generated_elevationMap_40.csv'),
                 ('soil_map_path',      'maps/generated_soilMap_1.csv'),
                 ('global_res',         1.0),
-                ('slope_threshold',    30.0),
+                ('slope_threshold',    15.0),
+                ('max_tilt_deg',       15.0),
                 ('lookahead_dist',     7.0),
                 
                 # Execution and UI
@@ -195,6 +199,11 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
 
         self.robot_pose = np.array([x, y, yaw, v, omega])
 
+        # Combined roll/pitch tilt: world-z component of the body z axis.
+        q = msg.pose.pose.orientation
+        cz = max(-1.0, min(1.0, 1.0 - 2.0 * (q.x * q.x + q.y * q.y)))
+        self._tilt_deg = math.degrees(math.acos(cz))
+
         # Downsample trajectory recording to 0.1m intervals to prevent memory saturation
         if len(self.trajectory_history) == 0 or \
            math.hypot(x - self.trajectory_history[-1][0], y - self.trajectory_history[-1][1]) > 0.1:
@@ -270,7 +279,18 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         """
         # Suspend execution if spatial context is unavailable OR if we have no active mission
         if self.robot_pose is None or self.current_goal is None:
-            return 
+            return
+
+        # Tilt safety: stop and abort the goal on excessive body tilt.
+        max_tilt = self.get_parameter('max_tilt_deg').value
+        if self._tilt_deg > max_tilt:
+            self.get_logger().error(
+                f"Tilt safety stop: body tilt {self._tilt_deg:.1f} deg exceeds "
+                f"{max_tilt:.1f} deg. Goal {self.current_goal} aborted.")
+            self._stop_robot()
+            self.current_goal = None
+            self.global_path = None
+            return
 
         # Halt kinematics and defer to the global planner if no valid route exists
         if self.global_path is None:
@@ -330,8 +350,9 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             lookahead = self.get_parameter('lookahead_dist').value
             local_goal = self.local_planner.get_lookahead_point(self.robot_pose, self.global_path, lookahead)
             
+            state = np.array([*self.robot_pose[:3], *self._last_cmd])
             cmd_vel_arr, predicted_trajectory = self.local_planner.dwa_control(
-                self.robot_pose, self.robot_conf, np.array(local_goal), self.obstacles
+                state, self.robot_conf, np.array(local_goal), self.obstacles
             )
 
             # Prevent angular oscillation ("Death Spiral") caused by DWA resolving
@@ -348,6 +369,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             twist_msg.linear.x = float(cmd_vel_arr[0])
             twist_msg.angular.z = float(cmd_vel_arr[1])
             self._pub_cmd_vel.publish(twist_msg)
+            self._last_cmd = (twist_msg.linear.x, twist_msg.angular.z)
 
             # Periodically stream the actual driven trajectory to the UI
             self._broadcast_paths()
@@ -360,6 +382,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
 
     def _stop_robot(self) -> None:
         """Transmits absolute zero-velocity limits to the hardware/simulation actuators."""
+        self._last_cmd = (0.0, 0.0)
         if self._pub_cmd_vel and self._pub_cmd_vel.is_activated:
             msg = Twist()
             msg.linear.x = 0.0

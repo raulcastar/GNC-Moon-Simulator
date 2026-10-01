@@ -3,27 +3,28 @@ lc_component_path_planner:
     # ---------------------------------------------------------
     # Map & Environment Configuration
     # ---------------------------------------------------------
-    elevation_map_path: "maps/procedural_lunar_terrain_1_elevationMap.csv"
-    soil_map_path: "maps/procedural_lunar_terrain_1_soilMap_edges_0.csv"
+    elevation_map_path: "maps/procedural_lunar_terrain_1_elevationMap_2.csv"
+    soil_map_path: "maps/procedural_lunar_terrain_1_soilMap_edges_0_2.csv"
     global_res: 1.0
-    slope_threshold: 30.0
+    slope_threshold: 15.0         # [deg] steeper cells are impassable
+    max_tilt_deg: 15.0            # [deg] abort the goal above this body tilt
 
     # ---------------------------------------------------------
     # Planning & Control Tuning
     # ---------------------------------------------------------
     control_rate_hz: 10.0         # The frequency of the DWA control loop
-    lookahead_dist: 2.5           # Distance to look ahead on the global path
-    max_speed: 2.5                # [m/s]
+    lookahead_dist: 4.0           # Distance to look ahead on the global path
+    max_speed: 0.5                # [m/s] below the rover's ~0.6 m/s traction limit
     min_speed: 0.0                # [m/s]
-    max_accel: 2.5                # [m/s^2] 
-    max_yaw_rate_deg: 1.5         # Degrees per second
-    max_delta_yaw_rate_deg: 1.5   # Degrees per second squared
-    v_resolution: 0.01
-    yaw_rate_resolution_deg: 0.1
-    
+    max_accel: 0.6                # [m/s^2] matches the rover node's accel limit
+    max_yaw_rate_deg: 20.0        # Degrees per second
+    max_delta_yaw_rate_deg: 20.0  # Degrees per second squared
+    v_resolution: 0.02            # sized to keep a DWA cycle ~10 ms
+    yaw_rate_resolution_deg: 0.5
+
     # DWA Prediction & Costs
     dt: 0.1                       # [s]
-    predict_time: 10.0            # [s]
+    predict_time: 1.5             # [s]
     to_goal_cost_gain: 1.0
     speed_cost_gain: 1.0
     obstacle_cost_gain: 1.0

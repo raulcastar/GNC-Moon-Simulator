@@ -68,15 +68,32 @@ class Local_Trajectory_Controller():
         predict trajectory with an input
         """
 
-        x = np.array(x_init)
-        trajectory = np.array(x)
-        time = 0
-        while time <= robot_description.predict_time:
-            x = self.motion(x, [v, y], robot_description.dt)
-            trajectory = np.vstack((trajectory, x))
-            time += robot_description.dt
+        # Vectorised equivalent of iterating motion() with constant (v, y).
+        dt = robot_description.dt
+        n = self._n_steps(robot_description.predict_time, dt)
+        x0 = np.asarray(x_init, dtype=float)
+
+        trajectory = np.empty((n + 1, len(x0)))
+        trajectory[0] = x0
+        yaw = x0[2] + y * dt * np.arange(1, n + 1)
+        trajectory[1:, 0] = x0[0] + np.cumsum(v * np.cos(yaw) * dt)
+        trajectory[1:, 1] = x0[1] + np.cumsum(v * np.sin(yaw) * dt)
+        trajectory[1:, 2] = yaw
+        trajectory[1:, 3] = v
+        trajectory[1:, 4] = y
+        if len(x0) > 5:
+            trajectory[1:, 5:] = x0[5:]
 
         return trajectory
+
+    @staticmethod
+    def _n_steps(predict_time, dt):
+        """Number of steps a `time += dt` loop takes up to predict_time."""
+        n, time = 0, 0
+        while time <= predict_time:
+            n += 1
+            time += dt
+        return n
 
 
     def calc_control_and_trajectory(self, x, dw, robot_description, goal, ob):
@@ -126,6 +143,14 @@ class Local_Trajectory_Controller():
         dx = trajectory[:, 0] - ox[:, None]
         dy = trajectory[:, 1] - oy[:, None]
         r = np.hypot(dx, dy)
+        min_r = np.min(r)
+
+        # No collision is possible beyond the footprint's half-diagonal, so
+        # skip the per-pose rotation check when all obstacles are farther.
+        half_diag = math.hypot(robot_description.robot_length,
+                               robot_description.robot_width) / 2
+        if robot_description.robot_type == 1 and min_r > half_diag:
+            return 1.0 / min_r
 
         if robot_description.robot_type == 1: # Rectangle
             yaw = trajectory[:, 2]
@@ -146,7 +171,6 @@ class Local_Trajectory_Controller():
             if np.array(r <= robot_description.robot_radius).any():
                 return float("Inf")
 
-        min_r = np.min(r)
         return 1.0 / min_r  # OK
 
 
