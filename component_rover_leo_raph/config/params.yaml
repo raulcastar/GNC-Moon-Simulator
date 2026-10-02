@@ -37,6 +37,9 @@ lc_component_rover_leo_raph:
     rover_width:                        80.0 # centimeters, effective skid-steer track (physical: 35)
     headlights_on:                      true
 
+    # Body roll sign.
+    tilt_roll_sign:                     -1.0
+
     # Acceleration limits: a commanded velocity STEP (manual `ros2 topic pub`,
     # or any glitch) is ramped to these rates instead of jumping, so the rover
     # does not tip on a hard launch. The path planner already ramps at ~0.4
