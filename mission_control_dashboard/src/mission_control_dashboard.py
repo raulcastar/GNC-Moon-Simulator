@@ -30,7 +30,7 @@ from rclpy.qos import qos_profile_sensor_data
 from nav_msgs.msg import Odometry, Path, OccupancyGrid
 from geometry_msgs.msg import PoseStamped, Twist
 from sensor_msgs.msg import CompressedImage, Image, PointCloud2
-from std_msgs.msg import Bool, Float32MultiArray
+from std_msgs.msg import Bool, Empty, Float32MultiArray
 from rcl_interfaces.msg import Log
 from lifecycle_msgs.srv import ChangeState
 from cv_bridge import CvBridge
@@ -162,6 +162,7 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         self._pub_goal = None
         self._pub_lights = None
         self._pub_cmdvel = None
+        self._pub_cancel = None
         self._cli_get_maps = None
         self._cli_stereo_lc = None
         self._restart_busy = False
@@ -195,6 +196,7 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         self._pub_goal = self.create_lifecycle_publisher(PoseStamped, 'goal_pose', 10)
         self._pub_lights = self.create_lifecycle_publisher(Bool, 'headlights_cmd', 10)
         self._pub_cmdvel = self.create_lifecycle_publisher(Twist, 'cmd_vel', 10)
+        self._pub_cancel = self.create_lifecycle_publisher(Empty, 'cancel_goal', 10)
         self._cli_get_maps = self.create_client(GetMatrices, 'get_matrices')
         self._cli_stereo_lc = self.create_client(
             ChangeState, '/lc_component_stereo_depth/change_state')
@@ -260,7 +262,7 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         for s in self._subs:
             self.destroy_subscription(s)
         self._subs = []
-        for p in (self._pub_goal, self._pub_lights, self._pub_cmdvel):
+        for p in (self._pub_goal, self._pub_lights, self._pub_cmdvel, self._pub_cancel):
             if p:
                 self.destroy_publisher(p)
         for c in (self._cli_get_maps, self._cli_stereo_lc):
@@ -581,8 +583,14 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
                 f"Headlights commanded {'ON' if on else 'OFF'} from the console.")
 
     def stop_rover(self) -> None:
-        """Zero twist, sent thrice for luck — the rover holds the last command."""
+        """
+        Cancels the planner's goal, then sends a zero twist (thrice, as the rover
+        holds the last command). Without the cancel, the planner's control loop
+        would override the stop on its next cycle.
+        """
         self._teleop_engaged = False
+        if self._pub_cancel and self._pub_cancel.is_activated:
+            self._pub_cancel.publish(Empty())
         if self._pub_cmdvel and self._pub_cmdvel.is_activated:
             for _ in range(3):
                 self._pub_cmdvel.publish(Twist())

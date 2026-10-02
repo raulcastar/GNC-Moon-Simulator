@@ -31,7 +31,7 @@ from rclpy.timer import Timer
 
 from geometry_msgs.msg import Twist, PoseStamped
 from nav_msgs.msg import Odometry, Path
-from std_msgs.msg import Bool, Float32MultiArray, MultiArrayDimension
+from std_msgs.msg import Bool, Empty, Float32MultiArray, MultiArrayDimension
 
 # --- Custom Service Import ---
 from custom_map_interfaces.srv import GetMatrices
@@ -71,6 +71,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         self._pub_goal_reached: Optional[Publisher] = None
         self._sub_odom:    Optional[Subscription] = None
         self._sub_goal:    Optional[Subscription] = None
+        self._sub_cancel:  Optional[Subscription] = None
         
         # --- ROS 2 Interfaces: Telemetry & Services ---
         self._pub_global_path: Optional[Publisher] = None
@@ -232,6 +233,25 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             status_msg = Bool()
             status_msg.data = False
             self._pub_goal_reached.publish(status_msg)
+
+    def cancel_goal_callback(self, msg: Empty) -> None:
+        """
+        Aborts the active goal on an operator ALL STOP and halts the rover.
+        Without this, the control loop would resume commanding cmd_vel on its
+        next cycle and override the stop.
+        """
+        if self.current_goal is not None:
+            self.get_logger().warn(f"Goal {self.current_goal} cancelled by the operator.")
+        self.current_goal = None
+        self.global_path = None
+        self._stop_robot()
+
+        # Remove the abandoned route from the UI; the driven trajectory is kept.
+        if self._pub_global_path and self._pub_global_path.is_activated:
+            empty = Path()
+            empty.header.frame_id = 'map'
+            empty.header.stamp = self.get_clock().now().to_msg()
+            self._pub_global_path.publish(empty)
 
     # =========================================================================
     # CORE CONTROL LOOP & PATHING
@@ -637,6 +657,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         
         self._sub_odom = self.create_subscription(Odometry, 'odom', self.odom_callback, 10)
         self._sub_goal = self.create_subscription(PoseStamped, 'goal_pose', self.goal_pose_callback, 10)
+        self._sub_cancel = self.create_subscription(Empty, 'cancel_goal', self.cancel_goal_callback, 10)
 
         return TransitionCallbackReturn.SUCCESS
 
@@ -675,6 +696,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         """
         if self._sub_odom: self.destroy_subscription(self._sub_odom)
         if self._sub_goal: self.destroy_subscription(self._sub_goal)
+        if self._sub_cancel: self.destroy_subscription(self._sub_cancel)
         if self._pub_cmd_vel: self.destroy_publisher(self._pub_cmd_vel)
         if self._pub_goal_reached: self.destroy_publisher(self._pub_goal_reached)
         if self._pub_global_path: self.destroy_publisher(self._pub_global_path)
