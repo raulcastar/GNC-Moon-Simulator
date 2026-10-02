@@ -12,9 +12,11 @@ renders lidar and map client-side on canvases.
 
 import os
 import json
+import math
 import time
 import threading
 import base64
+import warnings
 
 import cv2
 import numpy as np
@@ -37,7 +39,7 @@ from cv_bridge import CvBridge
 
 from custom_map_interfaces.srv import GetMatrices
 
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, send_from_directory
 from flask_socketio import SocketIO
 
 pkg_share = get_package_share_directory('mission_control_dashboard')
@@ -92,7 +94,7 @@ def emit_all(event, data):
 
 def emit_map(event, data):
     """Fan a spatial feed (lidar / DEM / pose) out to the overview and the
-    dedicated 3D map window (5004)."""
+    dedicated 3D map window (5005)."""
     socketio.emit(event, data)
     sio_map.emit(event, data)
 
@@ -106,6 +108,39 @@ def emit_feeds(event, data, teleop=True):
         sio_teleop.emit(event, data)
 
 
+def _ground_plane(dem: np.ndarray, res: float) -> np.ndarray:
+    """
+    Robust plane fit z = a*x + b*y + c to a rover-aligned DEM (rows forward,
+    columns lateral), iteratively excluding cells above the fit (rocks).
+    Returns (a, b, c), or zeros when too few cells are observed.
+    """
+    rows, cols = np.nonzero(np.isfinite(dem))
+    if rows.size < 50:
+        return np.zeros(3)
+    x = (cols - (dem.shape[1] - 1) / 2.0) * res
+    y = (rows + 0.5) * res
+    z = dem[rows, cols].astype(np.float64)
+    keep = np.ones(z.size, dtype=bool)
+    coef = np.zeros(3)
+    for _ in range(3):
+        A = np.c_[x[keep], y[keep], np.ones(keep.sum())]
+        coef, *_ = np.linalg.lstsq(A, z[keep], rcond=None)
+        resid = z - (coef[0] * x + coef[1] * y + coef[2])
+        keep = resid < 0.05
+        if keep.sum() < 50:
+            break
+    return coef
+
+
+def _local_dem_js():
+    """Serves the local DEM view shared by the overview and 3D map pages."""
+    return send_from_directory(template_dir, 'local_dem.js', mimetype='application/javascript')
+
+
+for _app in (app, app_map):
+    _app.add_url_rule('/local_dem.js', 'local_dem_js', _local_dem_js)
+
+
 ros_node = None
 
 # /rosout severity bytes -> console labels
@@ -117,7 +152,8 @@ _LOG_LEVELS = {10: 'DEBUG', 20: 'INFO', 30: 'WARN', 40: 'ERROR', 50: 'FATAL'}
 _MAX_LIDAR_POINTS = 9000       # per frame pushed to the browser
 _LIDAR_MIN_PERIOD = 1.0        # seconds between lidar frames
 _ODOM_MIN_PERIOD = 0.15        # seconds between telemetry emits
-_GRID_MIN_PERIOD = 2.0         # seconds between local DEM frames
+_GRID_MIN_PERIOD = 1.0         # seconds between local DEM frames
+_DEM_MAX_CELLS = 160           # max DEM cells per side sent to the browser
 # The driven-trajectory Path grows without bound as the rover moves. Relaying
 # every pose meant an ever-larger payload each update, and the browser re-drew
 # the whole polyline on every odom tick — O(N) with N climbing, which is what
@@ -166,7 +202,6 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         self._cli_get_maps = None
         self._cli_stereo_lc = None
         self._restart_busy = False
-        self._raw_dem = None        # (W, H, np.ndarray metres) awaiting its grid
 
         self._last_lidar = 0.0
         self._last_odom_emit = 0.0
@@ -183,6 +218,9 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
 
         self.declare_parameter('global_res', 1.0)
         self.declare_parameter('camera_namespace', 'navcam')
+        # Relief (m) shown as an obstacle in the local DEM view. Display only.
+        self.declare_parameter('dem_obstacle_height', 0.15)
+        self._dem_res = 0.05        # local DEM cell size, updated from the grid
         self.map_resolution = self.get_parameter('global_res').value
 
     # =========================================================================
@@ -351,46 +389,59 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
 
     def raw_dem_callback(self, msg: Float32MultiArray) -> None:
         """
-        Cache the raw DEM (metres). local_mapping publishes it immediately
-        before the matching OccupancyGrid, whose values are normalised 0-100;
-        joining the two recovers true elevations for the 3D terrain.
-        """
-        if len(msg.layout.dim) == 2:
-            self._raw_dem = (msg.layout.dim[0].size, msg.layout.dim[1].size,
-                             np.asarray(msg.data, dtype=np.float32))
+        Relays the local DEM to the browser as 'local_dem'.
 
-    def local_grid_callback(self, msg: OccupancyGrid) -> None:
-        if not self._is_active():
+        Input: DEM[x, y] in metres above the ground under the rover (x lateral,
+        right +; y forward from the camera plane; NaN = unobserved). Output:
+        centimetres, row-major by forward row, None for unobserved cells, since
+        NaN is not valid JSON.
+        """
+        if not self._is_active() or len(msg.layout.dim) != 2:
             return
         now = time.monotonic()
         if now - self._last_grid < _GRID_MIN_PERIOD:
             return
         self._last_grid = now
 
-        data = np.asarray(msg.data, dtype=np.int8)
+        W, H = msg.layout.dim[0].size, msg.layout.dim[1].size
+        dem = np.asarray(msg.data, dtype=np.float32).reshape(W, H).T   # (forward, lateral)
+        res = self._dem_res
 
-        # True height span from the raw DEM. Raw is DEM[x, y] flattened
-        # (index x*H + y); the grid is data[y*W + x] — transpose to align.
-        hmin = hmax = 0.0
-        if (self._raw_dem is not None
-                and self._raw_dem[0] == msg.info.width
-                and self._raw_dem[1] == msg.info.height):
-            W, H, raw = self._raw_dem
-            aligned = raw.reshape(W, H).T.ravel()
-            known = aligned[data >= 0]
-            if known.size:
-                hmin, hmax = float(known.min()), float(known.max())
+        # Bound the browser mesh; max-pool so obstacles survive the reduction.
+        f = int(math.ceil(max(W, H) / _DEM_MAX_CELLS))
+        if f > 1:
+            h2, w2 = -(-dem.shape[0] // f), -(-dem.shape[1] // f)
+            padded = np.full((h2 * f, w2 * f), np.nan, dtype=np.float32)
+            padded[:dem.shape[0], :dem.shape[1]] = dem
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', RuntimeWarning)   # all-NaN blocks
+                dem = np.nanmax(padded.reshape(h2, f, w2, f), axis=(1, 3))
+            res *= f
 
-        emit_map('local_grid', {
-            'w': msg.info.width,
-            'h': msg.info.height,
-            'res': round(msg.info.resolution, 4),
-            'ox': round(msg.info.origin.position.x, 3),
-            'oy': round(msg.info.origin.position.y, 3),
-            'hmin': round(hmin, 3),
-            'hmax': round(hmax, 3),
-            'data': data.tolist(),           # int8: -1 unknown, 0-100 elevation
+        known = np.isfinite(dem)
+        threshold = self.get_parameter('dem_obstacle_height').value
+        plane = _ground_plane(dem, res)
+        rows, cols = np.indices(dem.shape)
+        relief = dem - (plane[0] * (cols - (dem.shape[1] - 1) / 2.0) * res
+                        + plane[1] * (rows + 0.5) * res + plane[2])
+        z_cm = np.where(known, np.round(dem * 100.0), 0).astype(np.int32)
+        emit_map('local_dem', {
+            'w': int(dem.shape[1]),
+            'h': int(dem.shape[0]),
+            'res': round(float(res), 4),
+            'z': [int(v) if k else None for v, k in zip(z_cm.ravel(), known.ravel())],
+            # Local ground z = a*x + b*y + c (x right, y forward, m); the browser
+            # colours by relief above it so slopes are not shown as obstacles.
+            'plane': [round(float(v), 5) for v in plane],
+            'observed': round(float(known.mean()), 3),
+            'max_relief_m': round(float(relief[known].max()), 3) if known.any() else None,
+            'obstacles': int((relief[known] >= threshold).sum()),
+            'obstacle_m': float(threshold),
         })
+
+    def local_grid_callback(self, msg: OccupancyGrid) -> None:
+        """Tracks the DEM cell size; the grid itself is not relayed."""
+        self._dem_res = float(msg.info.resolution)
 
     # =========================================================================
     # Telemetry, paths, logs
@@ -584,9 +635,9 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
 
     def stop_rover(self) -> None:
         """
-        Cancels the planner's goal, then sends a zero twist (thrice, as the rover
-        holds the last command). Without the cancel, the planner's control loop
-        would override the stop on its next cycle.
+        Cancels the planner's goal, which would otherwise override the stop on its
+        next cycle, then sends a zero twist three times (the rover holds the last
+        command).
         """
         self._teleop_engaged = False
         if self._pub_cancel and self._pub_cancel.is_activated:

@@ -25,10 +25,16 @@ lc_component_local_mapping:
     # camera_height_m: distance from the ground plane to the camera optical
     #   centre (= physical_height in CameraTransform). Used by rotateRefSystem
     #   to set the absolute elevation of z_w = 0 at the ground.
-    # Measured: with 0.40 the flat ground read ~-0.15 m (z_w below the base),
-    # so the true optical-centre height above the ground is ~0.25 m. Centres
-    # flat ground at z_w = 0.
-    camera_height_m: 0.25   # metres
+    # Measured in Unreal: Navcam_Center is 0.577 m above the ground
+    # (0.284 m above the odom origin, itself 0.293 m above the ground).
+    camera_height_m: 0.577  # metres
+
+    # camera_offset_*: Navcam_Center optical centre relative to the odom origin,
+    #   rover body frame (forward, left, up), metres. Places the point cloud and
+    #   elevation grid in the odom frame. Measured in Unreal.
+    camera_offset_forward_m: 0.171
+    camera_offset_lateral_m: 0.0
+    camera_offset_up_m:      0.284
 
     # camera_angle: tilt of the camera from horizontal in degrees.
     #   0   = camera looking straight ahead (horizontal)

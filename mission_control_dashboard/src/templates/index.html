@@ -5,6 +5,7 @@
 <title>GNC MOON SIM — Mission Control</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="/local_dem.js"></script>
 <style>
   :root {
     --bg:      #10151c;
@@ -170,11 +171,11 @@
   main[data-view="map"]   #col-cams, main[data-view="map"]  #col-right { display: none; }
   main[data-view="dem"]   { grid-template-columns: 1fr; }
   main[data-view="dem"]   #col-cams, main[data-view="dem"]  #col-map,
-  main[data-view="dem"]   #lidar-panel { display: none; }
+  main[data-view="dem"]   #lidar-panel, main[data-view="dem"] #tele-panel { display: none; }
   main[data-view="dem"]   #dem-panel { flex: 1; }
   main[data-view="lidar"] { grid-template-columns: 1fr; }
   main[data-view="lidar"] #col-cams, main[data-view="lidar"] #col-map,
-  main[data-view="lidar"] #dem-panel { display: none; }
+  main[data-view="lidar"] #dem-panel, main[data-view="lidar"] #tele-panel { display: none; }
   main[data-view="lidar"] #lidar-panel { flex: 1; }
 </style>
 </head>
@@ -271,8 +272,8 @@
       <canvas id="lidarCanvas" style="cursor:grab"></canvas>
     </div>
     <div class="panel" id="dem-panel">
-      <div class="panel-title"><span class="tag">▦</span>LOCAL DEM — 3D TERRAIN · DRAG · WHEEL<span class="age" id="dem-info"></span></div>
-      <div class="feed" style="flex:1;cursor:grab" id="demView"><div class="nosig" id="dem-nosig">AWAITING LOCAL MAPPING</div></div>
+      <div class="panel-title"><span class="tag">▦</span>LOCAL DEM — TERRAIN RELIEF · DRAG · WHEEL<span class="age" id="dem-info"></span></div>
+      <div class="feed" style="flex:1;position:relative" id="demView"><div class="nosig" id="dem-nosig">AWAITING LOCAL MAPPING</div></div>
     </div>
     <div class="panel" id="tele-panel">
       <div class="panel-title"><span class="tag">▤</span>ROVER TELEMETRY &amp; COMMAND</div>
@@ -484,144 +485,9 @@ lc.addEventListener('wheel', e => {
   drawLidar();
 }, { passive: false });
 
-/* ---------------- local DEM: three.js terrain ---------------- */
-const demView = $('demView');
-let demScene = null, demCam = null, demRenderer = null, demMesh = null, demMarker = null, demGrid = null;
-const demOrbit = { yaw: -0.7, pitch: 0.55, dist: 14, cz: 0 };
-const V_EXAG = 1.5;                        /* vertical exaggeration */
-
-function demInit() {
-  demScene = new THREE.Scene();
-  demScene.background = new THREE.Color(0x10151c);
-  demCam = new THREE.PerspectiveCamera(50, 1, 0.1, 500);
-  demCam.up.set(0, 0, 1);                  /* z is up: grid x lateral, y forward */
-  demRenderer = new THREE.WebGLRenderer({ antialias: true });
-  demView.appendChild(demRenderer.domElement);
-  demRenderer.domElement.style.cssText = 'position:absolute;inset:0';
-  demScene.add(new THREE.AmbientLight(0xffffff, 0.55));
-  const sun = new THREE.DirectionalLight(0xffffff, 0.8);
-  sun.position.set(-10, -6, 20);
-  demScene.add(sun);
-  demMarker = new THREE.Mesh(
-    new THREE.ConeGeometry(0.18, 0.5, 12),
-    new THREE.MeshBasicMaterial({ color: 0x35e0b5 }));
-  demMarker.rotation.x = Math.PI / 2;      /* cone points +z */
-  demMarker.visible = false;
-  demScene.add(demMarker);
-}
-
-function demDraw() {
-  if (!demRenderer) return;
-  const w = demView.clientWidth, h = demView.clientHeight;
-  demRenderer.setSize(w, h, false);
-  demCam.aspect = w / h; demCam.updateProjectionMatrix();
-  const o = demOrbit;
-  demCam.position.set(
-    o.dist * Math.cos(o.pitch) * Math.cos(o.yaw),
-    o.dist * Math.cos(o.pitch) * Math.sin(o.yaw),
-    o.cz + o.dist * Math.sin(o.pitch));
-  demCam.lookAt(0, 0, o.cz);
-  demRenderer.render(demScene, demCam);
-}
-
-socket.on('local_grid', m => {
-  if (document.hidden) return;   /* don't rebuild/upload the mesh while unseen */
-  if (!window.THREE) { addLocal('ERROR', 'three.js failed to load — no 3D DEM.'); return; }
-  if (!demRenderer) demInit();
-  $('dem-nosig').style.display = 'none';
-  const span = Math.max(0.01, m.hmax - m.hmin);
-  $('dem-info').textContent =
-    `${m.w}×${m.h} @ ${m.res} m · Δh ${span.toFixed(2)} m`;
-
-  const wm = m.w * m.res, hm = m.h * m.res;      /* extent in metres */
-
-  /* Subsample so the rebuilt mesh never exceeds ~90x90 vertices. A fine grid
-     (5 cm cells over several metres) is hundreds of thousands of vertices;
-     rebuilding that plus computeVertexNormals every push, on the GPU Unreal is
-     already using, is what froze the compositor. At map scale the terrain
-     shape is unchanged by the decimation. */
-  const CAP = 56;   /* coarse enough that the grid cells read as distinct cells */
-  const step = Math.max(1, Math.ceil(Math.max(m.w, m.h) / CAP));
-  const gw = Math.floor((m.w + step - 1) / step);   /* sampled columns */
-  const gh = Math.floor((m.h + step - 1) / step);   /* sampled rows */
-
-  const geo = new THREE.PlaneGeometry(wm, hm, gw - 1, gh - 1);
-  const pos = geo.attributes.position;
-  const colors = new Float32Array(pos.count * 3);
-  for (let r = 0; r < gh; r++) {
-    for (let c = 0; c < gw; c++) {
-      const vi = r * gw + c;                    /* vertex index in sampled mesh */
-      const sc = Math.min(c * step, m.w - 1);   /* source column */
-      const sr = Math.min(r * step, m.h - 1);   /* source row */
-      const gi = (m.h - 1 - sr) * m.w + sc;     /* grid index, row 0 at bottom */
-      const v = m.data[gi];
-      if (v < 0) {                               /* unknown: floor, dark */
-        pos.setZ(vi, 0);
-        colors[vi*3] = 0.03; colors[vi*3+1] = 0.05; colors[vi*3+2] = 0.08;
-      } else {
-        pos.setZ(vi, (v / 100) * span * V_EXAG);
-        const cc = viridis(v / 100);
-        colors[vi*3] = cc[0]/255; colors[vi*3+1] = cc[1]/255; colors[vi*3+2] = cc[2]/255;
-      }
-    }
-  }
-  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  geo.computeVertexNormals();
-
-  /* Grid overlay: a clean quad wireframe over the very same vertices, so the
-     surface reads as a 3D grid of height cells rather than a smooth blob. Only
-     row and column edges are drawn (no triangle diagonals). */
-  const P = pos.array;
-  const seg = new Float32Array((gh * (gw - 1) + gw * (gh - 1)) * 6);
-  let s = 0;
-  const edge = (a, b) => {
-    seg[s++] = P[a*3]; seg[s++] = P[a*3+1]; seg[s++] = P[a*3+2];
-    seg[s++] = P[b*3]; seg[s++] = P[b*3+1]; seg[s++] = P[b*3+2];
-  };
-  for (let r = 0; r < gh; r++)
-    for (let c = 0; c < gw - 1; c++) edge(r*gw + c, r*gw + c + 1);
-  for (let c = 0; c < gw; c++)
-    for (let r = 0; r < gh - 1; r++) edge(r*gw + c, (r+1)*gw + c);
-  const lgeo = new THREE.BufferGeometry();
-  lgeo.setAttribute('position', new THREE.BufferAttribute(seg, 3));
-
-  if (demMesh) { demScene.remove(demMesh); demMesh.geometry.dispose(); demMesh.material.dispose(); }
-  if (demGrid) { demScene.remove(demGrid); demGrid.geometry.dispose(); demGrid.material.dispose(); }
-  demMesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({
-    vertexColors: true, side: THREE.DoubleSide,
-    polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }));
-  demGrid = new THREE.LineSegments(lgeo, new THREE.LineBasicMaterial({
-    color: 0x9fe0f5, transparent: true, opacity: 0.30 }));
-  demScene.add(demMesh);
-  demScene.add(demGrid);
-  demOrbit.cz = span * V_EXAG / 2;
-
-  /* rover marker, if the pose falls inside the grid (grid lives in odom) */
-  if (currentPose) {
-    const lx = (currentPose.x - m.ox) - wm / 2;
-    const ly = (currentPose.y - m.oy) - hm / 2;
-    demMarker.visible = Math.abs(lx) <= wm/2 && Math.abs(ly) <= hm/2;
-    demMarker.position.set(lx, ly, span * V_EXAG + 0.3);
-  }
-  demDraw();
-});
-
-/* DEM orbit interaction */
-let demDrag = false, dlx = 0, dly = 0;
-demView.addEventListener('mousedown', e => { demDrag = true; dlx = e.clientX; dly = e.clientY; demView.style.cursor = 'grabbing'; });
-window.addEventListener('mouseup', () => { demDrag = false; demView.style.cursor = 'grab'; });
-window.addEventListener('mousemove', e => {
-  if (!demDrag) return;
-  demOrbit.yaw   -= (e.clientX - dlx) * 0.008;
-  demOrbit.pitch  = Math.max(0.08, Math.min(1.5, demOrbit.pitch + (e.clientY - dly) * 0.008));
-  dlx = e.clientX; dly = e.clientY;
-  demDraw();
-});
-demView.addEventListener('wheel', e => {
-  e.preventDefault();
-  demOrbit.dist = Math.max(3, Math.min(80, demOrbit.dist * (e.deltaY > 0 ? 1.12 : 0.89)));
-  demDraw();
-}, { passive: false });
+/* ---------------- local DEM (shared view, local_dem.js) ---------------- */
+const demView = LocalDemView($('demView'), { info: $('dem-info'), nosig: $('dem-nosig') });
+socket.on('local_dem', m => demView.update(m));
 
 /* ---------------- rover command buttons ---------------- */
 $('btn-lon').onclick = () => {
@@ -858,7 +724,7 @@ function setView(v) {
   try { localStorage.setItem('mc_view', v); } catch (e) {}
   requestAnimationFrame(() => {
     if (mapW) { fitMapStack(); drawColorbar(mapW > 0); }
-    if (demRenderer) demDraw();
+    demView.redraw();
     drawLidar();
   });
 }

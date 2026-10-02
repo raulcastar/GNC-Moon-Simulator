@@ -55,6 +55,34 @@ def _quat_to_rot(qx: float, qy: float, qz: float, qw: float) -> np.ndarray:
     ], dtype=np.float64)
 
 
+def _yaw_rot(qx: float, qy: float, qz: float, qw: float) -> np.ndarray:
+    """Heading-only rotation (about Z) of the given quaternion."""
+    yaw = math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+    c, s = math.cos(yaw), math.sin(yaw)
+    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+
+
+def _rot_to_quat(R: np.ndarray) -> Tuple[float, float, float, float]:
+    """Converts a 3x3 rotation matrix to a unit quaternion (x, y, z, w)."""
+    tr = R[0, 0] + R[1, 1] + R[2, 2]
+    if tr > 0.0:
+        s = 2.0 * math.sqrt(tr + 1.0)
+        return ((R[2, 1] - R[1, 2]) / s, (R[0, 2] - R[2, 0]) / s,
+                (R[1, 0] - R[0, 1]) / s, 0.25 * s)
+    i = int(np.argmax([R[0, 0], R[1, 1], R[2, 2]]))
+    j, k = (i + 1) % 3, (i + 2) % 3
+    s = 2.0 * math.sqrt(max(1e-12, 1.0 + R[i, i] - R[j, j] - R[k, k]))
+    q = [0.0, 0.0, 0.0]
+    q[i] = 0.25 * s
+    q[j] = (R[j, i] + R[i, j]) / s
+    q[k] = (R[k, i] + R[i, k]) / s
+    return q[0], q[1], q[2], (R[k, j] - R[j, k]) / s
+
+
+# Rz(-90°): grid axes (x = right, y = forward) to body axes (X = forward, Y = left).
+_ROT_Z_MINUS_90 = np.array([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+
+
 class LifecycleLocalMapping(rclpy.lifecycle.Node):
     """
     Local DEM built from a single RealSense-style depth camera.
@@ -78,11 +106,11 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
        DEM[x_idx, y_idx] = max z_w in that cell (obstacle-safe aggregation)
 
     4. Global frame for PointCloud2
-       Map (x_w, y_w, z_w) → body frame (REP-103: X=forward, Y=left, Z=up):
-         body_x =  y_w                          (camera forward → rover forward)
-         body_y = -x_w                          (camera right  → rover -left)
-         body_z =  z_w - camera_height_m        (elevation rel. to rover base)
-       Then rotate by rover quaternion from /odom and translate by rover position.
+       Points relative to the camera (REP-103: X=forward, Y=left, Z=up):
+         p_cam = (y_w, -x_w, z_w - camera_height_m)
+       Camera position: cam_odom = rover position + R_body→world · camera_offset.
+       p_odom = R · p_cam + cam_odom, where R is the heading-only rotation when
+       apply_rover_tilt has already levelled the points, else the full attitude.
     """
 
     def __init__(self, node_name: str, **kwargs):
@@ -125,6 +153,11 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
                 ('camera_height_m',  rclpy.Parameter.Type.DOUBLE),  # = phys_h in reference
                 ('camera_angle',     rclpy.Parameter.Type.DOUBLE),  # degrees; 0 = horizontal
                 ('camera_roll',      rclpy.Parameter.Type.DOUBLE),  # degrees; lateral mounting tilt (usually 0)
+                # Camera optical centre relative to the odom origin, body frame (m).
+                # Defaults of 0 keep the previous behaviour.
+                ('camera_offset_forward_m', 0.0),
+                ('camera_offset_lateral_m', 0.0),
+                ('camera_offset_up_m',      0.0),
                 # DEM parameters
                 ('map_resolution',   rclpy.Parameter.Type.DOUBLE),  # metres per cell
                 ('distance_limit',   rclpy.Parameter.Type.DOUBLE),  # metres; mirrors reference
@@ -296,11 +329,11 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         z_w = -y_cam * sin_t + z_cam * cos_t + self.camera_height_m  # elevation
 
         # ── 3b. Roll correction ───────────────────────────────────────────────
-        # rover_roll (+ camera_roll_rad for fixed mounting offset) rotates in the
-        # lateral/elevation plane: a positive roll lifts the rover's right side,
-        # which shifts map points laterally.  We rotate around the camera origin
-        # (z_rel = 0 at the camera elevation), then restore the height offset.
-        total_roll = rover_roll + self._camera_roll_rad
+        # Rotates in the lateral/elevation plane about the camera, then restores
+        # the height offset. The angle follows the camera_roll convention (right
+        # side up); a positive REP-103 rover roll lifts the left side, hence the
+        # minus sign.
+        total_roll = self._camera_roll_rad - rover_roll
         if total_roll != 0.0:
             z_rel = z_w - self.camera_height_m
             cr = math.cos(total_roll)
@@ -572,17 +605,18 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         # rotateRefSystem produces a left-handed-ish local frame:
         #   x_w = lateral (right +),  y_w = forward,  z_w = elevation
         #
-        # Map to body frame (REP-103: X=forward, Y=left, Z=up):
-        #   body_x =  y_w                        forward
-        #   body_y = -x_w                        right of camera → rover -left
-        #   body_z =  z_w − camera_height_m      height rel. to rover base origin
-        #
-        # Then: p_odom = R_body→world @ p_body + rover_position
-        R_bw   = _quat_to_rot(qx, qy, qz, qw)              # (3, 3)
-        p_body = np.stack([ y_w,
-                            -x_w,
-                             z_w - self.camera_height_m], axis=0)   # (3, N)
-        p_odom = R_bw @ p_body + np.array([[tx], [ty], [tz]])       # (3, N)
+        # Points relative to the camera, REP-103 axes (X=forward, Y=left, Z=up):
+        #   p_cam = (y_w, -x_w, z_w − camera_height_m)
+        # Camera in odom: rover position + R_body→world · mounting offset.
+        # With apply_rover_tilt the points are already levelled, so only the
+        # heading is applied; the full attitude would tilt them twice.
+        R_bw     = _quat_to_rot(qx, qy, qz, qw)            # (3, 3)
+        R_pts    = _yaw_rot(qx, qy, qz, qw) if self.apply_rover_tilt else R_bw
+        cam_odom = R_bw @ self._camera_offset + np.array([tx, ty, tz])
+        p_cam    = np.stack([ y_w,
+                              -x_w,
+                               z_w - self.camera_height_m], axis=0)   # (3, N)
+        p_odom   = R_pts @ p_cam + cam_odom[:, None]                  # (3, N)
 
         Xw_g = p_odom[0].astype(np.float32)
         Yw_g = p_odom[1].astype(np.float32)
@@ -592,7 +626,7 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         stamp = msg.header.stamp
         self._publish_elevation_raw(DEM, DEM_width, DEM_height, stamp)
         self._publish_elevation_grid(DEM, DEM_width, DEM_height, stamp,
-                                     x_offset, tx, ty, tz, qx, qy, qz, qw)
+                                     x_offset, cam_odom, R_pts)
         if Xw_g.size > 0:
             pts = np.stack([Xw_g, Yw_g, Zw_g], axis=1)
             self._publish_pointcloud(pts, stamp, 'odom')
@@ -615,7 +649,7 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         """
         Float32MultiArray where DEM[x_idx, y_idx] = elevation in metres.
         Dim 0 (lateral_x) = DEM_width cells, Dim 1 (forward_y) = DEM_height cells.
-        NaN cells (no observed points) are emitted as 0.0.
+        Unobserved cells are NaN: 0.0 is a valid height (ground level).
         """
         msg = Float32MultiArray()
         msg.layout = MultiArrayLayout(
@@ -627,7 +661,7 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
             ],
             data_offset=0,
         )
-        msg.data = np.nan_to_num(DEM, nan=0.0).flatten().tolist()
+        msg.data = DEM.astype(np.float32).flatten().tolist()
         self._pub_elevation_raw.publish(msg)
 
     def _publish_elevation_grid(
@@ -637,8 +671,8 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         DEM_height: int,
         stamp,
         x_offset: float,
-        tx: float, ty: float, tz: float,
-        qx: float, qy: float, qz: float, qw: float,
+        cam_odom: np.ndarray,
+        R_pts: np.ndarray,
     ) -> None:
         """
         OccupancyGrid in 'odom' frame.
@@ -647,8 +681,10 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         OccupancyGrid data is row-major with row = Y (forward), col = X (lateral),
         so DEM.T is flattened: grid.data[y * DEM_width + x] = DEM[x, y].
 
-        The grid origin (bottom-left corner, x_w = -x_offset, y_w = 0) is
-        translated to the odom frame using the full rover pose.
+        The grid origin (bottom-left corner, x_w = -x_offset, y_w = 0, ground
+        level) is placed relative to the camera position `cam_odom`, and the
+        grid is oriented with the rover: its x axis points to the rover's right
+        and its y axis forward.
         """
         known = np.isfinite(DEM)
         norm  = np.full((DEM_width, DEM_height), -1, dtype=np.int8)  # -1 = unobserved
@@ -661,11 +697,11 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
                 ((DEM[known] - h_min) / span * 100), 0, 100
             ).astype(np.int8)
 
-        # Grid origin in local world frame: leftmost-lateral, y=0 (camera plane)
-        # In body frame:  forward = 0,  lateral = +x_offset (left of camera)
-        origin_body  = np.array([0.0, x_offset, -self.camera_height_m])
-        R_bw         = _quat_to_rot(qx, qy, qz, qw)
-        origin_odom  = R_bw @ origin_body + np.array([tx, ty, tz])
+        # Grid origin relative to the camera: camera plane, leftmost cell, ground level.
+        origin_cam  = np.array([0.0, x_offset, -self.camera_height_m])
+        origin_odom = R_pts @ origin_cam + cam_odom
+        # Grid axes: x = rover right, y = rover forward → R_pts · Rz(-90°).
+        gqx, gqy, gqz, gqw = _rot_to_quat(R_pts @ _ROT_Z_MINUS_90)
 
         grid_msg = OccupancyGrid()
         grid_msg.header              = Header(stamp=stamp, frame_id='odom')
@@ -678,7 +714,7 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
                 y=float(origin_odom[1]),
                 z=float(origin_odom[2]),
             ),
-            orientation=Quaternion(x=0.0, y=0.0, z=0.0, w=1.0),
+            orientation=Quaternion(x=gqx, y=gqy, z=gqz, w=gqw),
         )
         # DEM[x, y] → OccupancyGrid row-major [y, x] → DEM.T.flatten()
         grid_msg.data = norm.T.flatten().tolist()
@@ -717,6 +753,11 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         self._camera_angle_rad = math.radians(camera_angle_deg)
         camera_roll_deg      = self.get_parameter('camera_roll').value
         self._camera_roll_rad  = math.radians(camera_roll_deg)
+        self._camera_offset = np.array([
+            self.get_parameter('camera_offset_forward_m').value,
+            self.get_parameter('camera_offset_lateral_m').value,
+            self.get_parameter('camera_offset_up_m').value,
+        ], dtype=np.float64)
         self.map_resolution  = self.get_parameter('map_resolution').value
         self.distance_limit  = self.get_parameter('distance_limit').value
         self.min_valid_depth = self.get_parameter('min_valid_depth').value
@@ -738,7 +779,8 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         self.get_logger().info(
             f"Subscribing to '{depth_topic}' and '{color_topic}' | "
             f"camera_angle={camera_angle_deg}° camera_roll={camera_roll_deg}° "
-            f"camera_height={self.camera_height_m} m | "
+            f"camera_height={self.camera_height_m} m "
+            f"offset(fwd, lat, up)={tuple(round(float(v), 3) for v in self._camera_offset)} m | "
             f"resolution={self.map_resolution} m/cell distance_limit={self.distance_limit} m"
         )
         # Stereo depth: sparse, with occlusion holes and range-dependent

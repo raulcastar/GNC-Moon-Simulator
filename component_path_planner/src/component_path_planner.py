@@ -236,9 +236,8 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
 
     def cancel_goal_callback(self, msg: Empty) -> None:
         """
-        Aborts the active goal on an operator ALL STOP and halts the rover.
-        Without this, the control loop would resume commanding cmd_vel on its
-        next cycle and override the stop.
+        Aborts the active goal on an operator ALL STOP and halts the rover, so
+        the control loop does not override the stop on its next cycle.
         """
         if self.current_goal is not None:
             self.get_logger().warn(f"Goal {self.current_goal} cancelled by the operator.")
@@ -246,7 +245,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         self.global_path = None
         self._stop_robot()
 
-        # Remove the abandoned route from the UI; the driven trajectory is kept.
+        # Clear the abandoned route from the UI; the driven trajectory is kept.
         if self._pub_global_path and self._pub_global_path.is_activated:
             empty = Path()
             empty.header.frame_id = 'map'
