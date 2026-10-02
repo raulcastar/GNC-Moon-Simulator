@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GNC MOON SIM — Teleop</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+<script src="/feed_legends.js"></script>
 <style>
   :root {
     --bg:      #10151c;
@@ -155,7 +156,7 @@
         </div>
         <div class="panel" id="cam-depth">
           <div class="panel-title"><span class="tag">◈</span> STEREO DEPTH</div>
-          <div class="feed"><div class="nosig" id="ns-depth">—</div>
+          <div class="feed" id="feed-depth"><div class="nosig" id="ns-depth">—</div>
             <img id="depth" style="display:none"></div>
         </div>
       </div>
@@ -202,14 +203,14 @@
             <input type="range" id="lin-max" min="0.05" max="0.25" step="0.05" value="0.25">
           </div>
           <div class="slider">
-            <label>MAX ANGULAR <b><span id="ang-val">0.10</span> rad/s</b></label>
-            <input type="range" id="ang-max" min="0.01" max="0.10" step="0.01" value="0.10">
+            <label>MAX ANGULAR <b><span id="ang-val">0.20</span> rad/s</b></label>
+            <input type="range" id="ang-max" min="0.02" max="0.35" step="0.01" value="0.20">
           </div>
           <div class="hint">
             <kbd>W</kbd>/<kbd>S</kbd> drive straight · <kbd>A</kbd>/<kbd>D</kbd> spot turn ·
             <kbd>Space</kbd> stop.<br>
-            <span class="warn">Do not set a GNC goal in the overview while driving here —
-            both command the same rover.</span>
+            <span class="warn">Driving here cancels any active GNC goal — both command the
+            same rover.</span>
           </div>
         </div>
       </div>
@@ -237,6 +238,7 @@
     const img = $(id); img.src = 'data:image/jpeg;base64,' + b64;
     if (img.style.display === 'none') { img.style.display = 'block'; $(nsId).style.display = 'none'; }
   }
+  FeedLegends.attach(socket, { depth: [$('feed-depth')] });
   socket.on('feed', m => {
     if (m.id === 'cam_central') showFeed('cam_central', 'ns-central', m.image);
     else if (m.id === 'cam_left')  showFeed('cam_left',  'ns-left',  m.image);
@@ -270,7 +272,7 @@
   // active, and releasing it reverts to the previous. The send loop runs at
   // 5 Hz and emits one trailing zero when everything is released so the rover
   // stops promptly. (A node-side watchdog is the backstop if the tab dies.)
-  let maxLin = 0.25, maxAng = 0.10;
+  let maxLin = 0.25, maxAng = 0.20;
   let held = [], loop = null;
 
   // Soft start: the emitted velocity eases up toward the target from standstill

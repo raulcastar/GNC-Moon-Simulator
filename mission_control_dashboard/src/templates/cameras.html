@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GNC MOON SIM — Cameras</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+<script src="/feed_legends.js"></script>
 <style>
   :root {
     --bg:      #10151c;
@@ -59,10 +60,10 @@
   .conn .dot.ok { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
 
   /* ============ WALL ============ */
+  /* Column count and tile width are set by layout() to fill the screen. */
   #wall {
-    min-height: 0; overflow-y: auto; padding: 2px;
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 6px; align-content: start;
+    min-height: 0; overflow: hidden; padding: 2px;
+    display: grid; gap: 6px; align-content: center; justify-content: center;
   }
   .tile {
     background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
@@ -75,7 +76,11 @@
     display: flex; align-items: center; gap: 8px;
   }
   .tile .title .tag { color: var(--accent); }
-  .tile .feed { position: relative; background: #000; aspect-ratio: 4 / 3; overflow: hidden; }
+  .tile .title .stat { margin-left: auto; letter-spacing: 1px; }
+  .tile .title .stat.stale { color: var(--amber); }
+  .tile .title .stat.dead { color: #ff6b7d; }
+  .tile .feed { position: relative; background: #000; aspect-ratio: 4 / 3; overflow: hidden; cursor: zoom-in; }
+  .tile.focus .feed { cursor: zoom-out; }
   .tile .feed img { width: 100%; height: 100%; object-fit: contain; display: block; }
   .tile .nosig {
     position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -141,26 +146,69 @@
     tile.className = 'tile' + (sel[id] ? '' : ' hidden');
     tile.id = 't-' + id;
     tile.innerHTML =
-      `<div class="title"><span class="tag">◈</span>${label}</div>` +
+      `<div class="title"><span class="tag">◈</span>${label}<span class="stat" id="s-${id}">—</span></div>` +
       `<div class="feed"><div class="nosig">NO SIGNAL</div><img style="display:none"></div>`;
     wall.appendChild(tile);
+    tile.querySelector('.feed').onclick = () => { focusId = focusId === id ? null : id; applyVisibility(); };
+  });
+
+  // Click a feed to enlarge it; click again or press Esc to return to the wall.
+  let focusId = null;
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && focusId) { focusId = null; applyVisibility(); }
   });
 
   function applyVisibility() {
-    let any = false;
+    if (focusId && !sel[focusId]) focusId = null;
+    let shown = 0;
     FEEDS.forEach(([id]) => {
-      const on = !!sel[id];
+      const on = focusId ? id === focusId : !!sel[id];
       $('t-' + id).classList.toggle('hidden', !on);
-      any = any || on;
+      $('t-' + id).classList.toggle('focus', id === focusId);
+      shown += on ? 1 : 0;
     });
-    if (any) { if (empty.parentNode) empty.remove(); }
+    if (shown) { if (empty.parentNode) empty.remove(); }
     else if (!empty.parentNode) { wall.appendChild(empty); }
+    layout(shown);
   }
+
+  // Pick the column count that gives the largest 4:3 tiles that fit the screen.
+  const TITLE_H = 23, GAP = 6;
+  function layout(n) {
+    n = n || FEEDS.filter(([id]) => focusId ? id === focusId : sel[id]).length;
+    if (!n) return;
+    const W = wall.clientWidth - 4, H = wall.clientHeight - 4;
+    let best = { w: 0, cols: 1 };
+    for (let cols = 1; cols <= n; cols++) {
+      const rows = Math.ceil(n / cols);
+      const wByWidth = (W - GAP * (cols - 1)) / cols;
+      const wByHeight = ((H - GAP * (rows - 1)) / rows - TITLE_H) * 4 / 3;
+      const w = Math.floor(Math.min(wByWidth, wByHeight));
+      if (w > best.w) best = { w, cols };
+    }
+    wall.style.gridTemplateColumns = `repeat(${best.cols}, ${best.w}px)`;
+  }
+  window.addEventListener('resize', () => layout());
   applyVisibility();
 
   // Connection status.
   socket.on('connect',    () => { $('cdot').classList.add('ok'); $('cstate').textContent = 'ONLINE'; });
   socket.on('disconnect', () => { $('cdot').classList.remove('ok'); $('cstate').textContent = 'OFFLINE'; });
+
+  // Depth / segmentation legends, and per-feed rate and age.
+  FeedLegends.attach(socket, {
+    depth: [$('t-depth').querySelector('.feed')],
+    mask: [$('t-mask').querySelector('.feed')],
+  });
+  socket.on('health', h => {
+    const f = h.feeds || {};
+    FEEDS.forEach(([id]) => {
+      const el = $('s-' + id), d = f[id];
+      if (!d) { el.textContent = 'no data'; el.className = 'stat dead'; return; }
+      el.textContent = `${d.hz.toFixed(1)} Hz · ${d.age.toFixed(1)} s`;
+      el.className = 'stat' + (d.age < 3 ? '' : d.age < 10 ? ' stale' : ' dead');
+    });
+  });
 
   // Feeds. Render into the tile regardless of visibility (cheap); CSS hides it.
   socket.on('feed', m => {

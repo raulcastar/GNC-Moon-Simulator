@@ -70,8 +70,8 @@
       <div class="ico">🛰️</div>
       <h2>OVERVIEW</h2>
       <p>Full GNC mission control: navcam feeds, stereo depth &amp; object masks,
-         live LiDAR, the elevation map with click-to-goal, the 3D DEM and the
-         telemetry / ROS console.</p>
+         live LiDAR, the elevation map with click-to-goal, mission status, the 3D
+         DEM, system health, snapshots / rosbag and the ROS console.</p>
       <div class="port">PORT <b>:5001</b></div>
     </a>
 
@@ -79,26 +79,26 @@
       <div class="ico">🎮</div>
       <h2>TELEOP</h2>
       <p>Manual drive-by-wire. Steer the rover directly with the keyboard or the
-         on-screen pad, bypassing the GNC planner. Front camera, speed / heading
-         readout, headlights and an emergency stop.</p>
+         on-screen pad; driving cancels any active GNC goal. Front camera, speed /
+         heading readout, headlights and an emergency stop.</p>
       <div class="port">PORT <b>:5002</b></div>
     </a>
 
     <a class="card" id="link-cameras">
       <div class="ico">📷</div>
       <h2>CAMERAS</h2>
-      <p>A camera wall you build yourself: toggle any of the navcam left / right /
-         central feeds, stereo depth, object segmentation and the event camera on
-         or off, laid out to fill the screen.</p>
+      <p>A camera wall you build yourself: toggle the navcam, stereo depth,
+         segmentation, event and SPAD feeds, laid out to fill the screen, with
+         rate per feed and depth / class legends. Click a feed to enlarge it.</p>
       <div class="port">PORT <b>:5003</b></div>
     </a>
 
     <a class="card" id="link-map">
       <div class="ico">🗺️</div>
       <h2>MAP 3D</h2>
-      <p>LiDAR point cloud and the local elevation map (DEM) side by side, each in
-         an orbitable 3D view with labelled X / Y / Z axes and metre distance
-         markers to read range and orientation directly.</p>
+      <p>LiDAR point cloud (rover frame) and the local elevation map side by side:
+         terrain relief with obstacles in red, metric rulers, and the LiDAR
+         returns overlaid on the DEM.</p>
       <div class="port">PORT <b>:5005</b></div>
     </a>
   </div>

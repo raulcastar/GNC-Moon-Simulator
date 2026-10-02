@@ -10,9 +10,15 @@ All imagery is re-encoded to JPEG and pushed over the websocket; the browser
 renders lidar and map client-side on canvases.
 """
 
+import collections
+import io
 import os
 import json
 import math
+import signal
+import subprocess
+import zipfile
+from datetime import datetime, timezone
 import time
 import threading
 import base64
@@ -27,19 +33,20 @@ import rclpy
 import rclpy.lifecycle
 from rclpy.lifecycle import State, TransitionCallbackReturn
 from rclpy.executors import SingleThreadedExecutor
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 
 from nav_msgs.msg import Odometry, Path, OccupancyGrid
 from geometry_msgs.msg import PoseStamped, Twist
-from sensor_msgs.msg import CompressedImage, Image, PointCloud2
-from std_msgs.msg import Bool, Empty, Float32MultiArray
+from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Imu, PointCloud2
+from std_msgs.msg import Bool, Empty, Float32MultiArray, String
 from rcl_interfaces.msg import Log
-from lifecycle_msgs.srv import ChangeState
+from lifecycle_msgs.srv import ChangeState, GetState
+from rcl_interfaces.srv import GetParameters
 from cv_bridge import CvBridge
 
 from custom_map_interfaces.srv import GetMatrices
 
-from flask import Flask, render_template, request, send_from_directory
+from flask import Flask, Response, render_template, request, send_from_directory
 from flask_socketio import SocketIO
 
 pkg_share = get_package_share_directory('mission_control_dashboard')
@@ -132,13 +139,37 @@ def _ground_plane(dem: np.ndarray, res: float) -> np.ndarray:
     return coef
 
 
+def _level(xyz: np.ndarray, roll: float, pitch: float) -> np.ndarray:
+    """Removes body roll and pitch (radians, REP-103) from rover-frame points."""
+    cr, sr, cp, sp = math.cos(roll), math.sin(roll), math.cos(pitch), math.sin(pitch)
+    rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]])
+    ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
+    return xyz @ (ry @ rx).T
+
+
 def _local_dem_js():
     """Serves the local DEM view shared by the overview and 3D map pages."""
     return send_from_directory(template_dir, 'local_dem.js', mimetype='application/javascript')
 
 
+def _feed_legends_js():
+    """Serves the depth / segmentation legends shared by the camera pages."""
+    return send_from_directory(template_dir, 'feed_legends.js', mimetype='application/javascript')
+
+
+def _snapshot():
+    if ros_node is None:
+        return Response('ROS node not ready', status=503)
+    name = datetime.now().strftime('gnc_snapshot_%Y%m%d_%H%M%S.zip')
+    return Response(ros_node.snapshot_zip(), mimetype='application/zip',
+                    headers={'Content-Disposition': f'attachment; filename={name}'})
+
+
 for _app in (app, app_map):
     _app.add_url_rule('/local_dem.js', 'local_dem_js', _local_dem_js)
+for _app in (app, app_cams, app_teleop):
+    _app.add_url_rule('/feed_legends.js', 'feed_legends_js', _feed_legends_js)
+app.add_url_rule('/snapshot.zip', 'snapshot', _snapshot)
 
 
 ros_node = None
@@ -165,6 +196,35 @@ _TRAJ_MIN_PERIOD = 0.5         # seconds between driven-path frames
 # browser as a base64 JPEG floods the websocket and stalls the UI, so cap their
 # browser-facing rate. 0.16 s ~= 6 fps, plenty for these visualisations.
 _CAM_PRODUCT_MIN_PERIOD = 0.16
+
+_HEALTH_PERIOD = 1.0           # seconds between feed-health / node-state pushes
+_HEALTH_WINDOW = 5.0           # seconds of arrivals used for the rate estimate
+_NODE_POLL_TICKS = 3           # health ticks between lifecycle state polls
+_DEM_LIDAR_MAX_POINTS = 4000   # lidar points overlaid on the local DEM
+_OBSTACLE_MAX_POINTS = 800     # local obstacle cells drawn on the global map
+_LIDAR_SELF_RADIUS = 0.6       # m; lidar returns closer than this hit the rover
+
+# Lifecycle nodes shown in the SYSTEM panel (state + restart).
+_LIFECYCLE_NODES = (
+    'lc_component_stereo_depth', 'lc_component_local_mapping',
+    'lc_component_path_planner', 'lc_component_rover_leo_raph',
+    'lc_component_lidar', 'lc_component_imu',
+    'lc_component_event_camera', 'lc_component_spad_camera',
+)
+# Parameters read from other nodes: name -> (node, parameter).
+_REMOTE_PARAMS = {
+    'max_tilt_deg': ('lc_component_path_planner', 'max_tilt_deg'),
+    'depth_max_distance': ('lc_component_stereo_depth', 'depth_max_distance'),
+}
+# Topics recorded by the dashboard's rosbag button.
+_BAG_TOPICS = [
+    '/odom', '/imu/data', '/cmd_vel', '/goal_pose', '/cancel_goal',
+    '/global_path', '/driven_trajectory', '/mission_status/state',
+    '/mission_status/goal_reached', '/velodyne_points',
+    '/local_mapping/elevation_map_raw', '/local_mapping/elevation_grid',
+    '/navcam/central/image_color/compressed', '/navcam/central/image_depth',
+    '/navcam/central/camera_info', '/navcam/central/object_mask',
+]
 
 
 def _cloud_xyz(msg: PointCloud2, max_points: int) -> np.ndarray:
@@ -200,8 +260,29 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         self._pub_cmdvel = None
         self._pub_cancel = None
         self._cli_get_maps = None
-        self._cli_stereo_lc = None
-        self._restart_busy = False
+        self._restart_busy = set()          # nodes with a restart in progress
+
+        # Feed health: recent arrival times per feed, for rate and age.
+        self._arrivals = collections.defaultdict(lambda: collections.deque(maxlen=200))
+        self._health_timer = None
+        self._health_ticks = 0
+
+        # Latest data, for the snapshot export and for browsers that join late.
+        self._last_jpeg = {}            # feed id -> JPEG bytes
+        self._last_dem = None           # (DEM metres [forward, lateral], cell size)
+        self._last_cloud = None         # lidar xyz, rover frame
+        self._last_odom = None          # pose and attitude
+        self._mission = {'state': 'unknown', 'goal': None, 'reason': ''}
+        self._grid_pose = None          # local grid origin in odom: (x, y, yaw)
+        self._hfov = None               # central camera horizontal FOV (rad)
+        self._mask_legend = {}          # stencil id -> class name
+        self._remote = {k: None for k in _REMOTE_PARAMS}
+        self._node_states = {n: 'unknown' for n in _LIFECYCLE_NODES}
+        self._cli_get_state, self._cli_change_state, self._cli_params = {}, {}, {}
+        self._pending = set()           # outstanding async service calls
+        self._bag_proc = None
+        self._bag_path = None
+        self._bag_t0 = 0.0
 
         self._last_lidar = 0.0
         self._last_odom_emit = 0.0
@@ -221,6 +302,12 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         # Relief (m) shown as an obstacle in the local DEM view. Display only.
         self.declare_parameter('dem_obstacle_height', 0.15)
         self._dem_res = 0.05        # local DEM cell size, updated from the grid
+        # Lidar mounting: yaw of the sensor's X axis from the rover's forward
+        # axis (BP_VLP16 inherits the body mesh yaw, 90 deg from forward), and
+        # its height above the ground. Measured in Unreal.
+        self.declare_parameter('lidar_yaw_deg', 90.0)
+        self.declare_parameter('lidar_height_m', 0.24)
+        self.declare_parameter('bag_directory', '/opt/ros/jazzy/src/mission_control_dashboard/bags')
         self.map_resolution = self.get_parameter('global_res').value
 
     # =========================================================================
@@ -236,8 +323,11 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         self._pub_cmdvel = self.create_lifecycle_publisher(Twist, 'cmd_vel', 10)
         self._pub_cancel = self.create_lifecycle_publisher(Empty, 'cancel_goal', 10)
         self._cli_get_maps = self.create_client(GetMatrices, 'get_matrices')
-        self._cli_stereo_lc = self.create_client(
-            ChangeState, '/lc_component_stereo_depth/change_state')
+        for n in _LIFECYCLE_NODES:
+            self._cli_get_state[n] = self.create_client(GetState, f'/{n}/get_state')
+            self._cli_change_state[n] = self.create_client(ChangeState, f'/{n}/change_state')
+        for n in {node for node, _ in _REMOTE_PARAMS.values()}:
+            self._cli_params[n] = self.create_client(GetParameters, f'/{n}/get_parameters')
 
         sub = self.create_subscription
         self._subs = [
@@ -251,6 +341,11 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
                 self.local_grid_callback, 10),
             sub(Float32MultiArray, 'local_mapping/elevation_map_raw',
                 self.raw_dem_callback, 10),
+            sub(Imu, 'imu/data', lambda _m: self._mark('imu'), qos_profile_sensor_data),
+            sub(String, 'mission_status/state', self.mission_callback,
+                QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)),
+            sub(CameraInfo, f'{ns}/central/camera_info', self.camera_info_callback, 10),
+            sub(String, f'{ns}/central/object_mask_mapping', self.mask_legend_callback, 10),
         ]
 
         # Compressed colour passes straight through: it is already JPEG.
@@ -282,6 +377,7 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
 
         # 5 Hz teleop deadman: stop the rover if manual commands stop arriving.
         self._teleop_watchdog = self.create_timer(0.2, self._teleop_watchdog_cb)
+        self._health_timer = self.create_timer(_HEALTH_PERIOD, self._health_cb)
 
         return TransitionCallbackReturn.SUCCESS
 
@@ -294,18 +390,23 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         return super().on_deactivate(state)
 
     def on_cleanup(self, state: State) -> TransitionCallbackReturn:
-        if self._teleop_watchdog is not None:
-            self.destroy_timer(self._teleop_watchdog)
-            self._teleop_watchdog = None
+        self.stop_bag()
+        for attr in ('_teleop_watchdog', '_health_timer'):
+            if getattr(self, attr) is not None:
+                self.destroy_timer(getattr(self, attr))
+                setattr(self, attr, None)
         for s in self._subs:
             self.destroy_subscription(s)
         self._subs = []
         for p in (self._pub_goal, self._pub_lights, self._pub_cmdvel, self._pub_cancel):
             if p:
                 self.destroy_publisher(p)
-        for c in (self._cli_get_maps, self._cli_stereo_lc):
+        clients = [self._cli_get_maps, *self._cli_get_state.values(),
+                   *self._cli_change_state.values(), *self._cli_params.values()]
+        for c in clients:
             if c:
                 self.destroy_client(c)
+        self._cli_get_state, self._cli_change_state, self._cli_params = {}, {}, {}
         return TransitionCallbackReturn.SUCCESS
 
     def _is_active(self) -> bool:
@@ -320,9 +421,12 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         def cb(msg: CompressedImage):
             if not self._is_active():
                 return
+            self._mark(feed_id)
+            jpeg = bytes(msg.data)
+            self._last_jpeg[feed_id] = jpeg
             emit_feeds('feed', {
                 'id': feed_id,
-                'image': base64.b64encode(bytes(msg.data)).decode('ascii')})
+                'image': base64.b64encode(jpeg).decode('ascii')})
         return cb
 
     def _make_image_relay(self, feed_id: str, both: bool = False,
@@ -344,6 +448,7 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         def cb(msg: Image):
             if not self._is_active():
                 return
+            self._mark(feed_id)
             if min_period > 0.0:
                 now = time.monotonic()
                 if now - last[0] < min_period:
@@ -354,6 +459,7 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
                 ok, buf = cv2.imencode('.jpg', img,
                                        [cv2.IMWRITE_JPEG_QUALITY, 80])
                 if ok:
+                    self._last_jpeg[feed_id] = buf.tobytes()
                     emit('feed', {
                         'id': feed_id,
                         'image': base64.b64encode(buf).decode('ascii')})
@@ -367,21 +473,52 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
     # =========================================================================
 
     def lidar_callback(self, msg: PointCloud2) -> None:
+        """Relays the cloud in the rover frame and overlays it on the local DEM."""
         if not self._is_active():
             return
+        self._mark('lidar')
         now = time.monotonic()
         if now - self._last_lidar < _LIDAR_MIN_PERIOD:
             return
         self._last_lidar = now
 
-        xyz = _cloud_xyz(msg, _MAX_LIDAR_POINTS)
+        xyz = _cloud_xyz(msg, _MAX_LIDAR_POINTS * 4)
         if len(xyz) == 0:
             return
+        # Sensor frame -> rover frame (X forward, Y left): rotate by the mount yaw.
+        a = math.radians(self.get_parameter('lidar_yaw_deg').value)
+        rover = xyz @ np.array([[math.cos(a), -math.sin(a), 0],
+                                [math.sin(a), math.cos(a), 0],
+                                [0, 0, 1]], dtype=np.float32).T
+        self._last_cloud = rover
+        shown = rover[::max(1, len(rover) // _MAX_LIDAR_POINTS)][:_MAX_LIDAR_POINTS]
         emit_map('lidar', {
-            'points': np.round(xyz, 2).ravel().tolist(),
-            'count': int(len(xyz)),
-            'frame': msg.header.frame_id,
+            'points': np.round(shown, 2).ravel().tolist(),
+            'count': int(len(shown)),
+            'frame': 'rover',
         })
+        self._emit_dem_lidar(rover)
+
+    def _emit_dem_lidar(self, rover: np.ndarray) -> None:
+        """
+        Lidar points in the local DEM frame (x right, y forward from the camera
+        plane, z above the ground under the rover), levelled with the odom
+        attitude like the DEM itself.
+        """
+        if self._last_odom is None:
+            return
+        att = self._last_odom
+        lev = _level(rover.astype(np.float64), math.radians(att['roll']), math.radians(att['pitch']))
+        h, w = (self._last_dem[0].shape if self._last_dem else (61, 121))
+        res = self._last_dem[1] if self._last_dem else 0.05
+        x, y = -lev[:, 1], lev[:, 0]
+        z = lev[:, 2] + self.get_parameter('lidar_height_m').value
+        keep = ((y >= 0) & (y <= h * res) & (np.abs(x) <= w * res / 2)
+                & (np.hypot(lev[:, 0], lev[:, 1]) > _LIDAR_SELF_RADIUS))
+        pts = np.column_stack((x[keep], y[keep], z[keep]))
+        if len(pts) > _DEM_LIDAR_MAX_POINTS:
+            pts = pts[::len(pts) // _DEM_LIDAR_MAX_POINTS + 1]
+        emit_map('local_dem_lidar', {'xyz': np.round(pts, 3).ravel().tolist()})
 
     # =========================================================================
     # Local DEM
@@ -398,6 +535,7 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         """
         if not self._is_active() or len(msg.layout.dim) != 2:
             return
+        self._mark('local_dem')
         now = time.monotonic()
         if now - self._last_grid < _GRID_MIN_PERIOD:
             return
@@ -406,6 +544,7 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         W, H = msg.layout.dim[0].size, msg.layout.dim[1].size
         dem = np.asarray(msg.data, dtype=np.float32).reshape(W, H).T   # (forward, lateral)
         res = self._dem_res
+        self._last_dem = (dem, res)
 
         # Bound the browser mesh; max-pool so obstacles survive the reduction.
         f = int(math.ceil(max(W, H) / _DEM_MAX_CELLS))
@@ -438,10 +577,65 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
             'obstacles': int((relief[known] >= threshold).sum()),
             'obstacle_m': float(threshold),
         })
+        self._emit_obstacles(known & (relief >= threshold), res)
+
+    def _emit_obstacles(self, obstacle: np.ndarray, res: float) -> None:
+        """
+        Obstacle cells and the camera's field of view in the odom frame, for the
+        global map. Uses the pose of the latest local grid (x axis = rover right,
+        y axis = forward from the camera plane).
+        """
+        if self._grid_pose is None:
+            return
+        ox, oy, gyaw = self._grid_pose
+        c, s = math.cos(gyaw), math.sin(gyaw)
+        rows, cols = np.nonzero(obstacle)
+        if len(rows) > _OBSTACLE_MAX_POINTS:
+            step = len(rows) // _OBSTACLE_MAX_POINTS + 1
+            rows, cols = rows[::step], cols[::step]
+        gx, gy = (cols + 0.5) * res, (rows + 0.5) * res
+        pts = np.column_stack((ox + c * gx - s * gy, oy + s * gx + c * gy))
+        half_w = obstacle.shape[1] * res / 2.0
+        socketio.emit('local_obstacles', {
+            'pts': np.round(pts, 2).ravel().tolist(),
+            'fov': {'x': round(ox + c * half_w, 3), 'y': round(oy + s * half_w, 3),
+                    'yaw': round(gyaw + math.pi / 2, 4),
+                    'hfov': round(self._hfov or math.radians(90.0), 4),
+                    'range': round(obstacle.shape[0] * res, 2)},
+        })
 
     def local_grid_callback(self, msg: OccupancyGrid) -> None:
-        """Tracks the DEM cell size; the grid itself is not relayed."""
+        """Tracks the DEM cell size and the grid pose; the grid itself is not relayed."""
         self._dem_res = float(msg.info.resolution)
+        o = msg.info.origin
+        q = o.orientation
+        self._grid_pose = (o.position.x, o.position.y,
+                           math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z)))
+
+    def camera_info_callback(self, msg: CameraInfo) -> None:
+        fx = msg.k[0]
+        if fx > 0 and msg.width > 0:
+            self._hfov = 2.0 * math.atan(msg.width / (2.0 * fx))
+
+    def mask_legend_callback(self, msg: String) -> None:
+        """Stencil id -> class name legend of the object mask, from component_stereo_depth."""
+        try:
+            legend = {str(k): str(v) for k, v in json.loads(msg.data).items()}
+        except (ValueError, AttributeError):
+            return
+        if legend != self._mask_legend:
+            self._mask_legend = legend
+            emit_feeds('mask_legend', legend)
+
+    def mission_callback(self, msg: String) -> None:
+        """Planner mission state (idle / planning / driving / reached / aborted / cancelled)."""
+        try:
+            mission = json.loads(msg.data)
+        except ValueError:
+            return
+        mission['t'] = time.time()
+        self._mission = mission
+        emit_all('mission', mission)
 
     # =========================================================================
     # Telemetry, paths, logs
@@ -450,6 +644,7 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
     def odom_callback(self, msg: Odometry) -> None:
         if not self._is_active():
             return
+        self._mark('odom')
         now = time.monotonic()
         if now - self._last_odom_emit < _ODOM_MIN_PERIOD:
             return
@@ -459,6 +654,11 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         q = msg.pose.pose.orientation
         yaw = np.degrees(np.arctan2(2.0 * (q.w * q.z + q.x * q.y),
                                     1.0 - 2.0 * (q.y * q.y + q.z * q.z)))
+        roll = math.degrees(math.atan2(2.0 * (q.w * q.x + q.y * q.z),
+                                       1.0 - 2.0 * (q.x * q.x + q.y * q.y)))
+        pitch = math.degrees(math.asin(max(-1.0, min(1.0, 2.0 * (q.w * q.y - q.z * q.x)))))
+        # Combined tilt as the planner computes it (angle of the body z axis).
+        tilt = math.degrees(math.acos(max(-1.0, min(1.0, 1.0 - 2.0 * (q.x * q.x + q.y * q.y)))))
 
         speed = 0.0
         if self._prev_odom is not None:
@@ -471,7 +671,10 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         odom_payload = {
             'x': round(p.x, 3), 'y': round(p.y, 3), 'z': round(p.z, 3),
             'yaw': round(float(yaw), 1), 'speed': round(speed, 3),
+            'roll': round(roll, 1), 'pitch': round(pitch, 1), 'tilt': round(tilt, 1),
+            'tilt_limit': self._remote['max_tilt_deg'],
         }
+        self._last_odom = odom_payload
         emit_all('odom_update', odom_payload)
         sio_map.emit('odom_update', odom_payload)
 
@@ -571,12 +774,18 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
             self.get_logger().error(f"Map service call failed: {e}")
 
     def restart_cameras(self) -> None:
-        """Cycle the stereo node's lifecycle from a background thread."""
-        if self._restart_busy:
-            self._console('WARN', 'Camera restart already in progress.')
+        self.restart_node('lc_component_stereo_depth')
+
+    def restart_node(self, name: str) -> None:
+        """Cycles a lifecycle node from a background thread."""
+        if name not in self._cli_change_state:
+            self._console('WARN', f'Unknown node {name}.')
             return
-        self._restart_busy = True
-        threading.Thread(target=self._restart_cameras_impl, daemon=True).start()
+        if name in self._restart_busy:
+            self._console('WARN', f'Restart of {name} already in progress.')
+            return
+        self._restart_busy.add(name)
+        threading.Thread(target=self._restart_node_impl, args=(name,), daemon=True).start()
 
     def _console(self, level: str, text: str) -> None:
         """Log to ROS and mirror onto the operator console."""
@@ -585,47 +794,174 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         socketio.emit('log', {'level': level, 'node': 'dashboard',
                               'text': text, 'stamp': time.time()})
 
-    def _restart_cameras_impl(self) -> None:
+    def _restart_node_impl(self, name: str) -> None:
         """
-        deactivate -> cleanup -> configure -> activate on the stereo node.
+        deactivate -> cleanup -> configure -> activate on `name`.
 
-        Equivalent to restarting its container: cleanup releases the UnrealCV
-        socket and configure reconnects and re-solves the rig. The first two
-        steps may legitimately fail if the node is already stuck inactive, so
-        only configure and activate are load-bearing.
+        Equivalent to restarting its container (for the stereo node, cleanup
+        releases the UnrealCV socket and configure reconnects). The first two
+        steps may legitimately fail if the node is already inactive, so only
+        configure and activate are load-bearing.
         """
+        client = self._cli_change_state[name]
         try:
-            if not self._cli_stereo_lc.wait_for_service(timeout_sec=3.0):
-                self._console('ERROR',
-                              'Stereo node lifecycle service unreachable — is '
-                              'component_stereo_depth running at all?')
+            if not client.wait_for_service(timeout_sec=3.0):
+                self._console('ERROR', f'{name}: lifecycle service unreachable — '
+                                       f'is its container running?')
                 return
-            self._console('INFO', 'Restarting the camera node...')
+            self._console('INFO', f'Restarting {name}...')
             steps = [(4, 'deactivate', False), (2, 'cleanup', False),
                      (1, 'configure', True), (3, 'activate', True)]
             for tid, label, required in steps:
                 req = ChangeState.Request()
                 req.transition.id = tid
-                fut = self._cli_stereo_lc.call_async(req)
+                fut = client.call_async(req)
                 t0 = time.monotonic()
                 while not fut.done() and time.monotonic() - t0 < 90.0:
                     time.sleep(0.1)
                 ok = fut.done() and fut.result() is not None and fut.result().success
                 if ok:
-                    self._console('INFO', f'Camera node: {label} ok.')
+                    self._console('INFO', f'{name}: {label} ok.')
                 elif required:
-                    self._console('ERROR',
-                                  f'Camera node: {label} FAILED — check the '
-                                  f'stereo node log; is Unreal playing?')
+                    self._console('ERROR', f'{name}: {label} FAILED — check its log; '
+                                           f'is Unreal playing?')
                     return
                 else:
-                    self._console('WARN',
-                                  f'Camera node: {label} skipped (already past '
-                                  f'that state).')
-            self._console('INFO', 'Camera node restarted; feeds should return '
-                                  'within a few seconds.')
+                    self._console('WARN', f'{name}: {label} skipped (already past '
+                                          f'that state).')
+            self._console('INFO', f'{name} restarted.')
         finally:
-            self._restart_busy = False
+            self._restart_busy.discard(name)
+
+    # =========================================================================
+    # Health: feed rates, node states, remote parameters
+    # =========================================================================
+
+    def _mark(self, feed: str) -> None:
+        self._arrivals[feed].append(time.monotonic())
+
+    def _health_cb(self) -> None:
+        if not self._is_active():
+            return
+        now = time.monotonic()
+        feeds = {}
+        for name, times in self._arrivals.items():
+            recent = sum(1 for t in times if now - t <= _HEALTH_WINDOW)
+            feeds[name] = {'hz': round(recent / _HEALTH_WINDOW, 1),
+                           'age': round(now - times[-1], 1) if times else None}
+        payload = {'feeds': feeds, 'nodes': dict(self._node_states), 'bag': self._bag_status()}
+        for server in (socketio, sio_cams, sio_teleop, sio_map):
+            server.emit('health', payload)
+
+        self._health_ticks += 1
+        if self._health_ticks % _NODE_POLL_TICKS == 1:
+            self._poll_nodes()
+        self._fetch_remote_params()
+
+    def _poll_nodes(self) -> None:
+        """Queries each node's lifecycle state; replies arrive asynchronously."""
+        for name, client in self._cli_get_state.items():
+            if not client.service_is_ready():
+                self._node_states[name] = 'offline'
+                continue
+            key = ('state', name)
+            if key in self._pending:
+                continue
+            self._pending.add(key)
+            fut = client.call_async(GetState.Request())
+            fut.add_done_callback(lambda f, n=name, k=key: self._on_node_state(n, k, f))
+
+    def _on_node_state(self, name: str, key, fut) -> None:
+        self._pending.discard(key)
+        try:
+            self._node_states[name] = fut.result().current_state.label
+        except Exception:
+            self._node_states[name] = 'error'
+
+    def _fetch_remote_params(self) -> None:
+        """Reads the planner's tilt limit and the depth colour range once available."""
+        for key, (node, param) in _REMOTE_PARAMS.items():
+            client = self._cli_params.get(node)
+            if self._remote[key] is not None or client is None or not client.service_is_ready():
+                continue
+            pkey = ('param', key)
+            if pkey in self._pending:
+                continue
+            self._pending.add(pkey)
+            fut = client.call_async(GetParameters.Request(names=[param]))
+            fut.add_done_callback(lambda f, k=key, pk=pkey: self._on_remote_param(k, pk, f))
+
+    def _on_remote_param(self, key: str, pkey, fut) -> None:
+        self._pending.discard(pkey)
+        try:
+            v = fut.result().values[0]
+            value = v.double_value if v.type == 3 else float(v.integer_value) if v.type == 2 else None
+        except Exception:
+            value = None
+        if value is not None:
+            self._remote[key] = value
+            for server in (socketio, sio_cams, sio_teleop, sio_map):
+                server.emit('config', self._remote)
+
+    # =========================================================================
+    # Recording: rosbag + snapshot
+    # =========================================================================
+
+    def _bag_status(self) -> dict:
+        running = self._bag_proc is not None and self._bag_proc.poll() is None
+        return {'recording': running,
+                'name': os.path.basename(self._bag_path) if self._bag_path else None,
+                'elapsed': round(time.time() - self._bag_t0) if running else 0}
+
+    def start_bag(self) -> None:
+        if self._bag_proc is not None and self._bag_proc.poll() is None:
+            return
+        directory = self.get_parameter('bag_directory').value
+        os.makedirs(directory, exist_ok=True)
+        self._bag_path = os.path.join(directory, datetime.now().strftime('gnc_%Y%m%d_%H%M%S'))
+        self._bag_proc = subprocess.Popen(
+            ['ros2', 'bag', 'record', '-s', 'mcap', '-o', self._bag_path] + _BAG_TOPICS,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        self._bag_t0 = time.time()
+        self._console('INFO', f'Recording rosbag {os.path.basename(self._bag_path)} '
+                              f'({len(_BAG_TOPICS)} topics).')
+
+    def stop_bag(self) -> None:
+        proc = self._bag_proc
+        if proc is None or proc.poll() is not None:
+            return
+        os.killpg(proc.pid, signal.SIGINT)      # lets rosbag close the file cleanly
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)
+        self._console('INFO', f'Rosbag saved: mission_control_dashboard/bags/'
+                              f'{os.path.basename(self._bag_path)}')
+
+    def snapshot_zip(self) -> bytes:
+        """Latest camera frames, local DEM, lidar cloud and state, as a zip."""
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+            for feed_id, jpeg in list(self._last_jpeg.items()):
+                z.writestr(f'{feed_id}.jpg', jpeg)
+            if self._last_dem is not None:
+                dem, res = self._last_dem
+                b = io.BytesIO()
+                np.savez_compressed(b, dem=dem, cell_size_m=res,
+                                    axes='rows: forward from the camera plane; '
+                                         'columns: lateral, right +; metres above '
+                                         'the ground under the rover; NaN = unobserved')
+                z.writestr('local_dem.npz', b.getvalue())
+            if self._last_cloud is not None:
+                b = io.BytesIO()
+                np.savez_compressed(b, xyz=self._last_cloud, frame='rover: x forward, y left, z up')
+                z.writestr('lidar.npz', b.getvalue())
+            z.writestr('metadata.json', json.dumps({
+                'utc': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+                'odom': self._last_odom, 'mission': self._mission,
+                'nodes': self._node_states, 'feeds': sorted(self._last_jpeg),
+            }, indent=2))
+        return buf.getvalue()
 
     def set_headlights(self, on: bool) -> None:
         if self._pub_lights and self._pub_lights.is_activated:
@@ -651,9 +987,8 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         """
         Publish a manual cmd_vel from the teleop screen (5002).
 
-        This shares the cmd_vel bus with the GNC planner, which only commands
-        while it is chasing a goal — so manual driving is unobstructed as long as
-        no goal is active. Engaging arms the watchdog so a dropped connection
+        This shares the cmd_vel bus with the GNC planner, so engaging cancels
+        an active goal. Engaging also arms the watchdog so a dropped connection
         cannot leave the rover running.
         """
         if not (self._pub_cmdvel and self._pub_cmdvel.is_activated):
@@ -663,9 +998,17 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         t = Twist()
         t.linear.x = lin
         t.angular.z = ang
+        moving = lin != 0.0 or ang != 0.0
+        if (moving and not self._teleop_engaged
+                and self._mission.get('state') in ('planning', 'driving')
+                and self._pub_cancel and self._pub_cancel.is_activated):
+            # Manual driving takes over: cancel the GNC goal so the planner
+            # does not fight the operator on the shared cmd_vel bus.
+            self._pub_cancel.publish(Empty())
+            self._console('WARN', 'Manual drive took over: GNC goal cancelled.')
         self._pub_cmdvel.publish(t)
         self._last_teleop = time.monotonic()
-        self._teleop_engaged = self._teleop_engaged or lin != 0.0 or ang != 0.0
+        self._teleop_engaged = self._teleop_engaged or moving
 
     def _teleop_watchdog_cb(self) -> None:
         """Zero the rover if a teleop session goes quiet (dropped tab, stuck key)."""
@@ -761,6 +1104,7 @@ def handle_connect(auth=None):
     if ros_node is not None:
         ros_node.get_logger().info("Operator console connected.")
         ros_node.fetch_maps(request.sid)
+        _send_cached(socketio, request.sid)
 
 
 @socketio.on('send_goal')
@@ -791,6 +1135,42 @@ def handle_stop(json_data=None):
 def handle_restart_cameras(json_data=None):
     if ros_node is not None:
         ros_node.restart_cameras()
+
+
+@socketio.on('restart_node')
+def handle_restart_node(json_data):
+    if ros_node is not None:
+        ros_node.restart_node(str(json_data.get('name', '')))
+
+
+@socketio.on('bag')
+def handle_bag(json_data):
+    if ros_node is None:
+        return
+    if json_data.get('action') == 'start':
+        ros_node.start_bag()
+    else:
+        threading.Thread(target=ros_node.stop_bag, daemon=True).start()
+
+
+def _send_cached(server, sid):
+    """State a newly connected browser needs before the next update arrives."""
+    if ros_node is None:
+        return
+    server.emit('config', ros_node._remote, to=sid)
+    if ros_node._mask_legend:
+        server.emit('mask_legend', ros_node._mask_legend, to=sid)
+    server.emit('mission', ros_node._mission, to=sid)
+
+
+@sio_cams.on('connect')
+def handle_cams_connect(auth=None):
+    _send_cached(sio_cams, request.sid)
+
+
+@sio_teleop.on('connect')
+def handle_teleop_connect(auth=None):
+    _send_cached(sio_teleop, request.sid)
 
 
 def main(args=None):

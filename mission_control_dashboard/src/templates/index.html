@@ -6,6 +6,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="/local_dem.js"></script>
+<script src="/feed_legends.js"></script>
 <style>
   :root {
     --bg:      #10151c;
@@ -164,7 +165,7 @@
     box-shadow: 0 0 8px rgba(53,224,181,.2);
   }
   /* Focused views: hide the other columns and let the chosen one fill. The 3D
-     views keep the telemetry panel docked (it is small, flex:0 0 auto). */
+     views also hide the telemetry panel. */
   main[data-view="cams"]  { grid-template-columns: 1fr; }
   main[data-view="cams"]  #col-map, main[data-view="cams"]  #col-right { display: none; }
   main[data-view="map"]   { grid-template-columns: 1fr; }
@@ -177,6 +178,51 @@
   main[data-view="lidar"] #col-cams, main[data-view="lidar"] #col-map,
   main[data-view="lidar"] #dem-panel, main[data-view="lidar"] #tele-panel { display: none; }
   main[data-view="lidar"] #lidar-panel { flex: 1; }
+
+  /* ============ HEADER ACTIONS + SYSTEM PANEL ============ */
+  .hbtn {
+    background: none; border: 1px solid var(--line); color: var(--dim);
+    font-family: var(--mono); font-size: 9px; letter-spacing: 1px;
+    padding: 5px 9px; cursor: pointer; border-radius: 3px; white-space: nowrap;
+  }
+  .hbtn:hover { color: var(--text); border-color: var(--dim); }
+  .hbtn.on { color: var(--accent); border-color: var(--accent); }
+  #btn-rec.rec { color: var(--red); border-color: var(--red); animation: blink 1.2s infinite; }
+  @keyframes blink { 50% { opacity: .55; } }
+  #sys-pop {
+    display: none; position: fixed; top: 54px; right: 10px; z-index: 50; width: 430px;
+    max-height: calc(100vh - 70px); overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+    box-shadow: 0 8px 28px rgba(0,0,0,.5); padding: 10px 12px; font-size: 11px;
+  }
+  #sys-pop.open { display: block; }
+  #sys-pop h4 { color: var(--dim); font-weight: normal; font-size: 9px; letter-spacing: 2px;
+                margin: 4px 0 6px; }
+  #sys-pop table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+  #sys-pop td { padding: 3px 4px; border-bottom: 1px dashed #131e2c; }
+  #sys-pop td.num { text-align: right; color: var(--text); }
+  #sys-pop .st { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .st.ok { background: var(--accent); } .st.stale { background: var(--amber); }
+  .st.dead { background: #5a2230; } .st.none { background: #333; }
+  #sys-pop button { background: none; border: 1px solid var(--line); color: var(--dim);
+                    font-family: var(--mono); font-size: 9px; padding: 1px 6px; cursor: pointer; }
+  #sys-pop button:hover { color: var(--amber); border-color: var(--amber); }
+
+  /* ============ MISSION + ATTITUDE ============ */
+  .badge { font-size: 10px; letter-spacing: 1px; padding: 1px 7px; border-radius: 3px;
+           border: 1px solid currentColor; }
+  .badge.idle, .badge.unknown { color: var(--dim); }
+  .badge.planning { color: var(--cyan); }
+  .badge.driving { color: var(--accent); }
+  .badge.reached { color: #7ee07e; }
+  .badge.aborted { color: var(--red); }
+  .badge.cancelled { color: var(--amber); }
+  .tiltbar { flex: 1; height: 8px; margin: 4px 10px 0; background: #131e2c; border-radius: 4px;
+             position: relative; overflow: hidden; }
+  #t-tiltfill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--accent);
+                transition: width .3s, background .3s; }
+  #t-tiltlim { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--red); display: none; }
+  #mapCanvas { image-rendering: pixelated; }
 </style>
 </head>
 <body>
@@ -205,7 +251,17 @@
     <div class="light"><div class="dot" id="li-depth"></div>DEPTH</div>
     <div class="light"><div class="dot" id="li-lidar"></div>LIDAR</div>
   </div>
+  <button class="hbtn" id="btn-snap" title="Download the latest frames, local DEM, lidar and state as a zip">⤓ SNAPSHOT</button>
+  <button class="hbtn" id="btn-rec" title="Record a rosbag (mcap) into mission_control_dashboard/bags">● REC</button>
+  <button class="hbtn" id="btn-sys" title="Feed rates and node states">SYSTEM ▾</button>
 </header>
+
+<div id="sys-pop">
+  <h4>FEEDS — RATE · AGE</h4>
+  <table id="sys-feeds"></table>
+  <h4>LIFECYCLE NODES</h4>
+  <table id="sys-nodes"></table>
+</div>
 
 <main data-view="all">
   <!-- ============ LEFT: CAMERAS ============ -->
@@ -239,6 +295,7 @@
     <div class="panel" id="map-panel">
       <div class="panel-title"><span class="tag">◈</span>TOPOGRAPHIC MAP — CLICK DISPATCH · WHEEL ZOOM · DRAG PAN
         <span class="age" style="display:flex;gap:6px">
+          <button id="btn-follow" style="background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);font-size:9px;padding:1px 7px;cursor:pointer">FOLLOW ROVER</button>
           <button id="btn-zoomreset" style="background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);font-size:9px;padding:1px 7px;cursor:pointer">RESET VIEW</button>
           <button id="btn-map" style="background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);font-size:9px;padding:1px 7px;cursor:pointer">RELOAD MAP</button>
         </span>
@@ -260,6 +317,9 @@
         <span><b class="sw" style="background:#ff6b7d"></b>PLANNED</span>
         <span><b class="sw" style="background:#59b0ff"></b>DRIVEN</span>
         <span><b style="color:#33d6a6">➤</b> ROVER + HEADING</span>
+        <span><b style="color:#ffbe5c">✕</b> GOAL</span>
+        <span><b style="color:#9fcbf2">◢</b> CAMERA FOV</span>
+        <span><b style="color:#ff6b7d">■</b> LOCAL OBSTACLES</span>
         <span><b>⇕</b> WHEEL ZOOM · DRAG PAN</span>
       </div>
     </div>
@@ -268,7 +328,7 @@
   <!-- ============ RIGHT: LIDAR 3D + LOCAL DEM + TELEMETRY ============ -->
   <div class="col" id="col-right">
     <div class="panel" id="lidar-panel">
-      <div class="panel-title"><span class="tag">◎</span>LIDAR — 3D · DRAG TO ORBIT · WHEEL TO ZOOM<span class="age" id="lidar-info"></span></div>
+      <div class="panel-title"><span class="tag">◎</span>LIDAR — 3D · ROVER FRAME · DRAG · WHEEL<span class="age" id="lidar-info"></span></div>
       <canvas id="lidarCanvas" style="cursor:grab"></canvas>
     </div>
     <div class="panel" id="dem-panel">
@@ -283,6 +343,8 @@
         <button id="btn-stop">■ ALL STOP</button>
       </div>
       <div id="tele">
+        <div class="tl"><span class="k">MISSION</span><span class="v"><span class="badge unknown" id="t-mstate">—</span></span></div>
+        <div class="tl"><span class="k">DIST · ETA</span><span class="v cy" id="t-meta">—</span></div>
         <div class="tl"><span class="k">POSITION X</span><span class="v" id="t-x">—</span></div>
         <div class="tl"><span class="k">POSITION Y</span><span class="v" id="t-y">—</span></div>
         <div class="tl"><span class="k">ALTITUDE Z</span><span class="v" id="t-z">—</span></div>
@@ -290,6 +352,8 @@
         <div class="tl"><span class="k">GROUND SPEED</span><span class="v cy" id="t-spd">—</span></div>
         <div class="tl"><span class="k">ODOM RATE</span><span class="v" id="t-hz">—</span></div>
         <div class="tl"><span class="k">LIDAR POINTS</span><span class="v" id="t-pts">—</span></div>
+        <div class="tl"><span class="k">ROLL / PITCH</span><span class="v cy" id="t-att">—</span></div>
+        <div class="tl"><span class="k">TILT</span><span class="tiltbar"><span id="t-tiltfill"></span><span id="t-tiltlim"></span></span><span class="v" id="t-tilt">—</span></div>
         <div class="tl"><span class="k">LAST GOAL</span><span class="v cy" id="t-goal">—</span></div>
       </div>
     </div>
@@ -365,9 +429,108 @@ socket.on('odom_update', m => {
   $('t-yaw').textContent = m.yaw.toFixed(1) + '°';
   $('t-spd').textContent = m.speed.toFixed(2) + ' m/s';
   $('t-hz').textContent  = (odomTimes.length / 3).toFixed(1) + ' Hz';
+  if (m.roll !== undefined) {
+    $('t-att').textContent = `${m.roll.toFixed(1)}° / ${m.pitch.toFixed(1)}°`;
+    const lim = m.tilt_limit || 15, frac = Math.min(1, m.tilt / lim);
+    const fill = $('t-tiltfill');
+    fill.style.width = (frac * 100 * 0.85) + '%';           /* the limit sits at 85 % */
+    fill.style.background = frac < 0.6 ? 'var(--accent)' : frac < 1 ? 'var(--amber)' : 'var(--red)';
+    $('t-tiltlim').style.display = 'block'; $('t-tiltlim').style.left = '85%';
+    $('t-tilt').textContent = `${m.tilt.toFixed(1)}° / ${lim.toFixed(0)}°`;
+  }
   currentPose = m;
+  speedHist.push(m.speed); if (speedHist.length > 20) speedHist.shift();
+  updateMissionEta();
+  if (following) followRover();
   drawOverlay();
 });
+
+/* ---------------- mission state (planner) ---------------- */
+let mission = { state: 'unknown', goal: null, reason: '' };
+const speedHist = [];
+socket.on('mission', m => {
+  const changed = m.state !== mission.state;
+  mission = m;
+  const b = $('t-mstate');
+  b.className = 'badge ' + (m.state || 'unknown');
+  b.textContent = (m.state || '—').toUpperCase();
+  b.title = m.reason || '';
+  if (m.goal) $('t-goal').textContent = `${m.goal[0].toFixed(0)}, ${m.goal[1].toFixed(0)} m`;
+  if (m.state !== 'planning') $('planning').style.display = 'none';
+  if (changed && m.state !== 'unknown')
+    addLocal(m.state === 'aborted' ? 'ERROR' : m.state === 'cancelled' ? 'WARN' : 'INFO',
+             `Mission ${m.state}${m.reason ? ': ' + m.reason : ''}.`);
+  updateMissionEta(); drawOverlay();
+});
+function updateMissionEta() {
+  const active = mission.goal && ['planning', 'driving'].includes(mission.state);
+  if (!active || !currentPose) { $('t-meta').textContent = '—'; return; }
+  const d = Math.hypot(mission.goal[0] - currentPose.x, mission.goal[1] - currentPose.y);
+  const v = speedHist.length ? speedHist.reduce((a, b) => a + b, 0) / speedHist.length : 0;
+  const eta = v > 0.02 ? d / v : null;
+  $('t-meta').textContent = `${d.toFixed(1)} m · ` +
+    (eta === null ? '—' : eta < 90 ? `${eta.toFixed(0)} s` : `${(eta / 60).toFixed(1)} min`);
+}
+
+/* ---------------- feed health + node states ---------------- */
+const FEED_NAMES = {
+  odom: 'odometry', imu: 'IMU', cam_central: 'navcam central', cam_left: 'navcam left',
+  cam_right: 'navcam right', depth: 'stereo depth', mask: 'segmentation', events: 'event camera',
+  spad: 'SPAD camera', lidar: 'lidar', local_dem: 'local DEM',
+};
+const ageClass = a => a === null || a === undefined ? 'none' : a < 3 ? 'ok' : a < 10 ? 'stale' : 'dead';
+let bag = { recording: false };
+socket.on('health', h => {
+  const f = h.feeds || {};
+  const light = (id, keys) => {
+    const ages = keys.map(k => f[k] ? f[k].age : null).filter(a => a !== null);
+    const age = ages.length ? Math.min(...ages) : null;
+    const cls = ageClass(age);
+    $(id).className = 'dot ' + (cls === 'none' ? 'dead' : cls);
+    $(id).parentNode.title = keys.map(k => `${FEED_NAMES[k] || k}: ` +
+      (f[k] ? `${f[k].hz} Hz, ${f[k].age}s ago` : 'no data')).join('\n');
+  };
+  light('li-odom', ['odom']); light('li-cam', ['cam_central', 'cam_left', 'cam_right']);
+  light('li-depth', ['depth']); light('li-lidar', ['lidar']);
+
+  $('sys-feeds').innerHTML = Object.keys(FEED_NAMES).map(k => {
+    const d = f[k];
+    return `<tr><td><span class="st ${ageClass(d ? d.age : null)}"></span>${FEED_NAMES[k]}</td>` +
+           `<td class="num">${d ? d.hz.toFixed(1) + ' Hz' : '—'}</td>` +
+           `<td class="num">${d ? d.age.toFixed(1) + ' s' : 'no data'}</td></tr>`;
+  }).join('');
+  const nodes = h.nodes || {};
+  $('sys-nodes').innerHTML = Object.keys(nodes).map(n => {
+    const st = nodes[n], cls = st === 'active' ? 'ok' : st === 'inactive' || st === 'unknown' ? 'stale' : 'dead';
+    return `<tr><td><span class="st ${cls}"></span>${n.replace('lc_component_', '')}</td>` +
+           `<td class="num">${st}</td><td class="num"><button data-node="${n}">RESTART</button></td></tr>`;
+  }).join('');
+
+  bag = h.bag || bag;
+  const rec = $('btn-rec');
+  rec.classList.toggle('rec', !!bag.recording);
+  rec.textContent = bag.recording
+    ? `■ STOP ${String(Math.floor(bag.elapsed / 60)).padStart(2, '0')}:${String(bag.elapsed % 60).padStart(2, '0')}`
+    : '● REC';
+});
+$('sys-nodes').addEventListener('click', e => {
+  const n = e.target.dataset.node;
+  if (!n) return;
+  if (!confirm(`Restart ${n}? Its lifecycle is cycled (deactivate → activate).`)) return;
+  socket.emit('restart_node', { name: n });
+  addLocal('INFO', `Restart requested: ${n}.`);
+});
+$('btn-sys').onclick = () => {
+  const open = $('sys-pop').classList.toggle('open');
+  $('btn-sys').classList.toggle('on', open);
+};
+document.addEventListener('click', e => {
+  if (!e.target.closest('#sys-pop') && e.target.id !== 'btn-sys') {
+    $('sys-pop').classList.remove('open'); $('btn-sys').classList.remove('on');
+  }
+});
+$('btn-snap').onclick = () => { window.location.href = '/snapshot.zip'; addLocal('INFO', 'Snapshot downloaded.'); };
+$('btn-rec').onclick = () => socket.emit('bag', { action: bag.recording ? 'stop' : 'start' });
 
 /* ---------------- console ---------------- */
 let logFilter = 'ALL', paused = false;
@@ -488,6 +651,8 @@ lc.addEventListener('wheel', e => {
 /* ---------------- local DEM (shared view, local_dem.js) ---------------- */
 const demView = LocalDemView($('demView'), { info: $('dem-info'), nosig: $('dem-nosig') });
 socket.on('local_dem', m => demView.update(m));
+socket.on('local_dem_lidar', m => demView.updateLidar(m));
+FeedLegends.attach(socket, { depth: [$('f-depth')], mask: [$('f-mask')] });
 
 /* ---------------- rover command buttons ---------------- */
 $('btn-lon').onclick = () => {
@@ -518,6 +683,9 @@ const cbCanvas = $('cbarCanvas'),   cbCtx   = cbCanvas.getContext('2d');
 let mapRes = 1, mapW = 0, mapH = 0;
 let currentPose = null, globalPath = [], drivenPath = [];
 let elevMin = '0', elevMax = '0';
+const OV = 4;                      /* overlay canvas pixels per map pixel */
+let localObs = null;               /* latest local obstacles + camera FOV (odom frame) */
+socket.on('local_obstacles', m => { localObs = m; drawOverlay(); });
 
 function viridis(t) {
   t = Math.max(0, Math.min(1, t));
@@ -537,8 +705,9 @@ socket.on('map_update', m => {
     for (let i = 0; i < q.length; i++) m.data[i] = q[i] === 65535 ? 9999 : m.lo + q[i] * m.scale;
   }
   mapW = m.width; mapH = m.height; mapRes = m.resolution;
-  mapCanvas.width = odomCanvas.width = mapW;
-  mapCanvas.height = odomCanvas.height = mapH;
+  mapCanvas.width = mapW; mapCanvas.height = mapH;
+  /* overlay drawn at OV× the map resolution so local details stay sharp when zoomed */
+  odomCanvas.width = mapW * OV; odomCanvas.height = mapH * OV;
   fitMapStack();
 
   const img = mapCtx.createImageData(mapW, mapH);
@@ -584,26 +753,30 @@ function drawColorbar(show) {
 
 function drawOverlay() {
   if (!mapW) return;
+  odomCtx.setTransform(OV, 0, 0, OV, 0, 0);
   odomCtx.clearRect(0, 0, mapW, mapH);
+  /* symbol sizes are given in screen pixels at 1x and divided by the zoom, so
+     markers keep their on-screen size when zooming in */
+  const k = 1 / vz;
 
   odomCtx.save();
-  odomCtx.strokeStyle = 'rgba(255,255,255,.12)'; odomCtx.setLineDash([4,6]);
-  odomCtx.fillStyle = 'rgba(255,255,255,.45)'; odomCtx.font = '13px monospace';
+  odomCtx.strokeStyle = 'rgba(255,255,255,.12)'; odomCtx.setLineDash([4*k, 6*k]); odomCtx.lineWidth = k;
+  odomCtx.fillStyle = 'rgba(255,255,255,.45)'; odomCtx.font = `${13*k}px monospace`;
   const step = 200 / mapRes;
   for (let i = 0; i <= mapW; i += step) {
     odomCtx.beginPath(); odomCtx.moveTo(i,0); odomCtx.lineTo(i,mapH); odomCtx.stroke();
-    odomCtx.fillText(Math.round(i*mapRes), i+4, mapH-6);
+    odomCtx.fillText(Math.round(i*mapRes), i+4*k, mapH-6*k);
   }
   for (let j = 0; j <= mapH; j += step) {
     odomCtx.beginPath(); odomCtx.moveTo(0,j); odomCtx.lineTo(mapW,j); odomCtx.stroke();
     const v = Math.round((mapH-j)*mapRes);
-    if (v) odomCtx.fillText(v, 4, j-4);
+    if (v) odomCtx.fillText(v, 4*k, j-4*k);
   }
   odomCtx.restore();
 
   const path = (pts, color) => {
     if (!pts.length) return;
-    odomCtx.beginPath(); odomCtx.strokeStyle = color; odomCtx.lineWidth = 3;
+    odomCtx.beginPath(); odomCtx.strokeStyle = color; odomCtx.lineWidth = 3*k;
     pts.forEach((p, i) => {
       const x = p.x/mapRes, y = mapH - p.y/mapRes;
       i ? odomCtx.lineTo(x, y) : odomCtx.moveTo(x, y);
@@ -612,6 +785,30 @@ function drawOverlay() {
   };
   path(globalPath, '#ff6b7d');
   path(drivenPath, '#59b0ff');
+
+  /* camera FOV wedge and local obstacles (from the local DEM) */
+  if (localObs && localObs.fov) {
+    const f = localObs.fov, X = v => v / mapRes, Y = v => mapH - v / mapRes;
+    odomCtx.beginPath(); odomCtx.moveTo(X(f.x), Y(f.y));
+    for (let i = 0; i <= 16; i++) {
+      const a = f.yaw - f.hfov / 2 + f.hfov * i / 16;
+      odomCtx.lineTo(X(f.x + f.range * Math.cos(a)), Y(f.y + f.range * Math.sin(a)));
+    }
+    odomCtx.closePath();
+    odomCtx.fillStyle = 'rgba(159,203,242,.22)'; odomCtx.fill();
+    odomCtx.strokeStyle = 'rgba(159,203,242,.8)'; odomCtx.lineWidth = 1.5*k; odomCtx.stroke();
+    odomCtx.fillStyle = '#ff6b7d';
+    const p = localObs.pts, s = Math.max(0.1, 2.5*k);      /* at least a DEM cell, visible zoomed out */
+    for (let i = 0; i < p.length; i += 2) odomCtx.fillRect(X(p[i]) - s / 2, Y(p[i + 1]) - s / 2, s, s);
+  }
+
+  /* active goal */
+  if (mission.goal && ['planning', 'driving'].includes(mission.state)) {
+    const gx = mission.goal[0] / mapRes, gy = mapH - mission.goal[1] / mapRes, r = 7*k;
+    odomCtx.strokeStyle = '#ffbe5c'; odomCtx.lineWidth = 3*k; odomCtx.lineCap = 'round';
+    odomCtx.beginPath(); odomCtx.moveTo(gx - r, gy - r); odomCtx.lineTo(gx + r, gy + r);
+    odomCtx.moveTo(gx + r, gy - r); odomCtx.lineTo(gx - r, gy + r); odomCtx.stroke();
+  }
 
   if (currentPose) {
     const x = currentPose.x/mapRes, y = mapH - currentPose.y/mapRes;
@@ -622,12 +819,12 @@ function drawOverlay() {
       // the reported yaw is the travel direction directly — no correction.
       const a = currentPose.yaw * Math.PI / 180;
       const dx = Math.cos(a), dy = -Math.sin(a);
-      const L = 26, hl = 12, hw = 7;          // shaft length, head length, head half-width
+      const L = 26*k, hl = 12*k, hw = 7*k;    // shaft length, head length, head half-width
       const tx = x + dx*L,        ty = y + dy*L;        // arrow tip
       const bx = x + dx*(L - hl), by = y + dy*(L - hl); // base of the head
       const px = -dy, py = dx;                          // unit perpendicular
       odomCtx.strokeStyle = '#33d6a6'; odomCtx.fillStyle = '#33d6a6';
-      odomCtx.lineWidth = 3; odomCtx.lineCap = 'round';
+      odomCtx.lineWidth = 3*k; odomCtx.lineCap = 'round';
       odomCtx.beginPath(); odomCtx.moveTo(x, y); odomCtx.lineTo(bx, by); odomCtx.stroke();
       odomCtx.beginPath();
       odomCtx.moveTo(tx, ty);
@@ -636,9 +833,9 @@ function drawOverlay() {
       odomCtx.closePath(); odomCtx.fill();
     }
     // Rover body marker, drawn on top of the arrow's tail.
-    odomCtx.beginPath(); odomCtx.arc(x, y, 6, 0, 7);
+    odomCtx.beginPath(); odomCtx.arc(x, y, 6*k, 0, 7);
     odomCtx.fillStyle = '#33d6a6'; odomCtx.fill();
-    odomCtx.strokeStyle = '#fff'; odomCtx.lineWidth = 2; odomCtx.stroke();
+    odomCtx.strokeStyle = '#fff'; odomCtx.lineWidth = 2*k; odomCtx.stroke();
   }
 }
 
@@ -661,6 +858,7 @@ const mapStack = $('map-stack');
 let vz = 1, vtx = 0, vty = 0;
 function applyView() {
   mapStack.style.transform = `translate(${vtx}px, ${vty}px) scale(${vz})`;
+  drawOverlay();                       /* symbol sizes depend on the zoom */
 }
 function resetView() { vz = 1; vtx = 0; vty = 0; applyView(); }
 
@@ -669,7 +867,8 @@ $('map-wrap').addEventListener('wheel', e => {
   e.preventDefault();
   const r = mapStack.getBoundingClientRect();
   const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-  let nz = Math.min(8, Math.max(1, vz * f));
+  let nz = Math.min(40, Math.max(1, vz * f));
+  following = false; $('btn-follow').style.color = '';
   const k = nz / vz;
   vtx += (e.clientX - r.left) * (1 - k);
   vty += (e.clientY - r.top)  * (1 - k);
@@ -690,7 +889,10 @@ window.addEventListener('mousemove', e => {
   if (!dragged && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) {
     dragged = true; odomCanvas.style.cursor = 'grabbing';
   }
-  if (dragged) { vtx = panStart.tx + dx; vty = panStart.ty + dy; applyView(); }
+  if (dragged) {
+    vtx = panStart.tx + dx; vty = panStart.ty + dy; applyView();
+    following = false; $('btn-follow').style.color = '';
+  }
 });
 window.addEventListener('mouseup', e => {
   if (!dragStart) return;
@@ -700,15 +902,33 @@ window.addEventListener('mouseup', e => {
   const r = odomCanvas.getBoundingClientRect();
   if (e.clientX < r.left || e.clientX > r.right ||
       e.clientY < r.top  || e.clientY > r.bottom) return;
-  const gx = (e.clientX - r.left) * (odomCanvas.width / r.width) * mapRes;
-  const gy = (odomCanvas.height - (e.clientY - r.top) * (odomCanvas.height / r.height)) * mapRes;
+  const gx = (e.clientX - r.left) * (mapW / r.width) * mapRes;
+  const gy = (mapH - (e.clientY - r.top) * (mapH / r.height)) * mapRes;
   $('planning').style.display = 'block';
   $('t-goal').textContent = `${gx.toFixed(0)}, ${gy.toFixed(0)} m`;
   addLocal('INFO', `Goal dispatched: (${gx.toFixed(1)}, ${gy.toFixed(1)}) m.`);
   socket.emit('send_goal', { x: gx, y: gy });
 });
 
-$('btn-zoomreset').onclick = resetView;
+$('btn-zoomreset').onclick = () => { following = false; $('btn-follow').style.color = ''; resetView(); };
+
+/* FOLLOW ROVER: zoom in and keep the rover centred as it drives */
+let following = false;
+function followRover() {
+  if (!mapW || !currentPose) return;
+  const wrap = $('map-wrap').getBoundingClientRect();
+  const k = parseFloat(mapStack.style.width) / mapW;          /* stack css px per map px */
+  const px = currentPose.x / mapRes * k, py = (mapH - currentPose.y / mapRes) * k;
+  /* the stack is centred in the wrap (margin:auto); offsetLeft/Top ignore the transform */
+  vtx = wrap.width / 2 - mapStack.offsetLeft - px * vz;
+  vty = wrap.height / 2 - mapStack.offsetTop - py * vz;
+  applyView(); drawOverlay();
+}
+$('btn-follow').onclick = () => {
+  following = !following;
+  $('btn-follow').style.color = following ? 'var(--accent)' : '';
+  if (following) { vz = Math.max(vz, 24); followRover(); }
+};
 $('btn-map').onclick = () => socket.emit('refresh_map', {});
 
 /* ---------------- view switcher ----------------
@@ -723,9 +943,10 @@ function setView(v) {
           .forEach(b => b.classList.toggle('on', b.dataset.view === v));
   try { localStorage.setItem('mc_view', v); } catch (e) {}
   requestAnimationFrame(() => {
-    if (mapW) { fitMapStack(); drawColorbar(mapW > 0); }
+    if (mapW) { fitMapStack(); drawColorbar(mapW > 0); if (following) followRover(); }
     demView.redraw();
     drawLidar();
+    window.dispatchEvent(new Event('resize'));   /* feed legends follow the new tile size */
   });
 }
 document.querySelectorAll('.viewtabs button')

@@ -86,6 +86,13 @@ lc_component_local_mapping:
     min_elevation: -1.0    # metres below the rover base
     max_elevation:  1.5    # metres above the rover base
 
+    # ── Outlier rejection per DEM cell ────────────────────────────────────────
+    # Each cell takes its (drop_highest + 1)-th highest point, so isolated stereo
+    # outliers do not spike it; cells with fewer than min_points_per_cell points
+    # stay unobserved.
+    min_points_per_cell: 2
+    drop_highest:        1
+
     # Apply live rover roll/pitch from /odom to the DEM. Now TRUE: the rover node
     # recovers real body tilt from Unreal telemetry (relative-to-level method) and
     # publishes it in a clean REP-103 odom, so the roll/pitch here are genuine and

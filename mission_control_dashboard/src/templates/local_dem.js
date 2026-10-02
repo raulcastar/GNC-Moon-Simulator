@@ -80,7 +80,7 @@
     .dem-overlay { position:absolute; z-index:5; font:10px/1.5 Consolas,Menlo,monospace;
       color:#8aa0b8; background:rgba(16,21,28,.78); border:1px solid #2c3a4e;
       border-radius:6px; padding:6px 8px; letter-spacing:.5px; }
-    .dem-legend { left:8px; bottom:8px; pointer-events:none; }
+    .dem-legend { left:8px; top:40px; pointer-events:none; }
     .dem-legend .bar { width:150px; height:9px; border-radius:2px; margin:3px 0 2px; }
     .dem-legend .ticks { display:flex; justify-content:space-between; width:150px; color:#cfe0ee; }
     .dem-views { right:8px; top:8px; padding:3px; display:flex; gap:3px; }
@@ -135,6 +135,19 @@
     }
     setActive('chase');
 
+    /* lidar overlay toggle (independent of the view buttons) */
+    let lidar = null, showLidar = true;
+    const lidarBtn = document.createElement('button');
+    lidarBtn.textContent = 'LIDAR';
+    lidarBtn.classList.add('on');
+    lidarBtn.onclick = () => {
+      showLidar = !showLidar;
+      lidarBtn.classList.toggle('on', showLidar);
+      if (lidar) lidar.visible = showLidar;
+      draw();
+    };
+    viewBox.appendChild(lidarBtn);
+
     function buildLegend() {
       const g = stops.map(([h, c]) =>
         `rgb(${c.map(Math.round).join(',')}) ${((h - H_MIN) / (H_MAX - H_MIN) * 100).toFixed(1)}%`);
@@ -144,7 +157,7 @@
         `<div class="ticks"><span>${H_MIN.toFixed(1)}</span><span>0</span>` +
         `<span>+${threshold.toFixed(2)}</span><span>+${H_MAX.toFixed(1)}</span></div>` +
         `≥ +${threshold.toFixed(2)} m obstacle · dark = unobserved<br>` +
-        `grey arcs: 1 m range steps from the camera`;
+        `grey arcs: 1 m range steps · white dots: lidar returns`;
     }
     buildLegend();
 
@@ -383,6 +396,27 @@
     }, { passive: false });
     window.addEventListener('resize', draw);
 
-    return { update, redraw: draw };
+    /* Lidar returns in the DEM frame (flat x, y, z list in metres). */
+    function updateLidar(m) {
+      if (document.hidden || !renderer || !m.xyz) return;
+      const n = m.xyz.length / 3;
+      const pos = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) {
+        pos[i * 3] = m.xyz[i * 3];
+        pos[i * 3 + 1] = m.xyz[i * 3 + 1];
+        pos[i * 3 + 2] = m.xyz[i * 3 + 2] * V_EXAG + 0.01;   /* just above the surface */
+      }
+      if (!lidar) {
+        lidar = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial(
+          { color: 0xffffff, size: 0.035, transparent: true, opacity: 0.9 }));
+        scene.add(lidar);
+      }
+      lidar.geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      lidar.geometry.computeBoundingSphere();
+      lidar.visible = showLidar;
+      draw();
+    }
+
+    return { update, updateLidar, redraw: draw };
   };
 })();

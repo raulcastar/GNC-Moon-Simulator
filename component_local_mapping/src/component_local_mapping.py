@@ -158,6 +158,10 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
                 ('camera_offset_forward_m', 0.0),
                 ('camera_offset_lateral_m', 0.0),
                 ('camera_offset_up_m',      0.0),
+                # Outlier rejection per DEM cell (see _compute_dem). Defaults of
+                # 1 / 0 reproduce the plain maximum.
+                ('min_points_per_cell',     1),
+                ('drop_highest',            0),
                 # DEM parameters
                 ('map_resolution',   rclpy.Parameter.Type.DOUBLE),  # metres per cell
                 ('distance_limit',   rclpy.Parameter.Type.DOUBLE),  # metres; mirrors reference
@@ -407,12 +411,18 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         y_idx = y_idx[in_cell];  y_w_v = y_w[in_cell]
         z_w_v = z_w[in_cell]
 
-        # Maximum height per cell — rocks must not be averaged away
-        flat = np.full(DEM_width * DEM_height, -np.inf, dtype=np.float32)
-        np.maximum.at(flat, x_idx * DEM_height + y_idx, z_w_v.astype(np.float32))
-
-        # Cells that received no points remain at -inf → NaN (unknown)
-        flat[np.isinf(flat)] = np.nan
+        # Robust maximum per cell: the (k+1)-th highest point, k = drop_highest,
+        # so a single stereo outlier cannot spike a cell while rocks (many
+        # points per cell) are not averaged away. Cells with fewer than
+        # min_points_per_cell points stay unknown.
+        cells = x_idx * DEM_height + y_idx
+        order = np.lexsort((z_w_v, cells))                 # by cell, then height
+        c_sorted, z_sorted = cells[order], z_w_v[order]
+        ends = np.flatnonzero(np.r_[c_sorted[1:] != c_sorted[:-1], True])
+        counts = np.diff(np.r_[-1, ends])
+        keep = counts >= max(self.min_points_per_cell, self.drop_highest + 1)
+        flat = np.full(DEM_width * DEM_height, np.nan, dtype=np.float32)
+        flat[c_sorted[ends[keep]]] = z_sorted[ends[keep] - self.drop_highest]
         DEM = flat.reshape(DEM_width, DEM_height)
 
         # ── 6. Colour lookup (optional) ───────────────────────────────────────
@@ -764,6 +774,8 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         self.depth_scale     = self.get_parameter('depth_scale').value
         self.min_elevation   = self.get_parameter('min_elevation').value
         self.max_elevation   = self.get_parameter('max_elevation').value
+        self.min_points_per_cell = int(self.get_parameter('min_points_per_cell').value)
+        self.drop_highest        = int(self.get_parameter('drop_highest').value)
         self.apply_rover_tilt = self.get_parameter('apply_rover_tilt').value
         # max valid depth == distance_limit: single parameter controls both the
         # pixel-level cut and the world-frame distance filter.

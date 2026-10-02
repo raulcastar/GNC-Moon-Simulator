@@ -91,7 +91,7 @@
       <div class="view" id="lidarView">
         <canvas id="lidarCanvas" style="cursor:grab"></canvas>
         <div class="nosig" id="lidar-nosig">waiting for /velodyne_points…</div>
-        <div class="hint">sensor frame · 5 m grid</div>
+        <div class="hint">rover frame · 5 m grid</div>
         <div class="legend">
           <div class="row"><span class="sw" style="background:var(--accent)"></span>X → forward</div>
           <div class="row"><span class="sw" style="background:var(--cyan)"></span>Y → left</div>
@@ -239,6 +239,7 @@
   /* ---- local DEM (shared view, local_dem.js) ---- */
   const demView = LocalDemView($('demView'), { info: $('dem-info'), nosig: $('dem-nosig') });
   socket.on('local_dem', m => demView.update(m));
+  socket.on('local_dem_lidar', m => demView.updateLidar(m));
 
   /* keep both views sized to the window */
   window.addEventListener('resize', () => { drawLidar(); demView.redraw(); });

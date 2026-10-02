@@ -23,15 +23,18 @@ import warnings
 
 from ament_index_python.packages import get_package_share_directory
 
+import json
+
 import rclpy
 import rclpy.lifecycle
+from rclpy.qos import DurabilityPolicy, QoSProfile
 from rclpy.lifecycle import Publisher, State, TransitionCallbackReturn
 from rclpy.subscription import Subscription
 from rclpy.timer import Timer
 
 from geometry_msgs.msg import Twist, PoseStamped
 from nav_msgs.msg import Odometry, Path
-from std_msgs.msg import Bool, Empty, Float32MultiArray, MultiArrayDimension
+from std_msgs.msg import Bool, Empty, Float32MultiArray, MultiArrayDimension, String
 
 # --- Custom Service Import ---
 from custom_map_interfaces.srv import GetMatrices
@@ -69,6 +72,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         # --- ROS 2 Interfaces: Actuators & Status ---
         self._pub_cmd_vel: Optional[Publisher] = None
         self._pub_goal_reached: Optional[Publisher] = None
+        self._pub_state: Optional[Publisher] = None
         self._sub_odom:    Optional[Subscription] = None
         self._sub_goal:    Optional[Subscription] = None
         self._sub_cancel:  Optional[Subscription] = None
@@ -197,6 +201,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 self.goal_reached = False
                 self._stop_robot()
                 self._publish_clear()
+                self._set_state('idle', 'new session')
 
         self.robot_pose = np.array([x, y, yaw, v, omega])
 
@@ -209,6 +214,18 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         if len(self.trajectory_history) == 0 or \
            math.hypot(x - self.trajectory_history[-1][0], y - self.trajectory_history[-1][1]) > 0.1:
             self.trajectory_history.append([x, y])
+
+    def _set_state(self, state: str, reason: str = '') -> None:
+        """
+        Publishes the mission state on mission_status/state as JSON:
+        {"state": idle|planning|driving|reached|aborted|cancelled,
+         "goal": [x, y] or null, "reason": str}.
+        """
+        if self._pub_state is None or not self._pub_state.is_activated:
+            return
+        goal = [round(float(v), 2) for v in self.current_goal] if self.current_goal else None
+        self._pub_state.publish(String(data=json.dumps(
+            {'state': state, 'goal': goal, 'reason': reason})))
 
     def goal_pose_callback(self, msg: PoseStamped) -> None:
         """
@@ -225,6 +242,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         
         # Reset tracking states to trigger the routing subroutines
         self.current_goal = [new_x, new_y]
+        self._set_state('planning')
         self.global_path = None
         self.goal_reached = False 
         
@@ -241,6 +259,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         """
         if self.current_goal is not None:
             self.get_logger().warn(f"Goal {self.current_goal} cancelled by the operator.")
+            self._set_state('cancelled', 'by the operator (ALL STOP or manual drive)')
         self.current_goal = None
         self.global_path = None
         self._stop_robot()
@@ -278,15 +297,18 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             # --- Path Validation Safety Check ---
             if self.global_path is None or len(self.global_path) < 2:
                 self.get_logger().warn(f"Pathfinding failed! Coordinates {grid_goal} are unreachable or inside an obstacle.")
+                self._set_state('aborted', 'no path to the goal')
                 self.current_goal = None
                 self.global_path = None
                 return
                 
             self.get_logger().info(f"Global trajectory resolved with {len(self.global_path)} waypoints. Resuming kinematic control.")
+            self._set_state('driving')
             self._broadcast_paths()
             
         except Exception as e:
             self.get_logger().error(f"Global path generation fault: {e}")
+            self._set_state('aborted', 'path planning error')
             self.current_goal = None
             self.global_path = None
 
@@ -306,6 +328,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             self.get_logger().error(
                 f"Tilt safety stop: body tilt {self._tilt_deg:.1f} deg exceeds "
                 f"{max_tilt:.1f} deg. Goal {self.current_goal} aborted.")
+            self._set_state('aborted', f'tilt {self._tilt_deg:.1f} deg > {max_tilt:.1f} deg')
             self._stop_robot()
             self.current_goal = None
             self.global_path = None
@@ -334,6 +357,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
 
         if dist_to_goal <= stop_tolerance:
             self.get_logger().info(f"Target {self.current_goal} achieved. Engaging parking brake.")
+            self._set_state('reached')
             self.goal_reached = True
             
             if self._pub_goal_reached and self._pub_goal_reached.is_activated:
@@ -647,6 +671,10 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
 
         self._pub_cmd_vel = self.create_lifecycle_publisher(Twist, 'cmd_vel', 10)
         self._pub_goal_reached = self.create_lifecycle_publisher(Bool, 'mission_status/goal_reached', 10)
+        # Latched, so a dashboard that connects later still receives the current state.
+        self._pub_state = self.create_lifecycle_publisher(
+            String, 'mission_status/state',
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         
         self._pub_global_path = self.create_lifecycle_publisher(Path, 'global_path', 10)
         self._pub_trajectory = self.create_lifecycle_publisher(Path, 'driven_trajectory', 10)
@@ -675,7 +703,9 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             self._pub_goal_reached.publish(msg)
             
         self._control_timer = self.create_timer(1.0 / rate_hz, self.control_loop_callback)
-        return super().on_activate(state)
+        result = super().on_activate(state)
+        self._set_state('idle')
+        return result
 
     def on_deactivate(self, state: State) -> TransitionCallbackReturn:
         """
@@ -698,6 +728,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         if self._sub_cancel: self.destroy_subscription(self._sub_cancel)
         if self._pub_cmd_vel: self.destroy_publisher(self._pub_cmd_vel)
         if self._pub_goal_reached: self.destroy_publisher(self._pub_goal_reached)
+        if self._pub_state: self.destroy_publisher(self._pub_state)
         if self._pub_global_path: self.destroy_publisher(self._pub_global_path)
         if self._pub_trajectory: self.destroy_publisher(self._pub_trajectory)
         if self._srv_get_maps: self.destroy_service(self._srv_get_maps)

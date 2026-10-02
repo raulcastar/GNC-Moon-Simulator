@@ -5,3 +5,5 @@ share/
 __pycache__
 .claude/
 component_path_planner/maps
+# Rosbags recorded from the dashboard
+mission_control_dashboard/bags/
