@@ -5,7 +5,8 @@
  *   mask:  class colours of the object mask, named by object_mask_mapping
  *
  * Usage: FeedLegends.attach(socket, { depth: [feedEl, …], mask: [feedEl, …] })
- * Each feed element must be position:relative; the legend is overlaid on it.
+ * Each feed element must be position:relative; the legend is overlaid on it,
+ * with a LEGEND button to toggle it (remembered per legend type).
  * ========================================================================= */
 (function () {
   'use strict';
@@ -39,7 +40,13 @@
                display:flex; flex-wrap:wrap; gap:1px 7px; align-items:center; }
     .fl-mini .fl-bar, .fl-mini .fl-ticks { width:70px; }
     .fl-mini .fl-bar { height:5px; }
-    .fl-mini .fl-sw { width:7px; height:7px; }`;
+    .fl-mini .fl-sw { width:7px; height:7px; }
+    .fl-toggle { position:absolute; right:5px; top:5px; z-index:5; cursor:pointer;
+      font:8px Consolas,Menlo,monospace; letter-spacing:1px; color:#8aa0b8;
+      background:rgba(16,21,28,.75); border:1px solid #2c3a4e; border-radius:3px; padding:1px 5px; }
+    .fl-toggle:hover { color:#e6edf5; border-color:#8aa0b8; }
+    .fl-toggle.on { color:#33d6a6; border-color:#33d6a6; }
+    .fl-box.fl-off { display:none; }`;
 
   /* Below this feed width the legends switch to the compact form. */
   const MINI_WIDTH = 330;
@@ -51,12 +58,30 @@
     document.head.appendChild(st);
   }
 
+  /* Legend visibility per type, shared by all pages and remembered. */
+  function shown(kind) {
+    try { return localStorage.getItem('fl_show_' + kind) !== '0'; } catch (e) { return true; }
+  }
+  function setShown(kind, on) {
+    try { localStorage.setItem('fl_show_' + kind, on ? '1' : '0'); } catch (e) {}
+    document.querySelectorAll('.fl-box.' + kind).forEach(b => b.classList.toggle('fl-off', !on));
+    document.querySelectorAll('.fl-toggle.' + kind).forEach(t => t.classList.toggle('on', on));
+  }
+
   function box(feed, kind) {
     let b = feed.querySelector('.fl-box.' + kind);
     if (!b) {
       b = document.createElement('div');
       b.className = 'fl-box ' + kind;
       feed.appendChild(b);
+      const t = document.createElement('button');
+      t.className = 'fl-toggle ' + kind;
+      t.textContent = 'LEGEND';
+      t.title = 'Show / hide the legend';
+      t.onclick = e => { e.stopPropagation(); setShown(kind, !shown(kind)); };
+      feed.appendChild(t);
+      b.classList.toggle('fl-off', !shown(kind));
+      t.classList.toggle('on', shown(kind));
     }
     b.classList.toggle('fl-mini', feed.clientWidth < MINI_WIDTH);
     return b;
