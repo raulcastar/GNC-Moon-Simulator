@@ -167,8 +167,14 @@ def _snapshot():
 
 for _app in (app, app_map):
     _app.add_url_rule('/local_dem.js', 'local_dem_js', _local_dem_js)
+def _nav_overlay_js():
+    """Serves the planned-path overlay drawn on the navcam feeds."""
+    return send_from_directory(template_dir, 'nav_overlay.js', mimetype='application/javascript')
+
+
 for _app in (app, app_cams, app_teleop):
     _app.add_url_rule('/feed_legends.js', 'feed_legends_js', _feed_legends_js)
+    _app.add_url_rule('/nav_overlay.js', 'nav_overlay_js', _nav_overlay_js)
 app.add_url_rule('/snapshot.zip', 'snapshot', _snapshot)
 
 
@@ -215,7 +221,20 @@ _LIFECYCLE_NODES = (
 _REMOTE_PARAMS = {
     'max_tilt_deg': ('lc_component_path_planner', 'max_tilt_deg'),
     'depth_max_distance': ('lc_component_stereo_depth', 'depth_max_distance'),
+    # Central navcam mounting, as used by the local mapper (for the path overlay).
+    'camera_angle': ('lc_component_local_mapping', 'camera_angle'),
+    'camera_height_m': ('lc_component_local_mapping', 'camera_height_m'),
+    'camera_offset_forward_m': ('lc_component_local_mapping', 'camera_offset_forward_m'),
+    'camera_offset_up_m': ('lc_component_local_mapping', 'camera_offset_up_m'),
 }
+# Fallbacks until the mapper's parameters have been read.
+_CAMERA_DEFAULTS = {'camera_angle': 20.0, 'camera_height_m': 0.577,
+                    'camera_offset_forward_m': 0.171, 'camera_offset_up_m': 0.284}
+
+_PATH_OVERLAY_AHEAD = 30.0     # m of planned path projected onto the navcam
+_PATH_OVERLAY_STEP = 0.25      # m between projected path samples
+_ROVER_HALF_WIDTH = 0.23       # m; half the ribbon width drawn along the path
+_MIN_CAMERA_DEPTH = 0.3        # m; samples closer than this are not drawn
 # Topics recorded by the dashboard's rosbag button.
 _BAG_TOPICS = [
     '/odom', '/imu/data', '/cmd_vel', '/goal_pose', '/cancel_goal',
@@ -275,6 +294,15 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         self._mission = {'state': 'unknown', 'goal': None, 'reason': ''}
         self._grid_pose = None          # local grid origin in odom: (x, y, yaw)
         self._hfov = None               # central camera horizontal FOV (rad)
+        self._cam_info = None           # (fx, fy, cx, cy, width, height)
+        self._ground = None             # local ground plane (a, b, c) of the latest DEM, DEM frame
+        self._dem_half_width = 3.0      # m; lateral half-extent of the latest DEM
+        self._odom_pose = None          # (x, y, z, qx, qy, qz, qw), latest odom
+        self._global_path = None        # planned path (N, 2), odom frame
+        self._elev = None               # planner's global elevation map [row = y, col = x], metres
+        self._elev_offset = collections.deque(maxlen=30)   # odom z - map z, sampled at the rover
+        self._elev_requested = 0.0
+        self._overlay_shown = False     # a non-empty path overlay is on screen
         self._mask_legend = {}          # stencil id -> class name
         self._remote = {k: None for k in _REMOTE_PARAMS}
         self._node_states = {n: 'unknown' for n in _LIFECYCLE_NODES}
@@ -427,6 +455,8 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
             emit_feeds('feed', {
                 'id': feed_id,
                 'image': base64.b64encode(jpeg).decode('ascii')})
+            if feed_id == 'cam_central':
+                self._emit_path_overlay()   # drawn on the frame just sent
         return cb
 
     def _make_image_relay(self, feed_id: str, both: bool = False,
@@ -560,6 +590,8 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         known = np.isfinite(dem)
         threshold = self.get_parameter('dem_obstacle_height').value
         plane = _ground_plane(dem, res)
+        self._ground = plane
+        self._dem_half_width = dem.shape[1] * res / 2.0
         rows, cols = np.indices(dem.shape)
         relief = dem - (plane[0] * (cols - (dem.shape[1] - 1) / 2.0) * res
                         + plane[1] * (rows + 0.5) * res + plane[2])
@@ -612,10 +644,133 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         self._grid_pose = (o.position.x, o.position.y,
                            math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z)))
 
+    # =========================================================================
+    # Planned path projected onto the central navcam
+    # =========================================================================
+
+    def _cam_param(self, key: str) -> float:
+        value = self._remote.get(key)
+        return _CAMERA_DEFAULTS[key] if value is None else value
+
+    def _map_height(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        """Bilinear height from the global elevation map (NaN outside it)."""
+        res = self.map_resolution
+        r, c = np.asarray(y) / res, np.asarray(x) / res
+        h, w = self._elev.shape
+        inside = (r >= 0) & (c >= 0) & (r < h - 1) & (c < w - 1)
+        r0 = np.clip(np.floor(r).astype(int), 0, h - 2)
+        c0 = np.clip(np.floor(c).astype(int), 0, w - 2)
+        fr, fc = r - r0, c - c0
+        e = self._elev
+        z = (e[r0, c0] * (1 - fr) * (1 - fc) + e[r0 + 1, c0] * fr * (1 - fc)
+             + e[r0, c0 + 1] * (1 - fr) * fc + e[r0 + 1, c0 + 1] * fr * fc)
+        return np.where(inside, z, np.nan)
+
+    def _ground_z(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        """
+        Terrain height at odom (x, y). Primary source: the planner's global
+        elevation map, offset so it matches the ground under the rover (median
+        over recent frames). Fallback: the local DEM's ground plane (x right,
+        y forward from the camera plane), extrapolated.
+        """
+        z_ground = self._odom_pose[2] - (self._cam_param('camera_height_m')
+                                         - self._cam_param('camera_offset_up_m'))
+        z = np.full_like(x, np.nan, dtype=float)
+        if self._elev is not None:
+            here = self._map_height(np.array([self._odom_pose[0]]), np.array([self._odom_pose[1]]))[0]
+            if np.isfinite(here):
+                self._elev_offset.append(z_ground - here)
+            if self._elev_offset:
+                z = self._map_height(x, y) + float(np.median(self._elev_offset))
+        missing = ~np.isfinite(z)
+        if not missing.any():
+            return z
+        z[missing] = self._plane_z(x[missing], y[missing], z_ground)
+        return z
+
+    def _plane_z(self, x: np.ndarray, y: np.ndarray, z_ground: float) -> np.ndarray:
+        """Height from the local DEM's ground plane, extrapolated (flat if none)."""
+        if self._ground is None or self._grid_pose is None:
+            return np.full_like(x, z_ground)
+        ox, oy, g = self._grid_pose
+        rx, ry = x - ox, y - oy
+        gx = math.cos(g) * rx + math.sin(g) * ry - self._dem_half_width
+        gy = -math.sin(g) * rx + math.cos(g) * ry
+        a, b, c = self._ground
+        return z_ground + a * gx + b * gy + c
+
+    def _project(self, xyz: np.ndarray) -> np.ndarray:
+        """
+        Projects odom-frame points into the central navcam image. Returns
+        (N, 2) normalised (u, v) in [0, 1] image coordinates, NaN behind or
+        too close to the camera.
+        """
+        fx, fy, cx, cy, w, h = self._cam_info
+        px, py, pz, qx, qy, qz, qw = self._odom_pose
+        r_bw = np.array([
+            [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)],
+            [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
+            [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)]])
+        a = math.radians(self._cam_param('camera_angle'))         # pitched down
+        r_mount = np.array([[math.cos(a), 0, math.sin(a)], [0, 1, 0], [-math.sin(a), 0, math.cos(a)]])
+        cam = np.array([px, py, pz]) + r_bw @ np.array(
+            [self._cam_param('camera_offset_forward_m'), 0.0, self._cam_param('camera_offset_up_m')])
+        p = (xyz - cam) @ (r_bw @ r_mount)            # camera axes: forward, left, up
+        with np.errstate(divide='ignore', invalid='ignore'):
+            u = (cx - fx * p[:, 1] / p[:, 0]) / w
+            v = (cy - fy * p[:, 2] / p[:, 0]) / h
+        uv = np.column_stack((u, v))
+        uv[p[:, 0] < _MIN_CAMERA_DEPTH] = np.nan
+        return uv
+
+    def _emit_path_overlay(self) -> None:
+        """
+        Sends the planned path ahead of the rover, projected onto the central
+        navcam, as a centre line, a rover-width ribbon and metre marks.
+        """
+        active = self._mission.get('state') in ('planning', 'driving')
+        path = self._global_path
+        if (not active or path is None or len(path) < 2
+                or self._cam_info is None or self._odom_pose is None):
+            if self._overlay_shown:
+                emit_feeds('path_overlay', {'center': []})
+                self._overlay_shown = False
+            return
+
+        # Path ahead: from the rover to the closest vertex onwards, resampled.
+        rx, ry = self._odom_pose[0], self._odom_pose[1]
+        i0 = int(np.argmin(np.hypot(path[:, 0] - rx, path[:, 1] - ry)))
+        pts = np.vstack(([rx, ry], path[i0 + 1:]))
+        if len(pts) < 2:
+            return
+        cum = np.r_[0.0, np.cumsum(np.hypot(*np.diff(pts, axis=0).T))]
+        d = np.arange(0.0, min(cum[-1], _PATH_OVERLAY_AHEAD) + 1e-9, _PATH_OVERLAY_STEP)
+        if len(d) < 2:
+            return
+        x, y = np.interp(d, cum, pts[:, 0]), np.interp(d, cum, pts[:, 1])
+        tx, ty = np.gradient(x), np.gradient(y)
+        norm = np.hypot(tx, ty) + 1e-9
+        nx, ny = -ty / norm * _ROVER_HALF_WIDTH, tx / norm * _ROVER_HALF_WIDTH
+
+        def project(px, py):
+            uv = self._project(np.column_stack((px, py, self._ground_z(px, py))))
+            return [None if not np.isfinite(r).all() else [round(float(r[0]), 4), round(float(r[1]), 4)]
+                    for r in uv]
+
+        emit_feeds('path_overlay', {
+            'center': project(x, y),
+            'left': project(x + nx, y + ny),
+            'right': project(x - nx, y - ny),
+            'dist': [round(float(v), 2) for v in d],
+            'pose': [round(float(v), 4) for v in self._odom_pose],   # pose used, for checks
+        })
+        self._overlay_shown = True
+
     def camera_info_callback(self, msg: CameraInfo) -> None:
         fx = msg.k[0]
         if fx > 0 and msg.width > 0:
             self._hfov = 2.0 * math.atan(msg.width / (2.0 * fx))
+            self._cam_info = (fx, msg.k[4], msg.k[2], msg.k[5], msg.width, msg.height)
 
     def mask_legend_callback(self, msg: String) -> None:
         """Stencil id -> class name legend of the object mask, from component_stereo_depth."""
@@ -645,6 +800,8 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         if not self._is_active():
             return
         self._mark('odom')
+        pp, qq = msg.pose.pose.position, msg.pose.pose.orientation
+        self._odom_pose = (pp.x, pp.y, pp.z, qq.x, qq.y, qq.z, qq.w)
         now = time.monotonic()
         if now - self._last_odom_emit < _ODOM_MIN_PERIOD:
             return
@@ -683,6 +840,8 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
             return
         coords = [{'x': p.pose.position.x, 'y': p.pose.position.y}
                   for p in msg.poses]
+        self._global_path = (np.array([[c['x'], c['y']] for c in coords])
+                             if coords else None)
         socketio.emit('global_path_update', {'path': coords})
 
     def trajectory_callback(self, msg: Path) -> None:
@@ -748,6 +907,28 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         future = self._cli_get_maps.call_async(GetMatrices.Request())
         future.add_done_callback(lambda f: self.map_response_callback(f, sid))
 
+    def _store_elevation(self, response, elev, valid) -> None:
+        """Keeps the global elevation map for the path overlay's ground heights."""
+        dims = response.elevation_map.layout.dim
+        self._elev = np.where(valid, elev, np.nan).reshape(dims[0].size, dims[1].size)
+
+    def _request_elevation(self) -> None:
+        """Fetches the global map once for the backend if no browser has requested it."""
+        now = time.monotonic()
+        if (self._elev is not None or self._cli_get_maps is None
+                or not self._cli_get_maps.service_is_ready() or now - self._elev_requested < 10.0):
+            return
+        self._elev_requested = now
+
+        def done(fut):
+            try:
+                r = fut.result()
+                e = np.asarray(r.elevation_map.data, dtype=np.float32)
+                self._store_elevation(r, e, np.isfinite(e) & (e < 9999.0))
+            except Exception as exc:
+                self.get_logger().warn(f"Elevation map for the path overlay unavailable: {exc}")
+        self._cli_get_maps.call_async(GetMatrices.Request()).add_done_callback(done)
+
     def map_response_callback(self, future, sid=None) -> None:
         try:
             response = future.result()
@@ -756,6 +937,7 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
             # socket. 65535 marks no-data (planner sentinel >= 9999).
             elev = np.asarray(response.elevation_map.data, dtype=np.float32)
             valid = np.isfinite(elev) & (elev < 9999.0)
+            self._store_elevation(response, elev, valid)
             lo = float(elev[valid].min()) if valid.any() else 0.0
             hi = float(elev[valid].max()) if valid.any() else 0.0
             scale = (hi - lo) / 65534.0 if hi > lo else 1.0
@@ -854,6 +1036,7 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
             server.emit('health', payload)
 
         self._health_ticks += 1
+        self._request_elevation()
         if self._health_ticks % _NODE_POLL_TICKS == 1:
             self._poll_nodes()
         self._fetch_remote_params()

@@ -7,6 +7,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="/local_dem.js"></script>
 <script src="/feed_legends.js"></script>
+<script src="/nav_overlay.js"></script>
 <style>
   :root {
     --bg:      #10151c;
@@ -653,6 +654,7 @@ const demView = LocalDemView($('demView'), { info: $('dem-info'), nosig: $('dem-
 socket.on('local_dem', m => demView.update(m));
 socket.on('local_dem_lidar', m => demView.updateLidar(m));
 FeedLegends.attach(socket, { depth: [$('f-depth')], mask: [$('f-mask')] });
+NavOverlay.attach(socket, [$('f-cam_central')]);
 
 /* ---------------- rover command buttons ---------------- */
 $('btn-lon').onclick = () => {

@@ -6,6 +6,7 @@
 <title>GNC MOON SIM — Cameras</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 <script src="/feed_legends.js"></script>
+<script src="/nav_overlay.js"></script>
 <style>
   :root {
     --bg:      #10151c;
@@ -200,6 +201,7 @@
     depth: [$('t-depth').querySelector('.feed')],
     mask: [$('t-mask').querySelector('.feed')],
   });
+  NavOverlay.attach(socket, [$('t-cam_central').querySelector('.feed')]);
   socket.on('health', h => {
     const f = h.feeds || {};
     FEEDS.forEach(([id]) => {

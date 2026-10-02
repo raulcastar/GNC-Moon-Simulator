@@ -6,6 +6,7 @@
 <title>GNC MOON SIM — Teleop</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 <script src="/feed_legends.js"></script>
+<script src="/nav_overlay.js"></script>
 <style>
   :root {
     --bg:      #10151c;
@@ -239,6 +240,7 @@
     if (img.style.display === 'none') { img.style.display = 'block'; $(nsId).style.display = 'none'; }
   }
   FeedLegends.attach(socket, { depth: [$('feed-depth')] });
+  NavOverlay.attach(socket, [$('ns-central').parentNode]);
   socket.on('feed', m => {
     if (m.id === 'cam_central') showFeed('cam_central', 'ns-central', m.image);
     else if (m.id === 'cam_left')  showFeed('cam_left',  'ns-left',  m.image);
