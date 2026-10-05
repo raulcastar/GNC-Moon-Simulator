@@ -40,7 +40,8 @@ lc_component_stereo_depth:
       - "10:landscape"
       - "20:boulder"
       - "21:small_rock"
-      - "30:crater"
+      - "30:crater"        # Crater ground truth from the Terrain Studio (crater map)
+      - "31:crater_rim"
 
     # Hierarchical topic namespaces. TF frame names are derived by flattening
     # them ('navcam/central' -> 'navcam_central'), since tf2 forbids '/'.
