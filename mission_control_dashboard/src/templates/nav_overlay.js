@@ -68,20 +68,37 @@
     line(m.center, 'rgba(255,255,255,0.75)', 1.2, [6, 5]);
     g.setLineDash([]);
 
-    /* metre marks across the ribbon, labelled every 2 m */
+    /* Metre marks across the ribbon, labelled every 2 m. Marks crowd towards
+       the horizon, so they are placed near to far: a tick is skipped when it
+       would sit on the previous one, and labelling stops at the first label
+       that would overlap, so the numbers stay in sequence. */
     g.font = 'bold 10px Consolas, Menlo, monospace'; g.textBaseline = 'middle';
+    const MIN_TICK_GAP = 4, PAD = 2;
+    const boxes = [];                          /* screen boxes of drawn labels */
+    let lastTick = null, labelling = true;
     for (let i = 0; i < m.dist.length; i++) {
       const dm = m.dist[i];
       if (dm < 1 || Math.abs(dm - Math.round(dm)) > 1e-6) continue;
       const a = P(m.left[i]), b = P(m.right[i]);
       if (!a || !b) continue;
+      const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      if (lastTick && Math.hypot(mid[0] - lastTick[0], mid[1] - lastTick[1]) < MIN_TICK_GAP) continue;
+      lastTick = mid;
       g.strokeStyle = 'rgba(255,190,92,0.95)'; g.lineWidth = 1.5;
       g.beginPath(); g.moveTo(...a); g.lineTo(...b); g.stroke();
-      if (Math.round(dm) % 2 === 0) {
-        const txt = `${Math.round(dm)} m`;
-        g.lineWidth = 3; g.strokeStyle = 'rgba(16,21,28,0.9)'; g.strokeText(txt, b[0] + 5, b[1]);
-        g.fillStyle = '#ffd28a'; g.fillText(txt, b[0] + 5, b[1]);
+      if (!labelling || Math.round(dm) % 2 !== 0) continue;
+
+      const txt = `${Math.round(dm)} m`;
+      const edge = a[0] > b[0] ? a : b;        /* label beside the right-hand end */
+      const tw = g.measureText(txt).width, th = 11;
+      const box = { x: edge[0] + 5 - PAD, y: edge[1] - th / 2 - PAD, w: tw + 2 * PAD, h: th + 2 * PAD };
+      if (boxes.some(o => box.x < o.x + o.w && o.x < box.x + box.w && box.y < o.y + o.h && o.y < box.y + box.h)) {
+        labelling = false;
+        continue;
       }
+      boxes.push(box);
+      g.lineWidth = 3; g.strokeStyle = 'rgba(16,21,28,0.9)'; g.strokeText(txt, edge[0] + 5, edge[1]);
+      g.fillStyle = '#ffd28a'; g.fillText(txt, edge[0] + 5, edge[1]);
     }
     g.restore();
   }

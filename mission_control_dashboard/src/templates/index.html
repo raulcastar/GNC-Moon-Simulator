@@ -70,7 +70,9 @@
   .panel-title .age { margin-left: auto; color: var(--dim); font-size: 9px; }
 
   /* ============ CAMERA FEEDS ============ */
-  #cams { flex: 1; display: grid; grid-template-rows: 1.5fr 1fr 1fr; gap: 6px; min-height: 0; }
+  /* every row needs an explicit track: an implicit (auto) row grows to the
+     image's natural size and squeezes the others to nothing */
+  #cams { flex: 1; display: grid; grid-template-rows: 1.5fr 1fr 1fr 1fr; gap: 6px; min-height: 0; }
   /* grid-template-rows pins the single row to the track height from #cams;
      without it the row is implicit-auto and collapses to the image's
      intrinsic height, so feeds overflow and overlap the row below. */
@@ -169,6 +171,10 @@
      views also hide the telemetry panel. */
   main[data-view="cams"]  { grid-template-columns: 1fr; }
   main[data-view="cams"]  #col-map, main[data-view="cams"]  #col-right { display: none; }
+  /* full width: the seven feeds as a 4 x 2 grid */
+  main[data-view="cams"]  #cams { grid-template-columns: repeat(4, minmax(0, 1fr));
+                                  grid-template-rows: repeat(2, minmax(0, 1fr)); }
+  main[data-view="cams"]  .cam-row { display: contents; }
   main[data-view="map"]   { grid-template-columns: 1fr; }
   main[data-view="map"]   #col-cams, main[data-view="map"]  #col-right { display: none; }
   main[data-view="dem"]   { grid-template-columns: 1fr; }
