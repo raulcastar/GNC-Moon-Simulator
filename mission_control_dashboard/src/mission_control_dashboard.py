@@ -243,6 +243,8 @@ _BAG_TOPICS = [
     '/local_mapping/elevation_map_raw', '/local_mapping/elevation_grid',
     '/navcam/central/image_color/compressed', '/navcam/central/image_depth',
     '/navcam/central/camera_info', '/navcam/central/object_mask',
+    '/navcam/central/shadow_mask', '/navcam/central/shadow_label',
+    '/navcam/central/shadow_label_mapping', '/navcam/central/object_mask_mapping',
 ]
 
 
@@ -389,6 +391,9 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         self._subs.append(sub(
             Image, f'{ns}/central/object_mask',
             self._make_image_relay('mask'), qos_profile_sensor_data))
+        self._subs.append(sub(
+            Image, f'{ns}/central/shadow_mask',
+            self._make_image_relay('shadow'), qos_profile_sensor_data))
 
         # Event (DVS) and SPAD cameras publish at ~30 Hz; throttle their
         # browser-facing rate so the websocket / UI does not stall (~6 fps).

@@ -91,6 +91,7 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         
         # Rover State
         self.headlights_on: bool = False
+        self._last_udp_telemetry: float = float("-inf")   # Detects a new Play session (UDP)
         # Last wheel command, so a headlights toggle can be resent in the full
         # drive-packet shape Unreal parses without disturbing motion.
         self._last_wheels: dict = {"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0}
@@ -287,6 +288,17 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         else:
             self.target_ip = sending_ip
 
+    def _send_light_state(self) -> None:
+        """
+        Tells a freshly (re)connected Unreal the headlight state, with the wheels
+        stopped: Unreal only learns it from drive packets, and an idle rover
+        sends none, so a new Play session would otherwise keep its own default.
+        """
+        self._send({"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0,
+                    "headlights_on": self.headlights_on}, "headlight state")
+        self.get_logger().info(
+            f"Unreal connected: headlights {'ON' if self.headlights_on else 'OFF'}.")
+
     def _send(self, payload: dict, what: str) -> None:
         """Dispatch one JSON command to Unreal over the configured transport."""
         if self.transport == 'tcp':
@@ -372,6 +384,11 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
                             f"{self.target_ip}. Commands are going somewhere else than "
                             f"Unreal is.", throttle_duration_sec=30.0)
                 self._target_learned = True
+                # First telemetry after a pause: a new Play session.
+                now = time.monotonic()
+                if now - self._last_udp_telemetry > 2.0:
+                    self._send_light_state()
+                self._last_udp_telemetry = now
                 self._publish_telemetry(data)
 
             except socket.timeout:
@@ -494,6 +511,7 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
             conn.settimeout(0.5)
             self.tcp_socket = conn
             self.get_logger().info(f"Unreal connected from {addr[0]}:{addr[1]}.")
+            self._send_light_state()
         except socket.timeout:
             pass
 
@@ -507,6 +525,7 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
             self.tcp_socket = s
             self.get_logger().info(
                 f"TCP connected to Unreal at {self.target_ip}:{self.tcp_port}.")
+            self._send_light_state()
         except OSError as e:
             self.get_logger().warn(
                 f"TCP connect to {self.target_ip}:{self.tcp_port} failed ({e}). "

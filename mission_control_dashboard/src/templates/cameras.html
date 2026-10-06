@@ -119,6 +119,7 @@
     ['cam_right',   'RIGHT'],
     ['depth',       'STEREO DEPTH'],
     ['mask',        'SEGMENTATION'],
+    ['shadow',      'SHADOW MASK'],
     ['events',      'EVENT CAM'],
     ['spad',        'SPAD CAM'],
   ];
@@ -200,6 +201,7 @@
   FeedLegends.attach(socket, {
     depth: [$('t-depth').querySelector('.feed')],
     mask: [$('t-mask').querySelector('.feed')],
+    shadow: [$('t-shadow').querySelector('.feed')],
   });
   NavOverlay.attach(socket, [$('t-cam_central').querySelector('.feed')]);
   socket.on('health', h => {

@@ -14,6 +14,9 @@ person actually looks at:
     navcam/right/image_color/compressed  navcam/central/disparity
     navcam/right/camera_info             navcam/central/object_mask
                                          navcam/central/object_mask_mapping
+                                         navcam/central/shadow_mask
+                                         navcam/central/shadow_label
+                                         navcam/central/shadow_label_mapping
 
 TF frame names flatten the namespace: navcam_left, navcam_right, navcam_central.
 
@@ -298,6 +301,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                 # Central camera products
                 ('depth_max_distance',      rclpy.Parameter.Type.DOUBLE),
                 ('enable_object_mask',      rclpy.Parameter.Type.BOOL),
+                ('enable_shadow_mask',      rclpy.Parameter.Type.BOOL),
             ])
 
     # =========================================================================
@@ -682,6 +686,39 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                 do_rectify=False)
         return msg
 
+    # Shadow-mask colours.
+    SHADOW_RGB = (0, 0, 0)          # Any surface the sun does not reach
+    SUNLIT_RGB = (40, 120, 255)     # Ground in sunlight
+    SKY_RGB = (0, 0, 0)             # Untagged (sky)
+    OTHER_RGB = (128, 128, 128)     # Rocks, rover in sunlight
+
+    # Shadow class ids (shadow_label, mono8), for training.
+    SHADOW_IDS = {0: 'sky', 1: 'sunlit_ground', 2: 'shadowed_ground',
+                  3: 'sunlit_object', 4: 'shadowed_object'}
+
+    def _split_shadow_mask(self, frame: np.ndarray
+                           ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Splits a mask frame from Terrain Studio's mask material into the shadow
+        feed (colours), the shadow label image (SHADOW_IDS) and the object
+        mask. The lowest bit of green flags ground, the lowest bit of blue any
+        surface without sunlight (ground, rocks, rover); both are cleared from
+        the object mask.
+        """
+        ground = (frame[:, :, 1] & 1).astype(bool)
+        shadow = (frame[:, :, 2] & 1).astype(bool)
+        objects = frame.copy()
+        objects[:, :, 1:3] &= np.uint8(0xFE)
+        sky = ~objects.any(axis=2)
+        out = np.empty_like(frame)
+        out[...] = self.OTHER_RGB
+        out[sky] = self.SKY_RGB
+        out[ground] = self.SUNLIT_RGB
+        out[shadow] = self.SHADOW_RGB
+        labels = np.where(ground, 1, 3).astype(np.uint8) + shadow.astype(np.uint8)
+        labels[sky] = 0
+        return out, labels, objects
+
     def _publish_image(self, key: str, img: np.ndarray, encoding: str,
                        stamp, frame_id: str) -> None:
         msg = self.cv_bridge.cv2_to_imgmsg(img, encoding=encoding)
@@ -761,6 +798,15 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                                         valid_window=False))
 
             if center_mask is not None:
+                if self.enable_shadow_mask:
+                    shadow, labels, center_mask = self._split_shadow_mask(center_mask)
+                    self._publish_image('center_shadow_mask', shadow, 'rgb8',
+                                        stamp, f_center)
+                    self._publish_image('center_shadow_label', labels, 'mono8',
+                                        stamp, f_center)
+                    msg_ids = String()
+                    msg_ids.data = self._shadow_ids_json
+                    self._pubs['center_shadow_label_mapping'].publish(msg_ids)
                 self._publish_image('center_object_mask', center_mask, 'rgb8',
                                     stamp, f_center)
                 msg_map = String()
@@ -823,6 +869,8 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self.debug_mode       = self.get_parameter('debug_mode').value
         self.depth_max_distance = self.get_parameter('depth_max_distance').value
         self.enable_object_mask = self.get_parameter('enable_object_mask').value
+        self.enable_shadow_mask = (self.enable_object_mask
+                                   and self.get_parameter('enable_shadow_mask').value)
         hz                    = self.get_parameter('image_reading_hz_rate').value
 
         # Frames come from the StereoCamStreamer plugin and the rig geometry from
@@ -876,6 +924,12 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         if self.enable_object_mask:
             pub('center_object_mask', RosImage, f'{C}/object_mask')
             pub('center_object_mask_mapping', String, f'{C}/object_mask_mapping')
+            if self.enable_shadow_mask:
+                pub('center_shadow_mask', RosImage, f'{C}/shadow_mask')
+                pub('center_shadow_label', RosImage, f'{C}/shadow_label')
+                pub('center_shadow_label_mapping', String, f'{C}/shadow_label_mapping')
+                self._shadow_ids_json = json.dumps(
+                    {str(k): v for k, v in self.SHADOW_IDS.items()})
             # Colours are baked into the Unreal post-process material, so there is
             # no name->colour legend to query. Instead publish the user-declared
             # stencil-id -> name legend (mask_labels), which is what tells a
@@ -885,7 +939,8 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self.get_logger().info(
             f'Publishing {L}/*, {R}/* (colour) and {C}/* '
             f'(colour + PLANAR depth + disparity'
-            f'{" + object mask" if self.enable_object_mask else ""}). '
+            f'{" + object mask" if self.enable_object_mask else ""}'
+            f'{" + shadow mask" if self.enable_shadow_mask else ""}). '
             f'Frames: {self.left_frame}, {self.right_frame}, {self.center_frame}.')
 
         self._stream = FrameStreamReceiver(

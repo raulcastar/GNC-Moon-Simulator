@@ -122,3 +122,13 @@ lc_component_stereo_depth:
     # Unreal post-process material. Needs that capture to exist, or it
     # self-disables.
     enable_object_mask:                   true
+
+    # Publishes navcam/central/shadow_mask (rgb8): anything without sunlight black
+    # (ground, rocks, rover), sunlit ground blue, sunlit rocks and rover grey, sky
+    # black. Also publishes navcam/central/shadow_label (mono8 class ids, for
+    # training) and shadow_label_mapping (JSON legend):
+    #   0 sky, 1 sunlit_ground, 2 shadowed_ground, 3 sunlit_object, 4 shadowed_object
+    # Split from the mask frame: Terrain Studio's mask material flags ground and
+    # shadow in the lowest bits of green and blue, which are cleared from
+    # object_mask. Needs enable_object_mask.
+    enable_shadow_mask:                   true

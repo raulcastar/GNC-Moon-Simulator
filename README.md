@@ -136,6 +136,9 @@ navcam/right/image_color             navcam/central/image_depth/visualization
 navcam/right/image_color/compressed  navcam/central/disparity
 navcam/right/camera_info             navcam/central/object_mask
                                      navcam/central/object_mask_mapping
+                                     navcam/central/shadow_mask
+                                     navcam/central/shadow_label
+                                     navcam/central/shadow_label_mapping
 ```
 
 TF frame names flatten the namespace: `navcam_left`, `navcam_right`,

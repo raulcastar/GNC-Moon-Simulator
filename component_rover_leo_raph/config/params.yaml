@@ -35,7 +35,9 @@ lc_component_rover_leo_raph:
     listen_port:                        3001
     wheel_speed_scale:                  3.45 # m/s -> Unreal wheel input units
     rover_width:                        80.0 # centimeters, effective skid-steer track (physical: 35)
-    headlights_on:                      true
+    # Headlights at start. Sent to Unreal whenever it (re)connects, so every
+    # Play session starts with this state; the dashboard toggles them.
+    headlights_on:                      false
 
     # Body roll sign.
     tilt_roll_sign:                     -1.0

@@ -2,9 +2,12 @@
  * Feed legends — shared by the overview, camera wall and teleop pages.
  *
  *   depth: JET colour bar over 0 … depth_max_distance (component_stereo_depth)
- *   mask:  class colours of the object mask, named by object_mask_mapping
+ *   mask:   class colours and stencil ids of the object mask, named by
+ *           object_mask_mapping and grouped into ground / objects
+ *   shadow: shadow mask colours with the shadow_label class ids, grouped
  *
- * Usage: FeedLegends.attach(socket, { depth: [feedEl, …], mask: [feedEl, …] })
+ * Usage: FeedLegends.attach(socket, { depth: [feedEl, …], mask: [feedEl, …],
+ *                                    shadow: [feedEl, …] })
  * Each feed element must be position:relative; the legend is overlaid on it,
  * with a LEGEND button to toggle it (remembered per legend type).
  * ========================================================================= */
@@ -13,14 +16,30 @@
 
   /* Object-mask colours per stencil id. PPM_ObjectMask derives them from a sin
      hash of the id on the GPU, so they cannot be computed here; these were
-     measured from the live mask. Re-measure if the material changes. */
+     measured from the mask (lowest green and blue bits cleared: they carry
+     the shadow mask). Re-measure if the material changes. */
   const MASK_COLOURS = {
-    '2':  [251, 195, 16],    /* rover      */
-    '10': [10, 97, 217],     /* landscape  */
-    '20': [238, 245, 242],   /* boulder    */
-    '21': [210, 62, 7],      /* small rock */
-    '30': [124, 50, 209],    /* crater     */
+    '2':  [251, 194, 16],    /* rover      */
+    '10': [10, 96, 216],     /* landscape  */
+    '20': [238, 244, 242],   /* boulder    */
+    '21': [210, 62, 6],      /* small rock */
+    '30': [124, 50, 208],    /* crater     */
+    '31': [86, 52, 82],      /* crater rim */
   };
+
+  /* Object-mask classes per group (by name, from object_mask_mapping). */
+  const MASK_GROUPS = [
+    ['ground', ['landscape', 'crater', 'crater_rim']],
+    ['objects', ['rover', 'boulder', 'small_rock']],
+  ];
+
+  /* Shadow feed: colour and shadow_label id per class, grouped. Must match
+     SHADOW_IDS in component_stereo_depth. */
+  const SHADOW_GROUPS = [
+    ['ground', [[1, 'sunlit', 'rgb(40,120,255)'], [2, 'shadowed', '#000']]],
+    ['objects', [[3, 'sunlit', 'rgb(128,128,128)'], [4, 'shadowed', '#000']]],
+    ['sky', [[0, 'sky', '#000']]],
+  ];
 
   /* OpenCV COLORMAP_JET stops */
   const JET = 'linear-gradient(90deg, rgb(0,0,128) 0%, rgb(0,0,255) 12.5%, ' +
@@ -35,12 +54,17 @@
     .fl-ticks { display:flex; justify-content:space-between; width:120px; }
     .fl-row { display:flex; align-items:center; gap:5px; white-space:nowrap; }
     .fl-sw { width:9px; height:9px; border-radius:2px; border:1px solid rgba(255,255,255,.25); }
+    .fl-id { color:#33d6a6; min-width:14px; text-align:right; }
+    .fl-grp { color:#8aa0b8; font-size:8px; letter-spacing:1px; text-transform:uppercase; margin-top:2px; }
+    .fl-grp:first-child { margin-top:0; }
     /* compact form for small tiles: one wrapped line, smaller text */
     .fl-mini { left:3px; right:3px; bottom:3px; padding:2px 4px; font-size:8px; line-height:1.3;
                display:flex; flex-wrap:wrap; gap:1px 7px; align-items:center; }
     .fl-mini .fl-bar, .fl-mini .fl-ticks { width:70px; }
     .fl-mini .fl-bar { height:5px; }
     .fl-mini .fl-sw { width:7px; height:7px; }
+    .fl-mini .fl-id { min-width:0; }
+    .fl-mini .fl-grp { margin-top:0; font-size:7px; }
     .fl-toggle { position:absolute; right:5px; top:5px; z-index:5; cursor:pointer;
       font:8px Consolas,Menlo,monospace; letter-spacing:1px; color:#8aa0b8;
       background:rgba(16,21,28,.75); border:1px solid #2c3a4e; border-radius:3px; padding:1px 5px; }
@@ -103,16 +127,41 @@
       `<div class="fl-ticks">${t.map(v => `<span>${v}</span>`).join('')}</div>`;
   }
 
+  function row(colour, id, name) {
+    return `<div class="fl-row"><span class="fl-sw" style="${colour}"></span>` +
+           `<span class="fl-id">${id}</span>${name}</div>`;
+  }
+
   function mask(feed, legend) {
-    const rows = Object.keys(legend).sort((a, b) => a - b).map(id => {
-      const c = MASK_COLOURS[id];
-      const sw = c ? `background:rgb(${c.join(',')})` : 'background:repeating-linear-gradient(45deg,#555 0 2px,#222 2px 4px)';
-      const name = legend[id].replace('_', ' ');
-      return `<div class="fl-row"><span class="fl-sw" style="${sw}"></span>${isMini(feed) ? name : `${name} (${id})`}</div>`;
+    const ids = Object.keys(legend).sort((a, b) => a - b);
+    const groupOf = id => {
+      const g = MASK_GROUPS.find(([, names]) => names.includes(legend[id]));
+      return g ? g[0] : 'other';
+    };
+    const rows = [];
+    ['ground', 'objects', 'other'].forEach(group => {
+      const members = ids.filter(id => groupOf(id) === group);
+      if (!members.length) return;
+      rows.push(`<div class="fl-grp">${group}</div>`);
+      members.forEach(id => {
+        const c = MASK_COLOURS[id];
+        const sw = c ? `background:rgb(${c.join(',')})` : 'background:repeating-linear-gradient(45deg,#555 0 2px,#222 2px 4px)';
+        rows.push(row(sw, id, legend[id].replace('_', ' ')));
+      });
     });
-    if (!isMini(feed))
-      rows.push('<div class="fl-row"><span class="fl-sw" style="background:#000"></span>untagged / sky</div>');
+    rows.push('<div class="fl-grp">sky</div>' + row('background:#000', '&ndash;', 'untagged'));
     box(feed, 'mask').innerHTML = rows.join('');
+  }
+
+  function shadow(feed) {
+    const b = box(feed, 'shadow');
+    const rows = [];
+    SHADOW_GROUPS.forEach(([group, classes]) => {
+      rows.push(`<div class="fl-grp">${group}</div>`);
+      classes.forEach(([id, name, colour]) => rows.push(row(`background:${colour}`, id, name)));
+    });
+    if (!isMini(feed)) rows.push('<div class="fl-grp">ids = shadow_label</div>');
+    b.innerHTML = rows.join('');
   }
 
   window.FeedLegends = {
@@ -120,6 +169,7 @@
       ensureStyle();
       let maxM = null;
       (els.depth || []).forEach(f => depth(f, maxM));
+      (els.shadow || []).forEach(f => shadow(f));
       socket.on('config', c => {
         if (c && c.depth_max_distance) {
           maxM = c.depth_max_distance;
@@ -135,6 +185,7 @@
       window.addEventListener('resize', () => {
         (els.depth || []).forEach(f => depth(f, maxM));
         if (lastLegend) (els.mask || []).forEach(f => mask(f, lastLegend));
+        (els.shadow || []).forEach(f => shadow(f));
       });
     },
   };
