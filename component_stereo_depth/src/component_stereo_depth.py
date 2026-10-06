@@ -704,15 +704,15 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         feed (colours), the shadow label image (SHADOW_IDS) and the object
         mask. The lowest bit of green flags ground, the lowest bit of blue any
         surface without sunlight (ground, rocks, rover), the lowest bit of red
-        the rover's own shadow (on ground or rocks); all are cleared from the
-        object mask.
+        the rover's own shadow (with blue) or the sun's disc (without blue); all
+        are cleared from the object mask. The sun stays sky in the shadow feeds.
         """
-        # One 4-bit code per pixel (ground | shadow | rover shadow | sky), then
+        # One 4-bit code per pixel (ground | shadow | red flag | sky), then
         # two table lookups: ~3x faster than masked writes per class.
         objects = frame & np.uint8(0xFE)
         r, g, b = frame[:, :, 0], frame[:, :, 1], frame[:, :, 2]
         sky = (objects[:, :, 0] | objects[:, :, 1] | objects[:, :, 2]) == 0
-        code = (g & 1) | ((b & 1) << 1) | ((r & b & 1) << 2) | (sky.view(np.uint8) << 3)
+        code = (g & 1) | ((b & 1) << 1) | ((r & 1) << 2) | (sky.view(np.uint8) << 3)
         return (np.take(self._SHADOW_PALETTE, code, axis=0),
                 np.take(self._SHADOW_LABELS, code), objects)
 
@@ -722,7 +722,9 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         palette = np.empty((16, 3), np.uint8)
         labels = np.empty(16, np.uint8)
         for code in range(16):
-            ground, shadow, rover, sky = (code >> bit & 1 for bit in range(4))
+            ground, shadow, red, sky = (code >> bit & 1 for bit in range(4))
+            rover, sun = red & shadow, red & (1 - shadow)
+            sky = sky | sun                 # The sun's disc is sky here
             colour = cls.SKY_RGB if sky else cls.OTHER_RGB
             colour = cls.SUNLIT_RGB if ground else colour
             colour = cls.SHADOW_RGB if shadow else colour

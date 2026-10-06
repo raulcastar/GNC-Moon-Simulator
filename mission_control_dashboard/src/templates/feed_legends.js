@@ -25,12 +25,15 @@
     '21': [210, 62, 6],      /* small rock */
     '30': [124, 50, 208],    /* crater     */
     '31': [86, 52, 82],      /* crater rim */
+    '50': [28, 128, 162],    /* sun        */
+    '51': [230, 14, 118],    /* sun glare  */
   };
 
   /* Object-mask classes per group (by name, from object_mask_mapping). */
   const MASK_GROUPS = [
     ['ground', ['landscape', 'crater', 'crater_rim']],
     ['objects', ['rover', 'boulder', 'small_rock']],
+    ['sky', ['sun', 'sun_glare']],
   ];
 
   /* Shadow feed: colour and shadow_label id per class, grouped. Must match
@@ -140,9 +143,9 @@
       return g ? g[0] : 'other';
     };
     const rows = [];
-    ['ground', 'objects', 'other'].forEach(group => {
+    ['ground', 'objects', 'other', 'sky'].forEach(group => {
       const members = ids.filter(id => groupOf(id) === group);
-      if (!members.length) return;
+      if (!members.length && group !== 'sky') return;
       rows.push(`<div class="fl-grp">${group}</div>`);
       members.forEach(id => {
         const c = MASK_COLOURS[id];
@@ -150,7 +153,7 @@
         rows.push(row(sw, id, legend[id].replace('_', ' ')));
       });
     });
-    rows.push('<div class="fl-grp">sky</div>' + row('background:#000', '&ndash;', 'untagged'));
+    rows.push(row('background:#000', '&ndash;', 'untagged'));
     box(feed, 'mask').innerHTML = rows.join('');
   }
 

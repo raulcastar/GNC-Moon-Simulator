@@ -42,6 +42,8 @@ lc_component_stereo_depth:
       - "21:small_rock"
       - "30:crater"        # Crater ground truth from the Terrain Studio (crater map)
       - "31:crater_rim"
+      - "50:sun"           # The sun's disc in the sky (Terrain Studio, from the Directional Light)
+      - "51:sun_glare"     # Sky around it the navcam washes out (Terrain Studio glare radius)
 
     # Hierarchical topic namespaces. TF frame names are derived by flattening
     # them ('navcam/central' -> 'navcam_central'), since tf2 forbids '/'.
