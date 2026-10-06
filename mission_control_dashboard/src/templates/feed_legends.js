@@ -14,12 +14,12 @@
 (function () {
   'use strict';
 
-  /* Object-mask colours per stencil id. PPM_ObjectMask derives them from a sin
+  /* Object-mask colours per stencil id. PPM_GroundTruthMask derives them from a sin
      hash of the id on the GPU, so they cannot be computed here; these were
-     measured from the mask (lowest green and blue bits cleared: they carry
+     measured from the mask (lowest bit of each channel cleared: they carry
      the shadow mask). Re-measure if the material changes. */
   const MASK_COLOURS = {
-    '2':  [251, 194, 16],    /* rover      */
+    '2':  [250, 194, 16],    /* rover      */
     '10': [10, 96, 216],     /* landscape  */
     '20': [238, 244, 242],   /* boulder    */
     '21': [210, 62, 6],      /* small rock */
@@ -38,6 +38,7 @@
   const SHADOW_GROUPS = [
     ['ground', [[1, 'sunlit', 'rgb(40,120,255)'], [2, 'shadowed', '#000']]],
     ['objects', [[3, 'sunlit', 'rgb(128,128,128)'], [4, 'shadowed', '#000']]],
+    ['rover shadow', [[5, 'on ground or rocks', 'rgb(255,140,0)']]],
     ['sky', [[0, 'sky', '#000']]],
   ];
 

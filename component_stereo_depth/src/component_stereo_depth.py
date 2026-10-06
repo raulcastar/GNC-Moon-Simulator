@@ -691,10 +691,11 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
     SUNLIT_RGB = (40, 120, 255)     # Ground in sunlight
     SKY_RGB = (0, 0, 0)             # Untagged (sky)
     OTHER_RGB = (128, 128, 128)     # Rocks, rover in sunlight
+    ROVER_SHADOW_RGB = (255, 140, 0)  # The rover's own cast shadow
 
     # Shadow class ids (shadow_label, mono8), for training.
     SHADOW_IDS = {0: 'sky', 1: 'sunlit_ground', 2: 'shadowed_ground',
-                  3: 'sunlit_object', 4: 'shadowed_object'}
+                  3: 'sunlit_object', 4: 'shadowed_object', 5: 'rover_shadow'}
 
     def _split_shadow_mask(self, frame: np.ndarray
                            ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -702,21 +703,24 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         Splits a mask frame from Terrain Studio's mask material into the shadow
         feed (colours), the shadow label image (SHADOW_IDS) and the object
         mask. The lowest bit of green flags ground, the lowest bit of blue any
-        surface without sunlight (ground, rocks, rover); both are cleared from
-        the object mask.
+        surface without sunlight (ground, rocks, rover), the lowest bit of red
+        the rover's own shadow (on ground or rocks); all are cleared from the
+        object mask.
         """
         ground = (frame[:, :, 1] & 1).astype(bool)
         shadow = (frame[:, :, 2] & 1).astype(bool)
-        objects = frame.copy()
-        objects[:, :, 1:3] &= np.uint8(0xFE)
+        rover = (frame[:, :, 0] & 1).astype(bool) & shadow
+        objects = frame & np.uint8(0xFE)
         sky = ~objects.any(axis=2)
         out = np.empty_like(frame)
         out[...] = self.OTHER_RGB
         out[sky] = self.SKY_RGB
         out[ground] = self.SUNLIT_RGB
         out[shadow] = self.SHADOW_RGB
+        out[rover] = self.ROVER_SHADOW_RGB
         labels = np.where(ground, 1, 3).astype(np.uint8) + shadow.astype(np.uint8)
         labels[sky] = 0
+        labels[rover] = 5
         return out, labels, objects
 
     def _publish_image(self, key: str, img: np.ndarray, encoding: str,

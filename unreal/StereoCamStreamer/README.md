@@ -107,14 +107,15 @@ the RGB cameras.
    - **Painted foliage:** set them on the **Foliage Type asset**, not on the
      placed instances.
 
-3. **Colouriser material `PPM_ObjectMask`.** A Material with *Material Domain =
+3. **Colouriser material `PPM_GroundTruthMask`** (in `/Game/GroundTruth_Masks`,
+   where Terrain Studio looks for it). A Material with *Material Domain =
    Post Process*, *Blendable Location = After Tonemapping*, that reads a
    `SceneTexture: CustomStencil` node (R channel) and maps the value to a flat
    colour into **Emissive Color** (e.g. a `Custom` HLSL node hashing the id to
    RGB, black when the value is 0).
 
 4. **Mask capture.** A fourth `SceneCaptureComponent2D` (e.g. **`Navcam_Mask`**),
-   posed and FOV-matched to `NavcamCenter`, with `PPM_ObjectMask` added to its
+   posed and FOV-matched to `NavcamCenter`, with `PPM_GroundTruthMask` added to its
    *Post Process Settings → Post Process Materials* (weight 1). Leave its render
    target empty (auto-created). On the **StereoCamStreamer** component set
    **MaskCaptureName** to it; its **MaskCamId** (default 3, under *Advanced*)

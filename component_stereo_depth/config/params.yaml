@@ -127,7 +127,9 @@ lc_component_stereo_depth:
     # (ground, rocks, rover), sunlit ground blue, sunlit rocks and rover grey, sky
     # black. Also publishes navcam/central/shadow_label (mono8 class ids, for
     # training) and shadow_label_mapping (JSON legend):
-    #   0 sky, 1 sunlit_ground, 2 shadowed_ground, 3 sunlit_object, 4 shadowed_object
+    #   0 sky, 1 sunlit_ground, 2 shadowed_ground, 3 sunlit_object, 4 shadowed_object,
+    #   5 rover_shadow (orange in shadow_mask; needs "Tag the rover's shadow" in
+    #   Terrain Studio, which flags it in the lowest bit of red)
     # Split from the mask frame: Terrain Studio's mask material flags ground and
     # shadow in the lowest bits of green and blue, which are cleared from
     # object_mask. Needs enable_object_mask.
