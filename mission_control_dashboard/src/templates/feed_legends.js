@@ -27,11 +27,12 @@
     '31': [86, 52, 82],      /* crater rim */
     '50': [28, 128, 162],    /* sun        */
     '51': [230, 14, 118],    /* sun glare  */
+    '60': [64, 124, 162],    /* wheel track */
   };
 
   /* Object-mask classes per group (by name, from object_mask_mapping). */
   const MASK_GROUPS = [
-    ['ground', ['landscape', 'crater', 'crater_rim']],
+    ['ground', ['landscape', 'crater', 'crater_rim', 'wheel_track']],
     ['objects', ['rover', 'boulder', 'small_rock']],
     ['sky', ['sun', 'sun_glare']],
   ];
