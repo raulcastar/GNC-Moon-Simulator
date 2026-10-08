@@ -46,6 +46,10 @@ from src import local_trajectory_controller
 # Suppress Matplotlib GUI warnings during live ROS 2 execution
 warnings.filterwarnings("ignore")
 
+# A goal on impassable ground is moved to the nearest drivable cell within this
+# many grid cells (metres at 1 m/px), if the rover can reach it.
+GOAL_SNAP_RADIUS_CELLS = 5
+
 
 class LifecyclePlannerController(rclpy.lifecycle.Node):
     """
@@ -112,6 +116,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         self.elevationMap = None
         self.costMap = None
         self.obstacleMap = None
+        self.freeRegions = None     # Connected drivable regions (label per cell)
 
         # --- Parameter Declarations for Runtime Mutability ---
         self.declare_parameters(
@@ -275,6 +280,33 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
     # CORE CONTROL LOOP & PATHING
     # =========================================================================
 
+    def _drivable_goal(self, goal: list, start: list) -> Optional[list]:
+        """
+        `goal` if it is drivable, else the nearest drivable cell within
+        GOAL_SNAP_RADIUS_CELLS that lies in the rover's drivable region (so a path
+        can exist); None if there is none.
+        """
+        rows, cols = self.obstacleMap.shape
+        gx, gy = goal
+        if not (0 <= gx < cols and 0 <= gy < rows):
+            return None
+        if self.obstacleMap[gy, gx] != 1:
+            return goal
+        r = GOAL_SNAP_RADIUS_CELLS
+        y0, y1, x0, x1 = max(0, gy - r), min(rows, gy + r + 1), max(0, gx - r), min(cols, gx + r + 1)
+        free = self.obstacleMap[y0:y1, x0:x1] != 1
+        sx, sy = start
+        if self.freeRegions is not None and 0 <= sx < cols and 0 <= sy < rows and self.freeRegions[sy, sx]:
+            free &= self.freeRegions[y0:y1, x0:x1] == self.freeRegions[sy, sx]
+        ys, xs = np.nonzero(free)
+        if ys.size == 0:
+            return None
+        d2 = (ys + y0 - gy) ** 2 + (xs + x0 - gx) ** 2
+        k = int(np.argmin(d2))
+        if d2[k] > r * r:
+            return None
+        return [int(xs[k] + x0), int(ys[k] + y0)]
+
     def _compute_global_path(self, start_pos: list) -> None:
         """
         Generates the optimal global route bridging the starting coordinate 
@@ -288,13 +320,43 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         goal_y = int(round(self.current_goal[1]))
         grid_goal = [goal_x, goal_y]
 
+        # A goal on impassable ground (too steep, or no-go soil) would leave the
+        # whole search stuck at the goal: move it to the nearest drivable cell
+        # the rover can reach, or refuse it.
+        snapped = self._drivable_goal(grid_goal, start_pos)
+        if snapped is None:
+            self.get_logger().warn(
+                f"Goal {grid_goal} is on impassable ground (slope over "
+                f"{self.get_parameter('slope_threshold').value:.0f} deg or no-go soil) with no "
+                f"reachable drivable cell within {GOAL_SNAP_RADIUS_CELLS} cells. Pick another point.")
+            self._set_state('aborted', 'goal on impassable ground')
+            self.current_goal = None
+            self.global_path = None
+            return
+        if snapped != grid_goal:
+            self.get_logger().info(f"Goal {grid_goal} is on impassable ground; moved to the "
+                                   f"nearest drivable cell {snapped}.")
+            grid_goal = snapped
+            self.current_goal = [float(snapped[0]), float(snapped[1])]
+
         self.get_logger().info(f"Computing global trajectory from {start_pos} to {grid_goal}...")
 
         try:
             Tmap = self.path_planner.computeTmap(self.costMap, self.obstacleMap, grid_goal, start_pos)
+            if not np.isfinite(Tmap[start_pos[1], start_pos[0]]):
+                # The search from the goal never reached the rover: steep ground
+                # or no-go soil separates them.
+                self.get_logger().warn(f"Goal {grid_goal} is not reachable from the rover "
+                                       "(cut off by steep ground or no-go soil).")
+                self._set_state('aborted', 'goal not reachable')
+                self.current_goal = None
+                self.global_path = None
+                return
             self.global_path = self.path_planner.getPathGDM(Tmap, np.asarray(start_pos), np.asarray(grid_goal), 0.4)
-            
+
             # --- Path Validation Safety Check ---
+            if self.global_path is not None and np.isnan(self.global_path).any():
+                self.global_path = None
             if self.global_path is None or len(self.global_path) < 2:
                 self.get_logger().warn(f"Pathfinding failed! Coordinates {grid_goal} are unreachable or inside an obstacle.")
                 self._set_state('aborted', 'no path to the goal')
@@ -656,6 +718,10 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             self.costMap, self.obstacleMap, _ = self.path_planner.getCostMap(
                 self.elevationMap, soilMap, global_res, slope_thresh
             )
+            # Drivable regions, 4-connected like the planner's search.
+            import cv2
+            _, self.freeRegions = cv2.connectedComponents(
+                (self.obstacleMap != 1).astype(np.uint8), connectivity=4)
             
             # Temporary static boundary testing array
             self.obstacles = np.array([
