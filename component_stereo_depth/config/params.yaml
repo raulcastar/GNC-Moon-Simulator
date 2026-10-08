@@ -45,7 +45,6 @@ lc_component_stereo_depth:
       - "50:sun"           # The sun's disc in the sky (Terrain Studio, from the Directional Light)
       - "51:sun_glare"     # Sky around it the navcam washes out (Terrain Studio glare radius)
       - "60:wheel_track"   # Tracks the rover's wheels leave on the ground (Terrain Studio)
-      - "70:dust"          # Regolith grains the wheels kick up (Terrain Studio)
 
     # Hierarchical topic namespaces. TF frame names are derived by flattening
     # them ('navcam/central' -> 'navcam_central'), since tf2 forbids '/'.

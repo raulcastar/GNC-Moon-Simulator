@@ -33,7 +33,7 @@
   /* Object-mask classes per group (by name, from object_mask_mapping). */
   const MASK_GROUPS = [
     ['ground', ['landscape', 'crater', 'crater_rim', 'wheel_track']],
-    ['objects', ['rover', 'boulder', 'small_rock', 'dust']],
+    ['objects', ['rover', 'boulder', 'small_rock']],
     ['sky', ['sun', 'sun_glare']],
   ];
 

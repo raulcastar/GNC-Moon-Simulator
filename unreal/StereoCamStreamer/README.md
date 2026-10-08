@@ -107,7 +107,7 @@ the RGB cameras.
    - **Painted foliage:** set them on the **Foliage Type asset**, not on the
      placed instances.
 
-3. **Colouriser material `PPM_GroundTruthMask`** (in `/Game/GroundTruth_Masks`,
+3. **Colouriser material `PPM_GroundTruthMask`** (in `/Game/GroundTruth_Masks/Mask`,
    where Terrain Studio looks for it). A Material with *Material Domain =
    Post Process*, *Blendable Location = After Tonemapping*, that reads a
    `SceneTexture: CustomStencil` node (R channel) and maps the value to a flat
