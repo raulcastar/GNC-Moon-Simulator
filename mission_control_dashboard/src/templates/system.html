@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GNC MOON SIM — System</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+<style>
+  :root {
+    --bg:      #10151c;
+    --panel:   #18212e;
+    --panel2:  #202b3a;
+    --line:    #2c3a4e;
+    --text:    #e6edf5;
+    --dim:     #8aa0b8;
+    --accent:  #33d6a6;
+    --cyan:    #59b0ff;
+    --amber:   #ffbe5c;
+    --red:     #ff6b7d;
+    --mono:    'Consolas','Menlo','DejaVu Sans Mono',monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--mono);
+    font-size: 12px; overflow: hidden;
+    display: grid; grid-template-rows: 46px 1fr; gap: 6px; padding: 6px;
+  }
+
+  /* ============ HEADER ============ */
+  header {
+    display: flex; align-items: center; gap: 12px; padding: 0 12px;
+    background: linear-gradient(180deg, var(--panel2), var(--panel));
+    border: 1px solid var(--line); border-radius: 4px;
+  }
+  a.back {
+    color: var(--dim); text-decoration: none; font-size: 11px; letter-spacing: 1px;
+    border: 1px solid var(--line); padding: 6px 11px; border-radius: 4px; white-space: nowrap;
+  }
+  a.back:hover { color: var(--cyan); border-color: var(--cyan); }
+  .brand { color: var(--accent); font-weight: bold; letter-spacing: 3px; font-size: 15px;
+           text-shadow: 0 0 12px rgba(51,214,166,.3); white-space: nowrap; }
+  .brand small { color: var(--dim); letter-spacing: 1px; font-size: 10px; display: block; }
+  .spacer { flex: 1; }
+  .conn { display: flex; align-items: center; gap: 7px; font-size: 10px; letter-spacing: 1px;
+          color: var(--dim); white-space: nowrap; }
+  .conn .dot { width: 10px; height: 10px; border-radius: 50%; background: #402028; }
+  .conn .dot.ok { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+
+  /* ============ LAYOUT ============ */
+  main { display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: 6px; min-height: 0; }
+  .col { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+    display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  }
+  .panel-title {
+    padding: 5px 10px; font-size: 10px; letter-spacing: 2px; color: var(--dim);
+    border-bottom: 1px solid var(--line); background: var(--panel2);
+    display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
+  }
+  .panel-title .tag { color: var(--accent); }
+  .panel-title .n { margin-left: auto; font-size: 9px; letter-spacing: 1px; }
+  .scroll { overflow: auto; min-height: 0; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th { position: sticky; top: 0; background: var(--panel2); color: var(--dim); font-weight: normal;
+       font-size: 9px; letter-spacing: 1px; text-align: left; padding: 4px 8px; }
+  td { padding: 4px 8px; border-bottom: 1px dashed #131e2c; white-space: nowrap; }
+  td.num, th.num { text-align: right; }
+  td.num { color: var(--text); }
+  .st { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; }
+  .st.ok { background: var(--accent); } .st.stale { background: var(--amber); }
+  .st.dead { background: #5a2230; } .st.none { background: #333; }
+  button.small { background: none; border: 1px solid var(--line); color: var(--dim); cursor: pointer;
+                 font-family: var(--mono); font-size: 9px; padding: 2px 8px; border-radius: 3px; }
+  button.small:hover { color: var(--amber); border-color: var(--amber); }
+  #rec { padding: 8px 10px; color: var(--dim); }
+  #rec b { color: var(--text); font-weight: normal; }
+  #rec.on b { color: var(--red); }
+
+  /* ============ TOPICS ============ */
+  #topics { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+            grid-template-rows: auto minmax(0, 1fr); }
+  #topics .panel-title { grid-column: 1 / -1; }
+  #topics-filter { flex: 0 1 360px; background: var(--bg); color: var(--text); border: 1px solid var(--line);
+                   border-radius: 3px; padding: 4px 8px; font-family: var(--mono); font-size: 11px;
+                   letter-spacing: 0; margin-left: 8px; }
+  #topics-refresh:hover { color: var(--cyan); border-color: var(--cyan); }
+  #topics-list { border-right: 1px solid var(--line); }
+  /* fixed columns so PUB / SUB always show; long names and types end in … (full text on hover) */
+  #topics-list table { table-layout: fixed; }
+  #topics-list th:nth-child(1) { width: 58%; } #topics-list th:nth-child(2) { width: 42%; }
+  #topics-list th:nth-child(3), #topics-list th:nth-child(4) { width: 46px; }
+  #topics-list td { overflow: hidden; text-overflow: ellipsis; }
+  #topics-list td.t { color: var(--dim); }
+  #topics-list td.num.zero { color: #5a6b80; }
+  #topics-list tr { cursor: pointer; }
+  #topics-list tbody tr:hover td { background: rgba(89,176,255,.07); }
+  #topics-list tr.sel td { background: rgba(53,224,181,.12); color: var(--accent); }
+  #topic-detail { padding: 10px 12px; }
+  .hint { color: var(--dim); line-height: 1.5; }
+  #topic-detail .name { color: var(--accent); font-size: 14px; word-break: break-all; }
+  #topic-detail .type { color: var(--dim); margin: 2px 0 10px; }
+  #topic-detail .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 8px; }
+  #topic-detail .stat { background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 6px 8px; }
+  #topic-detail .stat b { display: block; color: var(--text); font-size: 14px; font-weight: normal; }
+  #topic-detail .stat span { color: var(--dim); font-size: 9px; letter-spacing: 1px; }
+  #topic-detail h5 { color: var(--dim); font-weight: normal; font-size: 9px; letter-spacing: 2px; margin: 10px 0 4px; }
+  #topic-detail .nodes { line-height: 1.5; }
+  #topic-detail pre { background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 8px;
+                      white-space: pre-wrap; word-break: break-all; color: #c8d6e5; font-size: 11px; }
+</style>
+</head>
+<body>
+  <header>
+    <a class="back" href="#" id="hublink">◀ MENU</a>
+    <div class="brand">SYSTEM<small>FEEDS · NODES · ROS 2 TOPICS</small></div>
+    <div class="spacer"></div>
+    <div class="conn"><span class="dot" id="cdot"></span><span id="cstate">OFFLINE</span></div>
+  </header>
+
+  <main>
+    <div class="col">
+      <div class="panel" style="flex: 1.25">
+        <div class="panel-title"><span class="tag">▸</span>FEEDS — RATE · AGE</div>
+        <div class="scroll"><table>
+          <thead><tr><th>FEED</th><th class="num">RATE</th><th class="num">AGE</th></tr></thead>
+          <tbody id="feeds"></tbody></table></div>
+      </div>
+      <div class="panel" style="flex: 1">
+        <div class="panel-title"><span class="tag">▸</span>LIFECYCLE NODES</div>
+        <div class="scroll"><table>
+          <thead><tr><th>NODE</th><th class="num">STATE</th><th></th></tr></thead>
+          <tbody id="nodes"></tbody></table></div>
+      </div>
+      <div class="panel" style="flex: 0 0 auto">
+        <div class="panel-title"><span class="tag">▸</span>RECORDING</div>
+        <div id="rec">rosbag: <b>—</b></div>
+      </div>
+    </div>
+
+    <div class="panel" id="topics">
+      <div class="panel-title"><span class="tag">▸</span>ROS 2 TOPICS
+        <input id="topics-filter" placeholder="filter by name, type or node…" spellcheck="false">
+        <span class="n" id="topics-n"></span>
+        <button class="small" id="topics-refresh" title="Refresh now (also every 3 s)">⟳ REFRESH</button>
+      </div>
+      <div class="scroll" id="topics-list"><table>
+        <thead><tr><th>TOPIC</th><th>TYPE</th><th class="num" title="publishers">PUB</th>
+          <th class="num" title="subscribers, not counting this dashboard">SUB</th></tr></thead>
+        <tbody id="topics-body"></tbody></table></div>
+      <div class="scroll" id="topic-detail"><div class="hint">Click a topic to see its rate, bandwidth,
+        publishers, subscribers and latest message. The dashboard subscribes to it only while it is
+        selected here.</div></div>
+    </div>
+  </main>
+
+<script>
+  const host = window.location.hostname || 'localhost';
+  document.getElementById('hublink').href = `http://${host}:5000/`;
+  const $ = id => document.getElementById(id);
+  const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const socket = io();
+
+  // ---- feeds, nodes, recording (the 'health' push, once a second) ----
+  const FEED_NAMES = {
+    odom: 'odometry', imu: 'IMU', cam_central: 'navcam central', cam_left: 'navcam left',
+    cam_right: 'navcam right', cam_rear: 'rear camera', depth: 'stereo depth',
+    depth_gt: 'ground-truth depth', mask: 'segmentation', shadow: 'shadow mask',
+    events: 'event camera', spad: 'SPAD camera', lidar: 'lidar', local_dem: 'local DEM',
+  };
+  const ageClass = a => a === null || a === undefined ? 'none' : a < 3 ? 'ok' : a < 10 ? 'stale' : 'dead';
+  socket.on('health', h => {
+    const f = h.feeds || {};
+    const keys = [...Object.keys(FEED_NAMES), ...Object.keys(f).filter(k => !(k in FEED_NAMES)).sort()];
+    $('feeds').innerHTML = keys.map(k => {
+      const d = f[k];
+      return `<tr><td><span class="st ${ageClass(d ? d.age : null)}"></span>${esc(FEED_NAMES[k] || k)}</td>` +
+             `<td class="num">${d ? d.hz.toFixed(1) + ' Hz' : '—'}</td>` +
+             `<td class="num">${d && d.age != null ? d.age.toFixed(1) + ' s' : 'no data'}</td></tr>`;
+    }).join('');
+    const nodes = h.nodes || {};
+    $('nodes').innerHTML = Object.keys(nodes).map(n => {
+      const st = nodes[n], cls = st === 'active' ? 'ok' : st === 'inactive' || st === 'unknown' ? 'stale' : 'dead';
+      return `<tr><td><span class="st ${cls}"></span>${esc(n.replace('lc_component_', ''))}</td>` +
+             `<td class="num">${esc(st)}</td><td class="num"><button class="small" data-node="${esc(n)}">RESTART</button></td></tr>`;
+    }).join('');
+    const bag = h.bag || {};
+    $('rec').classList.toggle('on', !!bag.recording);
+    $('rec').innerHTML = bag.recording
+      ? `rosbag: <b>recording ${String(Math.floor(bag.elapsed / 60)).padStart(2, '0')}:${String(bag.elapsed % 60).padStart(2, '0')}</b>` +
+        (bag.path ? ` → ${esc(bag.path)}` : '')
+      : 'rosbag: <b>idle</b> (start / stop with ● REC on the overview)';
+  });
+  $('nodes').addEventListener('click', e => {
+    const n = e.target.dataset.node;
+    if (!n) return;
+    if (!confirm(`Restart ${n}? Its lifecycle is cycled (deactivate → activate).`)) return;
+    socket.emit('restart_node', { name: n });
+  });
+
+  // ---- ROS 2 topics ----
+  // The list refreshes every 3 s. Selecting a topic makes the dashboard subscribe
+  // to it (serialized, so cheap) and report its rate, bandwidth and latest message
+  // once a second; switching topics or closing this window unsubscribes.
+  let topicRows = [], topicSel = null, dashNode = '';
+  const refresh = () => socket.emit('topics_list');
+  setInterval(refresh, 3000);
+  $('topics-refresh').onclick = refresh;
+  $('topics-filter').oninput = renderTopics;
+  socket.on('topics_list', m => { topicRows = m.topics || []; dashNode = m.self || ''; renderTopics(); });
+  function renderTopics() {
+    const q = $('topics-filter').value.trim().toLowerCase();
+    const rows = topicRows.filter(t => !q || [t.name, t.type, ...t.pubs, ...t.subs].some(x => x.toLowerCase().includes(q)));
+    $('topics-n').textContent = `${rows.length} / ${topicRows.length} topics`;
+    const others = list => list.filter(n => n !== dashNode);
+    $('topics-body').innerHTML = rows.map(t => {
+      const pubs = t.pubs.length, subs = others(t.subs).length;
+      return `<tr data-name="${esc(t.name)}" class="${t.name === topicSel ? 'sel' : ''}">` +
+        `<td title="${esc(t.name)}">${esc(t.name)}</td><td class="t" title="${esc(t.type)}">${esc(t.type.replace('/msg/', '/'))}</td>` +
+        `<td class="num${pubs ? '' : ' zero'}" title="${esc(t.pubs.join('\n') || 'no publisher')}">${pubs}</td>` +
+        `<td class="num${subs ? '' : ' zero'}" title="${esc(others(t.subs).join('\n') || 'no subscriber (besides this dashboard)')}">${subs}</td></tr>`;
+    }).join('');
+  }
+  $('topics-body').addEventListener('click', e => {
+    const tr = e.target.closest('tr');
+    if (!tr) return;
+    topicSel = tr.dataset.name;
+    socket.emit('topic_inspect', { name: topicSel });
+    $('topic-detail').innerHTML = `<div class="name">${esc(topicSel)}</div><div class="hint">subscribing…</div>`;
+    renderTopics();
+  });
+  const fmtBytes = b => b == null ? '—' : b >= 1e6 ? (b / 1e6).toFixed(2) + ' MB' : b >= 1e3 ? (b / 1e3).toFixed(1) + ' kB' : b + ' B';
+  socket.on('topic_info', m => {
+    if (m.name !== topicSel) return;
+    if (m.error) { $('topic-detail').innerHTML = `<div class="name">${esc(m.name)}</div><div class="hint">${esc(m.error)}</div>`; return; }
+    const stat = (v, k) => `<div class="stat"><b>${v}</b><span>${k}</span></div>`;
+    const nodes = l => l.length ? l.map(esc).join('<br>') : '<span class="hint">none</span>';
+    $('topic-detail').innerHTML =
+      `<div class="name">${esc(m.name)}</div><div class="type">${esc(m.type)} · QoS ${esc(m.qos)}</div>` +
+      `<div class="stats">${stat(m.hz ? m.hz.toFixed(m.hz < 10 ? 2 : 1) + ' Hz' : (m.count ? '—' : 'no data'), 'RATE (5 s)')}` +
+      `${stat(fmtBytes(m.bw) + '/s', 'BANDWIDTH')}${stat(fmtBytes(m.size), 'LAST MESSAGE')}` +
+      `${stat(m.age == null ? '—' : m.age + ' s', 'AGE')}</div>` +
+      `<h5>PUBLISHERS (${m.pubs.length})</h5><div class="nodes">${nodes(m.pubs)}</div>` +
+      `<h5>SUBSCRIBERS (${m.subs.length}, including this dashboard)</h5><div class="nodes">${nodes(m.subs)}</div>` +
+      `<h5>LATEST MESSAGE${m.preview ? ' (arrays cut to their first 12 elements)' : ''}</h5>` +
+      (m.preview ? `<pre>${esc(m.preview)}</pre>` : '<div class="hint">no message received yet</div>');
+  });
+
+  // ---- connection ----
+  socket.on('connect', () => {
+    $('cdot').classList.add('ok'); $('cstate').textContent = 'ONLINE';
+    refresh();
+    if (topicSel) socket.emit('topic_inspect', { name: topicSel });   // resubscribe after a reconnect
+  });
+  socket.on('disconnect', () => { $('cdot').classList.remove('ok'); $('cstate').textContent = 'OFFLINE'; });
+</script>
+</body>
+</html>

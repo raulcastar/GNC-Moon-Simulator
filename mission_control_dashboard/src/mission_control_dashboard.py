@@ -23,6 +23,7 @@ import time
 import threading
 import base64
 import warnings
+import yaml
 
 import cv2
 import numpy as np
@@ -33,7 +34,9 @@ import rclpy
 import rclpy.lifecycle
 from rclpy.lifecycle import State, TransitionCallbackReturn
 from rclpy.executors import SingleThreadedExecutor
-from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from rclpy.serialization import deserialize_message
+from rosidl_runtime_py.utilities import get_message
 
 from nav_msgs.msg import Odometry, Path, OccupancyGrid
 from geometry_msgs.msg import PoseStamped, Twist
@@ -58,6 +61,7 @@ template_dir = os.path.join(pkg_share, 'templates')
 #   5002  teleop   — manual drive-by-wire, bypassing the GNC planner
 #   5003  cameras  — a camera wall with per-feed show/hide toggles
 #   5005  map3d    — LiDAR 3D + local DEM side by side, with labelled axes
+#   5006  system   — feed rates, lifecycle nodes, recording and the ROS 2 topics
 # network_mode: host means each port is reachable on the host directly, so no
 # compose port mapping is needed. Each Flask app gets its own SocketIO server;
 # the ROS node fans shared feeds (cameras, telemetry) out to whichever servers
@@ -86,6 +90,10 @@ app_map = Flask('map3d', template_folder=template_dir)
 app_map.config['SECRET_KEY'] = 'lunar_map3d'
 sio_map = SocketIO(app_map, async_mode='threading', cors_allowed_origins="*",
                    max_http_buffer_size=10000000)
+
+app_sys = Flask('system', template_folder=template_dir)
+app_sys.config['SECRET_KEY'] = 'lunar_system'
+sio_sys = SocketIO(app_sys, async_mode='threading', cors_allowed_origins="*")
 
 
 def emit_over(event, data):
@@ -137,6 +145,25 @@ def _ground_plane(dem: np.ndarray, res: float) -> np.ndarray:
         if keep.sum() < 50:
             break
     return coef
+
+
+def _preview(value):
+    """
+    A ROS message as plain data for the TOPICS panel: arrays (images, clouds...)
+    cut to their first _INSPECT_TRUNCATE elements plus their length; strings kept
+    whole up to _INSPECT_MAX_STRING characters.
+    """
+    if hasattr(value, 'get_fields_and_field_types'):
+        return {f: _preview(getattr(value, f)) for f in value.get_fields_and_field_types()}
+    if isinstance(value, str):
+        return value if len(value) <= _INSPECT_MAX_STRING else value[:_INSPECT_MAX_STRING] + '...'
+    if isinstance(value, (bytes, bytearray)) or hasattr(value, '__len__'):
+        n = len(value)
+        head = [_preview(v) for v in list(value[:_INSPECT_TRUNCATE])]
+        return head if n <= _INSPECT_TRUNCATE else head + [f'... {n} elements in all']
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
 
 
 def _level(xyz: np.ndarray, roll: float, pitch: float) -> np.ndarray:
@@ -205,6 +232,11 @@ _CAM_PRODUCT_MIN_PERIOD = 0.16
 
 _HEALTH_PERIOD = 1.0           # seconds between feed-health / node-state pushes
 _HEALTH_WINDOW = 5.0           # seconds of arrivals used for the rate estimate
+_INSPECT_PERIOD = 1.0          # seconds between TOPICS-panel updates of the inspected topic
+_INSPECT_WINDOW = 5.0          # seconds of arrivals for its rate and bandwidth
+_INSPECT_TRUNCATE = 12         # array elements shown in its message preview
+_INSPECT_MAX_CHARS = 6000      # preview length cap
+_INSPECT_MAX_STRING = 2000     # characters of a string field shown in the preview
 _NODE_POLL_TICKS = 3           # health ticks between lifecycle state polls
 _DEM_LIDAR_MAX_POINTS = 4000   # lidar points overlaid on the local DEM
 _OBSTACLE_MAX_POINTS = 800     # local obstacle cells drawn on the global map
@@ -289,6 +321,11 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         self._arrivals = collections.defaultdict(lambda: collections.deque(maxlen=200))
         self._health_timer = None
         self._health_ticks = 0
+
+        # System window: the topic each browser is inspecting (sid -> state).
+        self._inspect = {}
+        self._inspect_lock = threading.Lock()
+        self._inspect_timer = None
 
         # Latest data, for the snapshot export and for browsers that join late.
         self._last_jpeg = {}            # feed id -> JPEG bytes
@@ -423,6 +460,7 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         # 5 Hz teleop deadman: stop the rover if manual commands stop arriving.
         self._teleop_watchdog = self.create_timer(0.2, self._teleop_watchdog_cb)
         self._health_timer = self.create_timer(_HEALTH_PERIOD, self._health_cb)
+        self._inspect_timer = self.create_timer(_INSPECT_PERIOD, self._inspect_cb)
 
         return TransitionCallbackReturn.SUCCESS
 
@@ -436,7 +474,9 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
 
     def on_cleanup(self, state: State) -> TransitionCallbackReturn:
         self.stop_bag()
-        for attr in ('_teleop_watchdog', '_health_timer'):
+        for sid in list(self._inspect):
+            self.stop_inspect(sid)
+        for attr in ('_teleop_watchdog', '_health_timer', '_inspect_timer'):
             if getattr(self, attr) is not None:
                 self.destroy_timer(getattr(self, attr))
                 setattr(self, attr, None)
@@ -1036,6 +1076,96 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
             self._restart_busy.discard(name)
 
     # =========================================================================
+    # System window (5006): the ROS 2 graph, and one topic inspected on demand
+    # =========================================================================
+
+    @staticmethod
+    def _endpoint_nodes(infos) -> list:
+        return sorted({f"{i.node_namespace.rstrip('/')}/{i.node_name}" for i in infos})
+
+    def list_topics(self, sid) -> None:
+        """Every topic in the graph with its type(s), publishers and subscribers."""
+        rows = []
+        for name, types in sorted(self.get_topic_names_and_types()):
+            rows.append({'name': name, 'type': ', '.join(types),
+                         'pubs': self._endpoint_nodes(self.get_publishers_info_by_topic(name)),
+                         'subs': self._endpoint_nodes(self.get_subscriptions_info_by_topic(name))})
+        sio_sys.emit('topics_list', {'topics': rows, 'self': self.get_fully_qualified_name()}, to=sid)
+
+    def inspect_topic(self, sid, name: str) -> None:
+        """
+        Subscribes to `name` (serialized, so nothing is decoded per message) until
+        stop_inspect; _inspect_cb reports its rate, bandwidth and latest message.
+        The QoS follows the publishers: best effort if any is, transient local if
+        all are (so a latched topic shows its last message).
+        """
+        self.stop_inspect(sid)
+        types = dict(self.get_topic_names_and_types()).get(name)
+        if not types:
+            sio_sys.emit('topic_info', {'name': name, 'error': 'topic not found'}, to=sid)
+            return
+        try:
+            cls = get_message(types[0])
+        except Exception as exc:
+            sio_sys.emit('topic_info', {'name': name, 'error': f'unknown type {types[0]}: {exc}'}, to=sid)
+            return
+        pubs = self.get_publishers_info_by_topic(name)
+        best_effort = any(i.qos_profile.reliability == ReliabilityPolicy.BEST_EFFORT for i in pubs)
+        latched = bool(pubs) and all(i.qos_profile.durability == DurabilityPolicy.TRANSIENT_LOCAL
+                                     for i in pubs)
+        qos = QoSProfile(depth=5,
+                         reliability=ReliabilityPolicy.BEST_EFFORT if best_effort else ReliabilityPolicy.RELIABLE,
+                         durability=DurabilityPolicy.TRANSIENT_LOCAL if latched else DurabilityPolicy.VOLATILE)
+        st = {'name': name, 'type': types[0], 'cls': cls, 'arrivals': collections.deque(maxlen=1000),
+              'last': None, 'last_t': None, 'shown': None, 'preview': '',
+              'qos': ('best effort' if best_effort else 'reliable') + (', transient local' if latched else '')}
+
+        def cb(raw, st=st):
+            now = time.monotonic()
+            st['arrivals'].append((now, len(raw)))
+            st['last'], st['last_t'] = raw, now
+        st['sub'] = self.create_subscription(cls, name, cb, qos, raw=True)
+        with self._inspect_lock:
+            self._inspect[sid] = st
+        self._inspect_cb(only=sid)
+
+    def stop_inspect(self, sid) -> None:
+        with self._inspect_lock:
+            st = self._inspect.pop(sid, None)
+        if st is not None:
+            self.destroy_subscription(st['sub'])
+
+    def _inspect_cb(self, only=None) -> None:
+        """Rate, bandwidth and latest message of each inspected topic, to its browser."""
+        with self._inspect_lock:
+            items = [(sid, st) for sid, st in self._inspect.items() if only is None or sid == only]
+        now = time.monotonic()
+        for sid, st in items:
+            recent = [(t, n) for t, n in list(st['arrivals']) if now - t <= _INSPECT_WINDOW]
+            span = recent[-1][0] - recent[0][0] if len(recent) > 1 else 0.0
+            hz = (len(recent) - 1) / span if span > 0 else 0.0
+            bw = sum(n for _, n in recent) / _INSPECT_WINDOW
+            if st['last'] is not None and st['last'] is not st['shown']:
+                st['shown'] = st['last']
+                try:
+                    text = yaml.safe_dump(_preview(deserialize_message(st['last'], st['cls'])),
+                                          sort_keys=False, default_flow_style=None, width=110,
+                                          allow_unicode=True)
+                except Exception as exc:
+                    text = f'(could not decode: {exc})'
+                if len(text) > _INSPECT_MAX_CHARS:
+                    text = text[:_INSPECT_MAX_CHARS] + f'\n... ({len(text) - _INSPECT_MAX_CHARS} more characters)'
+                st['preview'] = text
+            sio_sys.emit('topic_info', {
+                'name': st['name'], 'type': st['type'], 'qos': st['qos'],
+                'hz': round(hz, 2), 'bw': round(bw), 'count': len(st['arrivals']),
+                'size': st['arrivals'][-1][1] if st['arrivals'] else None,
+                'age': round(now - st['last_t'], 1) if st['last_t'] else None,
+                'pubs': self._endpoint_nodes(self.get_publishers_info_by_topic(st['name'])),
+                'subs': self._endpoint_nodes(self.get_subscriptions_info_by_topic(st['name'])),
+                'preview': st['preview']}, to=sid)
+
+    # =========================================================================
     # Health: feed rates, node states, remote parameters
     # =========================================================================
 
@@ -1052,7 +1182,7 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
             feeds[name] = {'hz': round(recent / _HEALTH_WINDOW, 1),
                            'age': round(now - times[-1], 1) if times else None}
         payload = {'feeds': feeds, 'nodes': dict(self._node_states), 'bag': self._bag_status()}
-        for server in (socketio, sio_cams, sio_teleop, sio_map):
+        for server in (socketio, sio_cams, sio_teleop, sio_map, sio_sys):
             server.emit('health', payload)
 
         self._health_ticks += 1
@@ -1285,12 +1415,51 @@ def cameras():
 
 
 # =========================================================================
-# Flask routing — map3d (5004): LiDAR 3D + local DEM
+# Flask routing — map3d (5005): LiDAR 3D + local DEM
 # =========================================================================
 
 @app_map.route('/')
 def map3d():
     return render_template('map3d.html')
+
+
+# =========================================================================
+# Flask routing — system (5006): feeds, lifecycle nodes, ROS 2 topics
+# =========================================================================
+
+@app_sys.route('/')
+def system():
+    return render_template('system.html')
+
+
+@sio_sys.on('restart_node')
+def handle_restart_node(json_data):
+    if ros_node is not None:
+        ros_node.restart_node(str(json_data.get('name', '')))
+
+
+@sio_sys.on('topics_list')
+def handle_topics_list(json_data=None):
+    if ros_node is not None:
+        ros_node.list_topics(request.sid)
+
+
+@sio_sys.on('topic_inspect')
+def handle_topic_inspect(json_data):
+    if ros_node is not None:
+        ros_node.inspect_topic(request.sid, str(json_data.get('name', '')))
+
+
+@sio_sys.on('topic_inspect_stop')
+def handle_topic_inspect_stop(json_data=None):
+    if ros_node is not None:
+        ros_node.stop_inspect(request.sid)
+
+
+@sio_sys.on('disconnect')
+def handle_sys_disconnect(*args):
+    if ros_node is not None:
+        ros_node.stop_inspect(request.sid)
 
 
 # =========================================================================
@@ -1340,12 +1509,6 @@ def handle_restart_cameras(json_data=None):
         ros_node.restart_cameras()
 
 
-@socketio.on('restart_node')
-def handle_restart_node(json_data):
-    if ros_node is not None:
-        ros_node.restart_node(str(json_data.get('name', '')))
-
-
 @socketio.on('bag')
 def handle_bag(json_data):
     if ros_node is None:
@@ -1386,7 +1549,7 @@ def main(args=None):
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
 
-    # Hub (5000), teleop (5002), cameras (5003) and map3d (5005) run in background
+    # Hub (5000), teleop (5002), cameras (5003), map3d (5005) and system (5006) run in background
     # threads; the overview (5001) holds the main thread. All share ros_node via
     # the globals.
     #
@@ -1407,9 +1570,11 @@ def main(args=None):
                      daemon=True).start()
     threading.Thread(target=_serve, args=(sio_map, app_map, 5005),
                      daemon=True).start()
+    threading.Thread(target=_serve, args=(sio_sys, app_sys, 5006),
+                     daemon=True).start()
     ros_node.get_logger().info(
         "Mission control up: hub :5000  overview :5001  teleop :5002  "
-        "cameras :5003  map3d :5005")
+        "cameras :5003  map3d :5005  system :5006")
 
     try:
         socketio.run(app, host='0.0.0.0', port=5001, allow_unsafe_werkzeug=True)

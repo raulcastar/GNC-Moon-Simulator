@@ -222,25 +222,6 @@
   .hbtn.on { color: var(--accent); border-color: var(--accent); }
   #btn-rec.rec { color: var(--red); border-color: var(--red); animation: blink 1.2s infinite; }
   @keyframes blink { 50% { opacity: .55; } }
-  #sys-pop {
-    display: none; position: fixed; top: 54px; right: 10px; z-index: 50; width: 430px;
-    max-height: calc(100vh - 70px); overflow-y: auto;
-    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
-    box-shadow: 0 8px 28px rgba(0,0,0,.5); padding: 10px 12px; font-size: 11px;
-  }
-  #sys-pop.open { display: block; }
-  #sys-pop h4 { color: var(--dim); font-weight: normal; font-size: 9px; letter-spacing: 2px;
-                margin: 4px 0 6px; }
-  #sys-pop table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
-  #sys-pop td { padding: 3px 4px; border-bottom: 1px dashed #131e2c; }
-  #sys-pop td.num { text-align: right; color: var(--text); }
-  #sys-pop .st { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
-  .st.ok { background: var(--accent); } .st.stale { background: var(--amber); }
-  .st.dead { background: #5a2230; } .st.none { background: #333; }
-  #sys-pop button { background: none; border: 1px solid var(--line); color: var(--dim);
-                    font-family: var(--mono); font-size: 9px; padding: 1px 6px; cursor: pointer; }
-  #sys-pop button:hover { color: var(--amber); border-color: var(--amber); }
-
   /* ============ MISSION + ATTITUDE ============ */
   .badge { font-size: 10px; letter-spacing: 1px; padding: 1px 7px; border-radius: 3px;
            border: 1px solid currentColor; }
@@ -286,15 +267,8 @@
   </div>
   <button class="hbtn" id="btn-snap" title="Download the latest frames, local DEM, lidar and state as a zip">⤓ SNAPSHOT</button>
   <button class="hbtn" id="btn-rec" title="Record a rosbag (mcap) into mission_control_dashboard/bags">● REC</button>
-  <button class="hbtn" id="btn-sys" title="Feed rates and node states">SYSTEM ▾</button>
+  <button class="hbtn" id="btn-sys" title="Open the system window: feed rates, lifecycle nodes, ROS 2 topics">SYSTEM ↗</button>
 </header>
-
-<div id="sys-pop">
-  <h4>FEEDS — RATE · AGE</h4>
-  <table id="sys-feeds"></table>
-  <h4>LIFECYCLE NODES</h4>
-  <table id="sys-nodes"></table>
-</div>
 
 <div id="feed-pop"></div>
 
@@ -532,18 +506,6 @@ socket.on('health', h => {
   light('li-odom', ['odom']); light('li-cam', ['cam_central', 'cam_left', 'cam_right']);
   light('li-depth', ['depth']); light('li-lidar', ['lidar']);
 
-  $('sys-feeds').innerHTML = Object.keys(FEED_NAMES).map(k => {
-    const d = f[k];
-    return `<tr><td><span class="st ${ageClass(d ? d.age : null)}"></span>${FEED_NAMES[k]}</td>` +
-           `<td class="num">${d ? d.hz.toFixed(1) + ' Hz' : '—'}</td>` +
-           `<td class="num">${d ? d.age.toFixed(1) + ' s' : 'no data'}</td></tr>`;
-  }).join('');
-  const nodes = h.nodes || {};
-  $('sys-nodes').innerHTML = Object.keys(nodes).map(n => {
-    const st = nodes[n], cls = st === 'active' ? 'ok' : st === 'inactive' || st === 'unknown' ? 'stale' : 'dead';
-    return `<tr><td><span class="st ${cls}"></span>${n.replace('lc_component_', '')}</td>` +
-           `<td class="num">${st}</td><td class="num"><button data-node="${n}">RESTART</button></td></tr>`;
-  }).join('');
 
   bag = h.bag || bag;
   const rec = $('btn-rec');
@@ -552,22 +514,8 @@ socket.on('health', h => {
     ? `■ STOP ${String(Math.floor(bag.elapsed / 60)).padStart(2, '0')}:${String(bag.elapsed % 60).padStart(2, '0')}`
     : '● REC';
 });
-$('sys-nodes').addEventListener('click', e => {
-  const n = e.target.dataset.node;
-  if (!n) return;
-  if (!confirm(`Restart ${n}? Its lifecycle is cycled (deactivate → activate).`)) return;
-  socket.emit('restart_node', { name: n });
-  addLocal('INFO', `Restart requested: ${n}.`);
-});
-$('btn-sys').onclick = () => {
-  const open = $('sys-pop').classList.toggle('open');
-  $('btn-sys').classList.toggle('on', open);
-};
-document.addEventListener('click', e => {
-  if (!e.target.closest('#sys-pop') && e.target.id !== 'btn-sys') {
-    $('sys-pop').classList.remove('open'); $('btn-sys').classList.remove('on');
-  }
-});
+/* SYSTEM: feed rates, lifecycle nodes and the ROS 2 topics live in their own window (5006). */
+$('btn-sys').onclick = () => window.open(`http://${window.location.hostname || 'localhost'}:5006/`, 'gnc_system');
 $('btn-snap').onclick = () => { window.location.href = '/snapshot.zip'; addLocal('INFO', 'Snapshot downloaded.'); };
 $('btn-rec').onclick = () => socket.emit('bag', { action: bag.recording ? 'stop' : 'start' });
 

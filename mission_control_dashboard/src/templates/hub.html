@@ -71,7 +71,7 @@
       <h2>OVERVIEW</h2>
       <p>Full GNC mission control: navcam feeds, stereo depth &amp; object masks,
          live LiDAR, the elevation map with click-to-goal, mission status, the 3D
-         DEM, system health, snapshots / rosbag and the ROS console.</p>
+         DEM, snapshots / rosbag and the ROS console.</p>
       <div class="port">PORT <b>:5001</b></div>
     </a>
 
@@ -101,6 +101,15 @@
          returns overlaid on the DEM.</p>
       <div class="port">PORT <b>:5005</b></div>
     </a>
+
+    <a class="card" id="link-system">
+      <div class="ico">🛠️</div>
+      <h2>SYSTEM</h2>
+      <p>Health of the whole stack: rate and age of every feed, the lifecycle
+         nodes with a restart button each, recording status, and a ROS 2 topic
+         browser (types, publishers / subscribers, live rate, latest message).</p>
+      <div class="port">PORT <b>:5006</b></div>
+    </a>
   </div>
 
   <footer>
@@ -116,6 +125,7 @@
   document.getElementById('link-teleop').href   = `http://${host}:5002/`;
   document.getElementById('link-cameras').href  = `http://${host}:5003/`;
   document.getElementById('link-map').href      = `http://${host}:5005/`;
+  document.getElementById('link-system').href   = `http://${host}:5006/`;
 
   const clk = document.getElementById('clock');
   setInterval(() => { clk.textContent = new Date().toISOString().substr(11, 8); }, 1000);
