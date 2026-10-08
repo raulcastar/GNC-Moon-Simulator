@@ -1,4 +1,10 @@
 lc_component_lidar:
   ros__parameters:
-    lidar_ip: "0.0.0.0"
-    lidar_port: 2368
+    # UnrealLidarCam Unreal plugin (unreal/UnrealLidarCam): a ray-traced lidar
+    # with a configurable horizontal / vertical aperture, streamed over TCP.
+    # Each scan is published as an organized PointCloud2 (rows = channels) on
+    # `topic`, in the sensor frame `frame_id` (x forward, y left, z up).
+    bind_ip: "0.0.0.0"
+    port: 3007                  # The component's Server Port in Unreal
+    topic: "lidar/points"
+    frame_id: "lidar"

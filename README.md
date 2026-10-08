@@ -2,8 +2,8 @@
 
 ROS 2 (Jazzy) guidance, navigation and control stack for a lunar rover simulated
 in Unreal Engine. Sensor data crosses from Unreal into ROS over dedicated Unreal
-plugins (StereoCamStreamer for the cameras, MetaLidar for the lidar, a TCP link
-for the rover); every component runs in its own container and talks over Zenoh.
+plugins (StereoCamStreamer for the cameras, UnrealLidarCam for the lidar, a TCP
+link for the rover); every component runs in its own container and talks over Zenoh.
 
 ## Quick start
 
@@ -52,7 +52,7 @@ docker compose exec component_local_mapping \
 | Package | Role |
 |---|---|
 | `component_stereo_depth` | Receives the three navcams from the StereoCamStreamer plugin and computes stereo depth. |
-| `component_lidar` | Velodyne point cloud from Unreal. |
+| `component_lidar` | Lidar point cloud from the UnrealLidarCam plugin (`lidar/points`). |
 | `component_local_mapping` | Builds a local DEM and occupancy grid from the central navcam's depth. |
 | `component_path_planner` | Global path over the elevation grid. |
 | `component_rover_leo_raph` | Rover base: `/cmd_vel` in, `/odom` out. |
@@ -66,7 +66,7 @@ Three independent links, and they fail differently:
 | Link | Transport | Carries |
 |---|---|---|
 | StereoCamStreamer | TCP 3004 | navcam frames + object mask (Unreal → ROS) |
-| MetaLidar | UDP | Velodyne point cloud (Unreal → ROS) |
+| UnrealLidarCam | TCP 3007 | lidar scans, configurable aperture (Unreal → ROS) |
 | Rover plugin | TCP 3003 | wheel commands out, odometry in |
 
 The containers run `network_mode: host`, so they sit on WSL2's network stack

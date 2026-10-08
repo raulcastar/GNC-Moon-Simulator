@@ -1,0 +1,19 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "UnrealLidarCam",
+	"Description": "Ray-traced lidar with a configurable horizontal and vertical aperture, streamed to ROS over TCP (component_lidar). Attaches to any camera or scene component.",
+	"Category": "Sensors",
+	"CreatedBy": "GNC Moon Simulator",
+	"CanContainContent": false,
+	"IsBetaVersion": true,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "UnrealLidarCam",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

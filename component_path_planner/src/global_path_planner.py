@@ -10,6 +10,10 @@ import math
 import bisect
 import cv2
 
+# Gradient-descent steps without a drop in T before getPathGDM gives up on the
+# continuous path and descends cell by cell (getPathDiscrete).
+GDM_STALL_STEPS = 40
+
 class Global_Path_Planner:
     def __init__(self):
         self.rad2deg = 180/np.pi
@@ -151,8 +155,22 @@ class Global_Path_Planner:
         gamma = np.vstack((gamma,initWaypoint.T))
 
         nearN = [0,0]
-        
+
+        # Stall guard: in a one-cell-wide passage the continuous steps cut into
+        # impassable cells and the recovery below can oscillate there for
+        # thousands of steps. If T has not dropped for GDM_STALL_STEPS steps,
+        # descend cell by cell instead (always reaches the goal).
+        bestT, sinceBest = np.inf, 0
+
         for k in range(0,round(15000/tau)):
+            cx, cy = int(round(gamma[-1,0])), int(round(gamma[-1,1]))
+            if 0 <= cy < totalCostMap.shape[0] and 0 <= cx < totalCostMap.shape[1] \
+                    and totalCostMap[cy,cx] < bestT:
+                bestT, sinceBest = totalCostMap[cy,cx], 0
+            else:
+                sinceBest += 1
+                if sinceBest > GDM_STALL_STEPS:
+                    return self.getPathDiscrete(totalCostMap, initWaypoint, endWaypoint)
             G1,G2 = self.computeGradient(totalCostMap,gamma[-1,:])
             dx = self.interpolatePoint(gamma[-1,:],G1)
             dy = self.interpolatePoint(gamma[-1,:],G2)
@@ -214,9 +232,39 @@ class Global_Path_Planner:
             if np.linalg.norm(gamma[-1,:]-endWaypoint)<1.5:
                 break
         
+        else:
+            # Ran out of steps without reaching the goal.
+            return self.getPathDiscrete(totalCostMap, initWaypoint, endWaypoint)
+
         gamma = np.vstack((gamma,np.array(endWaypoint).T))
 
-        return gamma   
+        return gamma
+
+
+    # =============================================================================
+    #    Fallback path: steepest descent of T over the 4 neighbours, cell by cell.
+    #    T was computed 4-connected from the goal, so every reached cell has a
+    #    lower neighbour and the walk ends at the goal without crossing obstacles.
+    # =============================================================================
+    def getPathDiscrete(self, totalCostMap, initWaypoint, endWaypoint):
+        rows, cols = totalCostMap.shape
+        x, y = int(round(initWaypoint[0])), int(round(initWaypoint[1]))
+        gx, gy = int(round(endWaypoint[0])), int(round(endWaypoint[1]))
+        path = [[x, y]]
+        for _ in range(rows * cols):
+            if (x, y) == (gx, gy):
+                return np.array(path, dtype=float)
+            best = None
+            for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < cols and 0 <= ny < rows and totalCostMap[ny, nx] < totalCostMap[y, x] \
+                        and (best is None or totalCostMap[ny, nx] < totalCostMap[best[1], best[0]]):
+                    best = (nx, ny)
+            if best is None:
+                return None
+            x, y = best
+            path.append([x, y])
+        return None
 
 
     # =============================================================================

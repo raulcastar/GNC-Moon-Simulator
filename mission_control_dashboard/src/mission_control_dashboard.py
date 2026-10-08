@@ -239,7 +239,7 @@ _MIN_CAMERA_DEPTH = 0.3        # m; samples closer than this are not drawn
 _BAG_TOPICS = [
     '/odom', '/imu/data', '/cmd_vel', '/goal_pose', '/cancel_goal',
     '/global_path', '/driven_trajectory', '/mission_status/state',
-    '/mission_status/goal_reached', '/velodyne_points',
+    '/mission_status/goal_reached', '/lidar/points',
     '/local_mapping/elevation_map_raw', '/local_mapping/elevation_grid',
     '/navcam/central/image_color/compressed', '/navcam/central/image_depth',
     '/navcam/central/depth_ground_truth',
@@ -333,11 +333,13 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         # Relief (m) shown as an obstacle in the local DEM view. Display only.
         self.declare_parameter('dem_obstacle_height', 0.15)
         self._dem_res = 0.05        # local DEM cell size, updated from the grid
-        # Lidar mounting: yaw of the sensor's X axis from the rover's forward
-        # axis (BP_VLP16 inherits the body mesh yaw, 90 deg from forward), and
-        # its height above the ground. Measured in Unreal.
-        self.declare_parameter('lidar_yaw_deg', 90.0)
-        self.declare_parameter('lidar_height_m', 0.24)
+        # Lidar mounting (UnrealLidarCam, lidar/points in the sensor frame): yaw
+        # and pitch of the sensor's X axis from the rover's forward axis (Unreal
+        # convention: negative pitch looks down), and its height above the
+        # ground. Defaults: following the central navcam (pitched 20 deg down).
+        self.declare_parameter('lidar_yaw_deg', 0.0)
+        self.declare_parameter('lidar_pitch_deg', -20.0)
+        self.declare_parameter('lidar_height_m', 0.55)  # Navcam_Center above the ground (ground-plane fit while driving)
         self.declare_parameter('bag_directory', '/opt/ros/jazzy/src/mission_control_dashboard/bags')
         self.map_resolution = self.get_parameter('global_res').value
 
@@ -366,7 +368,7 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
             sub(Path, 'global_path', self.global_path_callback, 10),
             sub(Path, 'driven_trajectory', self.trajectory_callback, 10),
             sub(Log, '/rosout', self.rosout_callback, 50),
-            sub(PointCloud2, 'velodyne_points', self.lidar_callback,
+            sub(PointCloud2, 'lidar/points', self.lidar_callback,
                 qos_profile_sensor_data),
             sub(OccupancyGrid, 'local_mapping/elevation_grid',
                 self.local_grid_callback, 10),
@@ -524,11 +526,14 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         xyz = _cloud_xyz(msg, _MAX_LIDAR_POINTS * 4)
         if len(xyz) == 0:
             return
-        # Sensor frame -> rover frame (X forward, Y left): rotate by the mount yaw.
+        # Sensor frame -> rover frame (X forward, Y left, Z up): the mount's
+        # pitch (about Y; a sensor looking down has its X below the horizon),
+        # then its yaw (about Z).
         a = math.radians(self.get_parameter('lidar_yaw_deg').value)
-        rover = xyz @ np.array([[math.cos(a), -math.sin(a), 0],
-                                [math.sin(a), math.cos(a), 0],
-                                [0, 0, 1]], dtype=np.float32).T
+        p = -math.radians(self.get_parameter('lidar_pitch_deg').value)
+        yaw = np.array([[math.cos(a), -math.sin(a), 0], [math.sin(a), math.cos(a), 0], [0, 0, 1]])
+        pitch = np.array([[math.cos(p), 0, math.sin(p)], [0, 1, 0], [-math.sin(p), 0, math.cos(p)]])
+        rover = xyz @ (yaw @ pitch).astype(np.float32).T
         self._last_cloud = rover
         shown = rover[::max(1, len(rover) // _MAX_LIDAR_POINTS)][:_MAX_LIDAR_POINTS]
         emit_map('lidar', {
