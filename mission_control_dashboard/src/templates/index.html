@@ -72,11 +72,29 @@
   /* ============ CAMERA FEEDS ============ */
   /* every row needs an explicit track: an implicit (auto) row grows to the
      image's natural size and squeezes the others to nothing */
-  #cams { flex: 1; display: grid; grid-template-rows: 1.5fr 1fr 1fr 1fr; gap: 6px; min-height: 0; }
+  /* --cam-rows is set by layoutFeeds() from the rows that still show a feed */
+  #cams { flex: 1; display: grid; grid-template-rows: var(--cam-rows, 1.5fr 1fr 1fr 1fr); gap: 6px; min-height: 0; }
   /* grid-template-rows pins the single row to the track height from #cams;
      without it the row is implicit-auto and collapses to the image's
      intrinsic height, so feeds overflow and overlap the row below. */
   .cam-row { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr); gap: 6px; min-height: 0; }
+  /* feeds switched off in VIEWS, and rows left with none */
+  #cams .feed.off, #cams .cam-row.empty { display: none !important; }
+  #feed-pop {
+    display: none; position: fixed; z-index: 50; width: 300px; padding: 8px 10px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+    box-shadow: 0 8px 28px rgba(0,0,0,.5); font-size: 10px;
+  }
+  #feed-pop.open { display: flex; flex-wrap: wrap; gap: 5px; }
+  #feed-pop h4 { flex-basis: 100%; margin: 0 0 3px; color: var(--dim); font-weight: normal;
+                 font-size: 9px; letter-spacing: 2px; }
+  #feed-pop .chip {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 1px; cursor: pointer; user-select: none;
+    color: var(--dim); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px;
+  }
+  #feed-pop .chip:hover { border-color: var(--cyan); }
+  #feed-pop .chip.on { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: bold; }
+  #feed-pop .all { margin-left: auto; color: var(--cyan); cursor: pointer; letter-spacing: 1px; }
   .feed { position: relative; background: #000; min-height: 0; overflow: hidden; }
   .feed img {
     width: 100%; height: 100%; object-fit: contain; display: block;
@@ -171,9 +189,10 @@
      views also hide the telemetry panel. */
   main[data-view="cams"]  { grid-template-columns: 1fr; }
   main[data-view="cams"]  #col-map, main[data-view="cams"]  #col-right { display: none; }
-  /* full width: the nine feeds as a 3 x 3 grid */
-  main[data-view="cams"]  #cams { grid-template-columns: repeat(3, minmax(0, 1fr));
-                                  grid-template-rows: repeat(3, minmax(0, 1fr)); }
+  /* full width: the selected feeds in a grid (3 x 3 for all nine; layoutFeeds()
+     picks the columns that give the largest tiles) */
+  main[data-view="cams"]  #cams { grid-template-columns: repeat(var(--cam-cols, 3), minmax(0, 1fr));
+                                  grid-template-rows: repeat(var(--cam-grid-rows, 3), minmax(0, 1fr)); }
   main[data-view="cams"]  .cam-row { display: contents; }
   /* click a feed to enlarge it to the whole tab (as on the camera wall); click
      again or press Esc to return */
@@ -277,12 +296,14 @@
   <table id="sys-nodes"></table>
 </div>
 
+<div id="feed-pop"></div>
+
 <main data-view="all">
   <!-- ============ LEFT: CAMERAS ============ -->
   <div class="col" id="col-cams">
     <div class="panel" style="flex:1">
       <div class="panel-title"><span class="tag">▣</span>NAVCAM ARRAY
-        <span class="age"><button id="btn-camrst" style="background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);font-size:9px;padding:1px 7px;cursor:pointer">⟳ RESTART NODE</button></span>
+        <span class="age"><button id="btn-feeds" title="Choose which camera views are shown" style="background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);font-size:9px;padding:1px 7px;cursor:pointer;margin-right:4px">VIEWS ▾</button><button id="btn-camrst"style="background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);font-size:9px;padding:1px 7px;cursor:pointer">⟳ RESTART NODE</button></span>
       </div>
       <div id="cams">
         <div class="cam-row" style="grid-template-columns:1fr">
@@ -975,9 +996,82 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && camsEl.dataset.focus) focusFeed(null);
 });
 
+/* VIEWS: choose which feeds are shown (remembered across refreshes). Rows left
+   empty collapse in the overview column; the CAMERAS tab regrids the rest. */
+const feedEls = [...camsEl.querySelectorAll('.feed')];
+let feedSel = {};
+try { feedSel = JSON.parse(localStorage.getItem('mc_feeds') || '{}'); } catch (e) { feedSel = {}; }
+feedEls.forEach(f => { if (!(f.id in feedSel)) feedSel[f.id] = true; });
+if (!feedEls.some(f => feedSel[f.id])) feedEls.forEach(f => feedSel[f.id] = true);
+
+function layoutFeeds() {
+  feedEls.forEach(f => f.classList.toggle('off', !feedSel[f.id]));
+  if (camsEl.dataset.focus && !feedSel[camsEl.dataset.focus]) focusFeed(null);
+  const rows = [];
+  camsEl.querySelectorAll('.cam-row').forEach((row, i) => {
+    const n = [...row.querySelectorAll('.feed')].filter(f => feedSel[f.id]).length;
+    row.classList.toggle('empty', n === 0);
+    if (n) { row.style.gridTemplateColumns = `repeat(${n}, minmax(0, 1fr))`;
+             rows.push(i === 0 ? '1.5fr' : '1fr'); }        /* the central navcam row is taller */
+  });
+  camsEl.style.setProperty('--cam-rows', rows.join(' '));
+  /* CAMERAS tab: the column count giving the largest 4:3 tiles */
+  const n = feedEls.filter(f => feedSel[f.id]).length;
+  const W = camsEl.clientWidth || 1200, H = camsEl.clientHeight || 700;
+  let best = { s: 0, cols: 1 };
+  for (let cols = 1; cols <= n; cols++) {
+    const r = Math.ceil(n / cols);
+    const s = Math.min((W - 6 * (cols - 1)) / cols, ((H - 6 * (r - 1)) / r) * 4 / 3);
+    if (s > best.s) best = { s, cols };
+  }
+  camsEl.style.setProperty('--cam-cols', best.cols);
+  camsEl.style.setProperty('--cam-grid-rows', Math.ceil(n / best.cols));
+}
+
+const feedPop = $('feed-pop');
+feedPop.addEventListener('click', e => e.stopPropagation());   /* rebuilt chips are detached */
+function buildFeedPop() {
+  feedPop.innerHTML = '<h4>CAMERA VIEWS <span class="all" id="feeds-all">ALL</span></h4>';
+  feedEls.forEach(f => {
+    const chip = document.createElement('span');
+    chip.className = 'chip' + (feedSel[f.id] ? ' on' : '');
+    chip.textContent = f.title;
+    chip.onclick = () => {
+      /* keep at least one feed */
+      if (feedSel[f.id] && feedEls.filter(g => feedSel[g.id]).length === 1) return;
+      feedSel[f.id] = !feedSel[f.id];
+      chip.classList.toggle('on', feedSel[f.id]);
+      saveFeeds();
+    };
+    feedPop.appendChild(chip);
+  });
+  $('feeds-all').onclick = () => { feedEls.forEach(f => feedSel[f.id] = true); buildFeedPop(); saveFeeds(); };
+}
+function saveFeeds() {
+  try { localStorage.setItem('mc_feeds', JSON.stringify(feedSel)); } catch (e) {}
+  layoutFeeds();
+  requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));   /* legends follow */
+}
+$('btn-feeds').onclick = e => {
+  e.stopPropagation();
+  if (feedPop.classList.toggle('open')) {
+    buildFeedPop();
+    const r = $('btn-feeds').getBoundingClientRect();
+    feedPop.style.top = (r.bottom + 4) + 'px';
+    feedPop.style.left = Math.max(6, Math.min(r.left, window.innerWidth - 310)) + 'px';
+  }
+};
+document.addEventListener('click', e => {
+  if (feedPop.classList.contains('open') && !feedPop.contains(e.target) && e.target !== $('btn-feeds'))
+    feedPop.classList.remove('open');
+});
+window.addEventListener('resize', layoutFeeds);
+layoutFeeds();
+
 function setView(v) {
   if (v !== 'cams' && camsEl.dataset.focus) focusFeed(null);
   mainEl.dataset.view = v;
+  layoutFeeds();                                /* camera grid for the new box */
   document.querySelectorAll('.viewtabs button')
           .forEach(b => b.classList.toggle('on', b.dataset.view === v));
   try { localStorage.setItem('mc_view', v); } catch (e) {}
