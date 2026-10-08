@@ -51,7 +51,7 @@ docker compose exec component_local_mapping \
 
 | Package | Role |
 |---|---|
-| `component_stereo_depth` | Receives the three navcams from the UnrealStereoCam plugin and computes stereo depth. |
+| `component_stereo_depth` | Receives the three navcams from the UnrealStereoCam plugin and computes stereo depth; also republishes extra mono cameras (the rear camera, `rear_cam/image_color`). |
 | `component_lidar` | Lidar point cloud from the UnrealLidarCam plugin (`lidar/points`). |
 | `component_local_mapping` | Builds a local DEM and occupancy grid from the central navcam's depth. |
 | `component_path_planner` | Global path over the elevation grid. |
@@ -65,7 +65,7 @@ Three independent links, and they fail differently:
 
 | Link | Transport | Carries |
 |---|---|---|
-| UnrealStereoCam | TCP 3004 | navcam frames + object mask (Unreal → ROS) |
+| UnrealStereoCam | TCP 3004 | navcam frames + object mask, rear camera (Unreal → ROS) |
 | UnrealLidarCam | TCP 3007 | lidar scans, configurable aperture (Unreal → ROS) |
 | Rover plugin | TCP 3003 | wheel commands out, odometry in |
 

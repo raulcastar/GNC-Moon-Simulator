@@ -77,7 +77,10 @@
   .panel-title .tag { color: var(--amber); }
 
   /* ---- cameras ---- */
-  #cam-top { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; min-height: 0; }
+  /* explicit minmax(0, 1fr) rows: an implicit (auto) row grows to the image's
+     natural size, so live frames would stretch the strip and squeeze the top */
+  #cam-top { flex: 1; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr);
+             gap: 6px; min-height: 0; }
   .feed { position: relative; background: #000; min-height: 0; overflow: hidden; flex: 1; }
   .feed img { width: 100%; height: 100%; object-fit: contain; display: block; }
   .feed .nosig {
@@ -85,9 +88,30 @@
     color: #24344a; font-size: 12px; letter-spacing: 4px;
     background: repeating-linear-gradient(0deg, #10151c 0 2px, #161d28 2px 4px);
   }
-  #cam-side { flex: 0 0 150px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  #cam-side { flex: 0 0 150px; display: grid; grid-template-columns: 1fr 1fr 1fr;
+              grid-template-rows: minmax(0, 1fr); gap: 6px; min-height: 0; }
   #cam-side .panel { min-height: 0; }
   #cam-side .feed { flex: 1; }
+  /* VIEWS: panels switched off, and a strip left with none */
+  #cam-top .panel.off, #cam-side .panel.off, #cam-top.empty, #cam-side.empty { display: none; }
+  #cam-side.fill { flex: 1; }                 /* top row hidden: the strip takes the height */
+  /* Any selection other than "big top row + a strip of two or more": one grid
+     of equal tiles (columns chosen by layoutViews for the largest 4:3 views). */
+  #cam-col.grid { display: grid; gap: 6px; }
+  #cam-col.grid #cam-top, #cam-col.grid #cam-side { display: contents; }
+  #view-pop {
+    display: none; position: fixed; z-index: 50; width: 280px; padding: 8px 10px; gap: 5px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+    box-shadow: 0 8px 28px rgba(0,0,0,.5); font-size: 10px; flex-wrap: wrap;
+  }
+  #view-pop.open { display: flex; }
+  #view-pop h4 { flex-basis: 100%; margin: 0 0 3px; color: var(--dim); font-weight: normal;
+                 font-size: 9px; letter-spacing: 2px; }
+  #view-pop .chip { font-size: 10px; letter-spacing: 1px; cursor: pointer; user-select: none;
+                    color: var(--dim); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; }
+  #view-pop .chip:hover { border-color: var(--cyan); }
+  #view-pop .chip.on { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: bold; }
+  #view-pop .all { margin-left: auto; color: var(--cyan); cursor: pointer; letter-spacing: 1px; }
 
   /* ---- telemetry ---- */
   .tl { display: flex; justify-content: space-between; padding: 5px 12px;
@@ -147,6 +171,7 @@
     <a class="back" href="#" id="hublink">◀ HUB</a>
     <div class="brand">TELEOP<small>MANUAL DRIVE-BY-WIRE</small></div>
     <div class="spacer"></div>
+    <button class="hdr" id="views" title="Choose which cameras are shown">VIEWS ▾</button>
     <button class="hdr" id="lights">HEADLIGHTS</button>
     <button class="hdr estop" id="estop">■ E-STOP</button>
     <div class="conn"><span class="dot" id="cdot"></span><span id="cstate">OFFLINE</span></div>
@@ -154,33 +179,39 @@
 
   <main>
     <!-- LEFT: cameras -->
-    <div class="col">
+    <div class="col" id="cam-col">
       <div id="cam-top">
-        <div class="panel" id="cam-main">
+        <div class="panel" id="cam-main" data-view="FRONT">
           <div class="panel-title"><span class="tag">◈</span> FRONT CAMERA
             <span style="margin-left:auto" id="drive-state" class="warn">IDLE</span></div>
           <div class="feed"><div class="nosig" id="ns-central">NO SIGNAL</div>
             <img id="cam_central" style="display:none"></div>
         </div>
-        <div class="panel" id="cam-depth">
+        <div class="panel" id="cam-depth" data-view="STEREO DEPTH">
           <div class="panel-title"><span class="tag">◈</span> STEREO DEPTH</div>
           <div class="feed" id="feed-depth"><div class="nosig" id="ns-depth">—</div>
             <img id="depth" style="display:none"></div>
         </div>
       </div>
       <div id="cam-side">
-        <div class="panel">
+        <div class="panel" data-view="LEFT">
           <div class="panel-title">LEFT</div>
           <div class="feed"><div class="nosig" id="ns-left">—</div>
             <img id="cam_left" style="display:none"></div>
         </div>
-        <div class="panel">
+        <div class="panel" data-view="RIGHT">
           <div class="panel-title">RIGHT</div>
           <div class="feed"><div class="nosig" id="ns-right">—</div>
             <img id="cam_right" style="display:none"></div>
         </div>
+        <div class="panel" data-view="REAR">
+          <div class="panel-title">REAR</div>
+          <div class="feed"><div class="nosig" id="ns-rear">—</div>
+            <img id="cam_rear" style="display:none"></div>
+        </div>
       </div>
     </div>
+    <div id="view-pop"></div>
 
     <!-- RIGHT: telemetry + controls -->
     <div class="col">
@@ -250,6 +281,78 @@
   socket.on('connect',    () => { $('cdot').classList.add('ok'); $('cstate').textContent = 'ONLINE'; });
   socket.on('disconnect', () => { $('cdot').classList.remove('ok'); $('cstate').textContent = 'OFFLINE'; });
 
+  // ---- camera views: choose which panels are shown (remembered) ----
+  const camTop = $('cam-top'), camSide = $('cam-side');
+  const viewPanels = [...document.querySelectorAll('[data-view]')];
+  let viewSel = {};
+  try { viewSel = JSON.parse(localStorage.getItem('teleop_views') || '{}'); } catch (e) { viewSel = {}; }
+  viewPanels.forEach(p => { if (!(p.dataset.view in viewSel)) viewSel[p.dataset.view] = true; });
+  if (!viewPanels.some(p => viewSel[p.dataset.view])) viewPanels.forEach(p => viewSel[p.dataset.view] = true);
+
+  function layoutViews() {
+    viewPanels.forEach(p => p.classList.toggle('off', !viewSel[p.dataset.view]));
+    const shown = box => [...box.querySelectorAll('[data-view]')].filter(p => viewSel[p.dataset.view]).length;
+    const nt = shown(camTop), ns = shown(camSide);
+    const col = $('cam-col'), classic = nt >= 1 && ns >= 2;
+    col.classList.toggle('grid', !classic);
+    camTop.classList.toggle('empty', classic && nt === 0);
+    camSide.classList.toggle('empty', classic && ns === 0);
+    camSide.classList.toggle('fill', false);
+    if (classic) {
+      col.style.gridTemplateColumns = col.style.gridTemplateRows = '';
+      camTop.style.gridTemplateColumns = `repeat(${nt}, minmax(0, 1fr))`;
+      camSide.style.gridTemplateColumns = `repeat(${ns}, minmax(0, 1fr))`;
+    } else {
+      // Equal tiles: the column count giving the largest 4:3 image (22 px title).
+      const n = nt + ns, W = col.clientWidth || 1200, H = col.clientHeight || 700;
+      let best = { s: 0, cols: 1 };
+      for (let c = 1; c <= n; c++) {
+        const r = Math.ceil(n / c);
+        const s = Math.min((W - 6 * (c - 1)) / c, ((H - 6 * (r - 1)) / r - 22) * 4 / 3);
+        if (s > best.s) best = { s, cols: c };
+      }
+      col.style.gridTemplateColumns = `repeat(${best.cols}, minmax(0, 1fr))`;
+      col.style.gridTemplateRows = `repeat(${Math.ceil(n / best.cols)}, minmax(0, 1fr))`;
+    }
+    requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));   /* legends / overlay follow */
+  }
+  const viewPop = $('view-pop');
+  viewPop.addEventListener('click', e => e.stopPropagation());   /* rebuilt chips are detached */
+  function buildViewPop() {
+    viewPop.innerHTML = '<h4>CAMERA VIEWS <span class="all" id="views-all">ALL</span></h4>';
+    viewPanels.forEach(p => {
+      const name = p.dataset.view, chip = document.createElement('span');
+      chip.className = 'chip' + (viewSel[name] ? ' on' : '');
+      chip.textContent = name;
+      chip.onclick = () => {
+        if (viewSel[name] && viewPanels.filter(q => viewSel[q.dataset.view]).length === 1) return;  /* keep one */
+        viewSel[name] = !viewSel[name]; chip.classList.toggle('on', viewSel[name]); saveViews();
+      };
+      viewPop.appendChild(chip);
+    });
+    $('views-all').onclick = () => { viewPanels.forEach(p => viewSel[p.dataset.view] = true); buildViewPop(); saveViews(); };
+  }
+  function saveViews() {
+    try { localStorage.setItem('teleop_views', JSON.stringify(viewSel)); } catch (e) {}
+    layoutViews();
+  }
+  $('views').onclick = e => {
+    e.stopPropagation();
+    $('views').blur();                      /* keep Space / arrows for driving */
+    if (viewPop.classList.toggle('open')) {
+      buildViewPop();
+      const r = $('views').getBoundingClientRect();
+      viewPop.style.top = (r.bottom + 4) + 'px';
+      viewPop.style.left = Math.max(6, Math.min(r.left, window.innerWidth - 290)) + 'px';
+    }
+  };
+  document.addEventListener('click', () => viewPop.classList.remove('open'));
+  let viewResize = 0;      /* regrid on window resize (not on the resize events layoutViews sends) */
+  window.addEventListener('resize', e => { if (e.isTrusted) { cancelAnimationFrame(viewResize);
+                                                  viewResize = requestAnimationFrame(layoutViews); } });
+  window.addEventListener('keydown', e => { if (e.key === 'Escape') viewPop.classList.remove('open'); });
+  layoutViews();
+
   // ---- camera feeds ----
   function showFeed(id, nsId, b64) {
     const img = $(id); img.src = 'data:image/jpeg;base64,' + b64;
@@ -261,6 +364,7 @@
     if (m.id === 'cam_central') showFeed('cam_central', 'ns-central', m.image);
     else if (m.id === 'cam_left')  showFeed('cam_left',  'ns-left',  m.image);
     else if (m.id === 'cam_right') showFeed('cam_right', 'ns-right', m.image);
+    else if (m.id === 'cam_rear')  showFeed('cam_rear',  'ns-rear',  m.image);
     else if (m.id === 'depth')     showFeed('depth',     'ns-depth', m.image);
   });
 

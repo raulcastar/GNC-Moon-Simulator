@@ -189,7 +189,7 @@
      views also hide the telemetry panel. */
   main[data-view="cams"]  { grid-template-columns: 1fr; }
   main[data-view="cams"]  #col-map, main[data-view="cams"]  #col-right { display: none; }
-  /* full width: the selected feeds in a grid (3 x 3 for all nine; layoutFeeds()
+  /* full width: the selected feeds in a grid (layoutFeeds()
      picks the columns that give the largest tiles) */
   main[data-view="cams"]  #cams { grid-template-columns: repeat(var(--cam-cols, 3), minmax(0, 1fr));
                                   grid-template-rows: repeat(var(--cam-grid-rows, 3), minmax(0, 1fr)); }
@@ -312,6 +312,7 @@
         <div class="cam-row">
           <div class="feed" id="f-cam_left"><div class="nosig">LEFT — NO SIGNAL</div><img></div>
           <div class="feed" id="f-cam_right"><div class="nosig">RIGHT — NO SIGNAL</div><img></div>
+          <div class="feed" id="f-cam_rear"><div class="nosig">REAR — NO SIGNAL</div><img></div>
         </div>
         <div class="cam-row" style="grid-template-columns:1fr 1fr 1fr">
           <div class="feed" id="f-depth"><div class="nosig">STEREO DEPTH</div><img></div>
@@ -512,7 +513,7 @@ function updateMissionEta() {
 /* ---------------- feed health + node states ---------------- */
 const FEED_NAMES = {
   odom: 'odometry', imu: 'IMU', cam_central: 'navcam central', cam_left: 'navcam left',
-  cam_right: 'navcam right', depth: 'stereo depth', depth_gt: 'ground-truth depth', mask: 'segmentation',
+  cam_right: 'navcam right', cam_rear: 'rear camera', depth: 'stereo depth', depth_gt: 'ground-truth depth', mask: 'segmentation',
   shadow: 'shadow mask', events: 'event camera',
   spad: 'SPAD camera', lidar: 'lidar', local_dem: 'local DEM',
 };

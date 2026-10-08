@@ -29,6 +29,15 @@ lc_component_stereo_depth:
     # UnrealCV. Set < 0 to stream no mask (and set enable_object_mask: false).
     mask_camera_id:                          3
 
+    # Extra mono cameras streamed as they are, no stereo: "<cam_id>:<topic>[:<hfov_deg>]".
+    # Each needs a SceneCapture2D in Unreal streamed on that cam id — e.g. the
+    # rover's RearCam, streamed by its own UnrealStereoCam component
+    # (RearCam_Stream: Center = RearCam, CenterCamId = 10, nothing else). Published
+    # on <topic>/image_color (+ /compressed, + /camera_info when hfov_deg is set).
+    extra_cameras:
+      - "10:rear_cam:90"
+    extra_cameras_hz:                      5.0
+
     # Legend for the object mask, published as JSON on object_mask_mapping.
     # One "<id>:<name>" per class. The ids are consecutive and set by Terrain
     # Studio's mask material (MASK_IDS in unreal_ground_truth.py), each drawn in

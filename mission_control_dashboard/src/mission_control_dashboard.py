@@ -242,6 +242,7 @@ _BAG_TOPICS = [
     '/mission_status/goal_reached', '/lidar/points',
     '/local_mapping/elevation_map_raw', '/local_mapping/elevation_grid',
     '/navcam/central/image_color/compressed', '/navcam/central/image_depth',
+    '/rear_cam/image_color/compressed',
     '/navcam/central/depth_ground_truth',
     '/navcam/central/camera_info', '/navcam/central/object_mask',
     '/navcam/central/shadow_mask', '/navcam/central/shadow_label',
@@ -386,6 +387,11 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
             self._subs.append(sub(
                 CompressedImage, f'{ns}/{cam}/image_color/compressed',
                 self._make_jpeg_relay(f'cam_{cam}'), qos_profile_sensor_data))
+
+        # Rear camera (an extra mono camera of the stereo node).
+        self._subs.append(sub(
+            CompressedImage, 'rear_cam/image_color/compressed',
+            self._make_jpeg_relay('cam_rear'), qos_profile_sensor_data))
 
         # Already-colourised products only need JPEG encoding.
         self._subs.append(sub(

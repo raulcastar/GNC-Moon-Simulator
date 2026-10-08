@@ -85,6 +85,9 @@ class FrameStreamReceiver:
     is what lets left/right be paired as a rigid stereo view.
 
     Runs a background thread; survives Play/Stop cycles by re-accepting.
+    Several UnrealStereoCam components may connect at once (e.g. the navcam
+    rig and a separate rear camera), each on its own connection and reader
+    thread; their frames land in the same per-cam-id rings.
     """
 
     _HEADER = struct.Struct('<4sBBBBHHQI')
@@ -99,13 +102,13 @@ class FrameStreamReceiver:
         self._stop = threading.Event()
         self._server: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
-        self.connected = False
+        self.connections = 0                    # Unreal streamers connected now
 
     def start(self) -> None:
         self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server.bind(self._addr)
-        self._server.listen(1)
+        self._server.listen(4)
         self._server.settimeout(0.5)
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -163,6 +166,15 @@ class FrameStreamReceiver:
             return None
         return img
 
+    def latest(self, cam_id: int):
+        """(frame_id, image) of the newest frame for cam_id, or None."""
+        with self._lock:
+            frames = self._frames.get(cam_id)
+            if not frames:
+                return None
+            fid, img, _ = frames[-1]
+            return fid, img
+
     # ------------------------------------------------------------------ #
 
     def _loop(self) -> None:
@@ -173,16 +185,21 @@ class FrameStreamReceiver:
                 continue
             except OSError:
                 return
-            self._log.info(f'Frame stream: Unreal connected from {addr[0]}:{addr[1]}.')
-            self.connected = True
-            try:
-                self._read_stream(conn)
-            finally:
-                conn.close()
-                self.connected = False
-                if not self._stop.is_set():
-                    self._log.warn('Frame stream: Unreal disconnected; waiting for '
-                                   'the next Play.')
+            threading.Thread(target=self._serve, args=(conn, addr), daemon=True).start()
+
+    def _serve(self, conn: socket.socket, addr) -> None:
+        self._log.info(f'Frame stream: Unreal connected from {addr[0]}:{addr[1]}.')
+        with self._lock:
+            self.connections += 1
+        try:
+            self._read_stream(conn)
+        finally:
+            conn.close()
+            with self._lock:
+                self.connections -= 1
+            if not self._stop.is_set():
+                self._log.warn(f'Frame stream: Unreal disconnected ({addr[0]}:{addr[1]}); '
+                               'waiting for the next Play.')
 
     def _read_stream(self, conn: socket.socket) -> None:
         conn.settimeout(0.5)
@@ -244,6 +261,10 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self._cached_color_map_json: str = "{}"
 
         self._timer: Optional[Timer] = None
+        self._extra_timer: Optional[Timer] = None
+        # Extra mono cameras (extra_cameras): (cam_id, key, frame, intrinsics or None)
+        self._extras: list = []
+        self._extra_last_fid: Dict[int, int] = {}
         self.cv_bridge = CvBridge()
         self._is_active = False
 
@@ -282,6 +303,12 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                 # Stream cam id of the plugin's ground-truth depth capture on the
                 # central camera (UnrealStereoCam DepthCamId). < 0 disables it.
                 ('depth_ground_truth_camera_id', rclpy.Parameter.Type.INTEGER),
+                # Extra mono cameras streamed as they are (no stereo), e.g. a rear
+                # camera: "<cam_id>:<topic>[:<hfov_deg>]" each, published on
+                # <topic>/image_color (+ /compressed, + /camera_info when hfov_deg is
+                # given) at extra_cameras_hz, independently of the stereo pair.
+                ('extra_cameras',           rclpy.Parameter.Type.STRING_ARRAY),
+                ('extra_cameras_hz',        rclpy.Parameter.Type.DOUBLE),
                 # Legend for the object mask: "<stencil_id>:<name>" entries, one
                 # per tagged class, published as JSON on object_mask_mapping so a
                 # consumer knows what each stencil id in the scene means. The ids
@@ -877,6 +904,30 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
             self.get_logger().error(f'Stereo read/publish cycle failed: {exc}')
             return
 
+    def publish_extra_cameras(self) -> None:
+        """Newest frame of each extra mono camera, published once per new frame."""
+        if not self._is_active or self._stream is None:
+            return
+        stamp = self.get_clock().now().to_msg()
+        for cam_id, key, frame, hfov in self._extras:
+            try:
+                got = self._stream.latest(cam_id)
+                if got is None or got[0] == self._extra_last_fid.get(cam_id):
+                    continue
+                fid, rgb = got
+                if rgb.ndim != 3:                   # a depth (R32F) stream: not a colour camera
+                    continue
+                self._extra_last_fid[cam_id] = fid
+                self._publish_color(f'{key}_color', rgb, stamp, frame)
+                if hfov:
+                    h, w = rgb.shape[:2]
+                    fx = (w / 2.0) / math.tan(math.radians(hfov) / 2.0)
+                    self._pubs[f'{key}_info'].publish(self._camera_info(
+                        stamp, frame, False, intrinsics=(fx, w / 2.0, h / 2.0, w, h)))
+            except Exception as exc:
+                self.get_logger().error(f'Extra camera {cam_id} publish failed: {exc}',
+                                        throttle_duration_sec=10.0)
+
     # =========================================================================
     # Lifecycle transitions
     # =========================================================================
@@ -1002,6 +1053,25 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
             f'{" + shadow mask" if self.enable_shadow_mask else ""}). '
             f'Frames: {self.left_frame}, {self.right_frame}, {self.center_frame}.')
 
+        # Extra mono cameras: "<cam_id>:<topic>[:<hfov_deg>]".
+        self._extras, self._extra_last_fid = [], {}
+        for entry in self.get_parameter('extra_cameras').value or []:
+            parts = [x.strip() for x in str(entry).split(':')]
+            if len(parts) not in (2, 3) or not parts[0].lstrip('-').isdigit() or not parts[1]:
+                self.get_logger().warn(f'extra_cameras: ignored "{entry}" '
+                                       '(expected "<cam_id>:<topic>[:<hfov_deg>]").')
+                continue
+            cam_id, topic = int(parts[0]), parts[1].strip('/')
+            hfov = float(parts[2]) if len(parts) == 3 else None
+            key = f'extra_{cam_id}'
+            pub(f'{key}_color', RosImage, f'{topic}/image_color')
+            pub(f'{key}_color_compressed', CompressedImage, f'{topic}/image_color/compressed')
+            if hfov:
+                pub(f'{key}_info', CameraInfo, f'{topic}/camera_info')
+            self._extras.append((cam_id, key, _frame_id(topic), hfov))
+            self.get_logger().info(f'Extra camera: stream cam id {cam_id} -> {topic}/image_color'
+                                   f'{f" (hfov {hfov:g} deg)" if hfov else ""}.')
+
         self._stream = FrameStreamReceiver(
             self.get_parameter('stream_bind_ip').value,
             self.get_parameter('stream_port').value,
@@ -1009,6 +1079,9 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self._stream.start()
 
         self._timer = self.create_timer(1.0 / hz, self.read_stereo_pair)
+        if self._extras:
+            extra_hz = self.get_parameter('extra_cameras_hz').value or hz
+            self._extra_timer = self.create_timer(1.0 / extra_hz, self.publish_extra_cameras)
         return TransitionCallbackReturn.SUCCESS
 
     def on_activate(self, state: State) -> TransitionCallbackReturn:
@@ -1025,6 +1098,9 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         if self._timer:
             self.destroy_timer(self._timer)
             self._timer = None
+        if self._extra_timer:
+            self.destroy_timer(self._extra_timer)
+            self._extra_timer = None
 
         if self._stream:
             self._stream.stop()
