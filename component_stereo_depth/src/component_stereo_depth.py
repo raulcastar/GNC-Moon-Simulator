@@ -316,7 +316,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         The mask itself only carries the material's hashed colours, so this is
         the authoritative record of what each id in the Unreal scene means. It
         is published as JSON on object_mask_mapping, e.g.
-        {"10": "landscape", "20": "boulder", "30": "crater"}. Malformed entries
+        {"1": "sky", "5": "landscape", "9": "boulder"}. Malformed entries
         are skipped with a warning rather than aborting configuration.
         """
         labels: Dict[str, str] = {}
@@ -704,7 +704,8 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         feed (colours), the shadow label image (SHADOW_IDS) and the object
         mask. The lowest bit of green flags ground, the lowest bit of blue any
         surface without sunlight (ground, rocks, rover), the lowest bit of red
-        the rover's own shadow (with blue) or the sun's disc (without blue); all
+        the rover's own shadow (with blue) or the sky (without blue: sky, sun's
+        disc, glare); all
         are cleared from the object mask. The sun stays sky in the shadow feeds.
         """
         # One 4-bit code per pixel (ground | shadow | red flag | sky), then
@@ -724,7 +725,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         for code in range(16):
             ground, shadow, red, sky = (code >> bit & 1 for bit in range(4))
             rover, sun = red & shadow, red & (1 - shadow)
-            sky = sky | sun                 # The sun's disc is sky here
+            sky = sky | sun                 # Red without blue: the sky (sun included)
             colour = cls.SKY_RGB if sky else cls.OTHER_RGB
             colour = cls.SUNLIT_RGB if ground else colour
             colour = cls.SHADOW_RGB if shadow else colour

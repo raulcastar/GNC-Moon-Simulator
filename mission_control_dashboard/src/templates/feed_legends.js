@@ -14,27 +14,29 @@
 (function () {
   'use strict';
 
-  /* Object-mask colours per stencil id. PPM_GroundTruthMask derives them from a sin
-     hash of the id on the GPU, so they cannot be computed here; these were
-     measured from the mask (lowest bit of each channel cleared: they carry
-     the shadow mask). Re-measure if the material changes. */
+  /* Object-mask colour per id: the fixed palette of PPM_GroundTruthMask
+     (MASK_PALETTE in Terrain Studio's unreal_ground_truth.py; lowest bit of each
+     channel cleared, as it carries the shadow mask). Keep the two in step. */
   const MASK_COLOURS = {
-    '2':  [250, 194, 16],    /* rover      */
-    '10': [10, 96, 216],     /* landscape  */
-    '20': [238, 244, 242],   /* boulder    */
-    '21': [210, 62, 6],      /* small rock */
-    '30': [124, 50, 208],    /* crater     */
-    '31': [86, 52, 82],      /* crater rim */
-    '50': [28, 128, 162],    /* sun        */
-    '51': [230, 14, 118],    /* sun glare  */
-    '60': [64, 124, 162],    /* wheel track */
+    '0':  [0, 0, 0],         /* unlabeled   */
+    '1':  [36, 40, 96],      /* sky         */
+    '2':  [250, 194, 16],    /* rover       */
+    '3':  [28, 128, 162],    /* sun         */
+    '4':  [230, 14, 118],    /* sun glare   */
+    '5':  [10, 96, 216],     /* landscape   */
+    '6':  [124, 50, 208],    /* crater      */
+    '7':  [86, 52, 82],      /* crater rim  */
+    '8':  [64, 124, 162],    /* wheel track */
+    '9':  [238, 244, 242],   /* boulder     */
+    '10': [210, 62, 6],      /* small rock  */
   };
 
   /* Object-mask classes per group (by name, from object_mask_mapping). */
   const MASK_GROUPS = [
     ['ground', ['landscape', 'crater', 'crater_rim', 'wheel_track']],
     ['objects', ['rover', 'boulder', 'small_rock']],
-    ['sky', ['sun', 'sun_glare']],
+    ['sky', ['sky', 'sun', 'sun_glare']],
+    ['other', ['unlabeled']],
   ];
 
   /* Shadow feed: colour and shadow_label id per class, grouped. Must match

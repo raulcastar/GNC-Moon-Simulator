@@ -30,21 +30,23 @@ lc_component_stereo_depth:
     mask_camera_id:                          3
 
     # Legend for the object mask, published as JSON on object_mask_mapping.
-    # One "<stencil_id>:<name>" per tagged class; the ids MUST match the
-    # CustomDepth Stencil Value you set on the actors in Unreal (see the
-    # StereoCamStreamer README). This is what tells a consumer / you what each
-    # number in the scene is — the mask image itself only carries colours.
-    # Example (edit to your scene):
+    # One "<id>:<name>" per class. The ids are consecutive and set by Terrain
+    # Studio's mask material (MASK_IDS in unreal_ground_truth.py), each drawn in
+    # a fixed colour (MASK_PALETTE there, MASK_COLOURS in the dashboard). The
+    # rover, landscape and rocks carry their id as their CustomDepth Stencil
+    # Value in Unreal (see the StereoCamStreamer README).
     mask_labels:
+      - "0:unlabeled"      # Nothing tagged (black)
+      - "1:sky"            # Nothing within 100 km (Terrain Studio)
       - "2:rover"
-      - "10:landscape"
-      - "20:boulder"
-      - "21:small_rock"
-      - "30:crater"        # Crater ground truth from the Terrain Studio (crater map)
-      - "31:crater_rim"
-      - "50:sun"           # The sun's disc in the sky (Terrain Studio, from the Directional Light)
-      - "51:sun_glare"     # Sky around it the navcam washes out (Terrain Studio glare radius)
-      - "60:wheel_track"   # Tracks the rover's wheels leave on the ground (Terrain Studio)
+      - "3:sun"            # The sun's disc in the sky (Terrain Studio, from the Directional Light)
+      - "4:sun_glare"      # Sky around it the navcam washes out (Terrain Studio glare radius)
+      - "5:landscape"
+      - "6:crater"         # Crater ground truth from the Terrain Studio (crater map)
+      - "7:crater_rim"
+      - "8:wheel_track"    # Tracks the rover's wheels leave on the ground (Terrain Studio)
+      - "9:boulder"
+      - "10:small_rock"
 
     # Hierarchical topic namespaces. TF frame names are derived by flattening
     # them ('navcam/central' -> 'navcam_central'), since tf2 forbids '/'.

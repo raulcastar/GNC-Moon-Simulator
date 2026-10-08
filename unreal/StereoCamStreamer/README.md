@@ -127,7 +127,7 @@ the RGB cameras.
    entries — **keep these ids in sync with the CustomDepth Stencil Values from
    step 2**. The stereo node republishes them as JSON on
    `navcam/central/object_mask_mapping`; `ros2 topic echo` it to read the legend,
-   e.g. `{"10": "landscape", "20": "boulder", "30": "crater"}`.
+   e.g. `{"1": "sky", "5": "landscape", "9": "boulder"}`.
 
 ## Exposure
 
