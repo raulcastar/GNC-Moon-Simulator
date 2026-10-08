@@ -122,6 +122,13 @@
   .slider label b { color: var(--cyan); font-weight: normal; }
   input[type=range] { width: 100%; accent-color: var(--accent); }
 
+  .gp { display: flex; align-items: center; gap: 10px; font-size: 10px; letter-spacing: 1px;
+        color: var(--dim); }
+  .gp button { font-family: var(--mono); font-size: 10px; letter-spacing: 1px; cursor: pointer;
+               background: var(--panel2); color: var(--dim); border: 1px solid var(--line);
+               border-radius: 4px; padding: 5px 10px; }
+  .gp button.on { color: var(--accent); border-color: var(--accent); }
+  #gp-state { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .hint { font-size: 10px; color: var(--dim); line-height: 1.6; letter-spacing: .5px; }
   .hint kbd { background: var(--panel2); border: 1px solid var(--line); border-radius: 3px;
               padding: 1px 5px; color: var(--text); }
@@ -206,6 +213,15 @@
           <div class="slider">
             <label>MAX ANGULAR <b><span id="ang-val">0.20</span> rad/s</b></label>
             <input type="range" id="ang-max" min="0.02" max="0.35" step="0.01" value="0.20">
+          </div>
+          <div class="gp">
+            <button id="gp-toggle" title="Drive with a gamepad (Xbox / PlayStation layout)">GAMEPAD OFF</button>
+            <span id="gp-state">—</span>
+          </div>
+          <div class="hint" id="gp-hint" style="display:none">
+            Left stick <kbd>↕</kbd> drive · right stick <kbd>↔</kbd> spot turn (the larger one wins) ·
+            D-pad like <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> · <kbd>A</kbd> stop ·
+            <kbd>B</kbd> E-stop · <kbd>Y</kbd> headlights · <kbd>LB</kbd>/<kbd>RB</kbd> max linear −/+
           </div>
           <div class="hint">
             <kbd>W</kbd>/<kbd>S</kbd> drive straight · <kbd>A</kbd>/<kbd>D</kbd> spot turn ·
@@ -295,6 +311,8 @@
   }
 
   const active = () => (held.length ? held[held.length - 1] : null);
+  let gpCmd = [0, 0];                     // Gamepad command [lin, ang] (see GAMEPAD below)
+  const gpDriving = () => gpCmd[0] !== 0 || gpCmd[1] !== 0;
 
   function cmd() {
     switch (active()) {
@@ -302,7 +320,7 @@
       case 'back':  return [-maxLin, 0];
       case 'left':  return [0,  maxAng];   // spot turn CCW
       case 'right': return [0, -maxAng];   // spot turn CW
-      default:      return [0, 0];
+      default:      return gpCmd;          // keyboard / pad win while held
     }
   }
 
@@ -318,7 +336,7 @@
     }
   }
   function recompute() {
-    const a = active();
+    const a = active() || gpDriving();
     const s = $('drive-state');
     if (a) { s.textContent = 'DRIVING'; s.style.color = 'var(--accent)'; }
     else   { s.textContent = 'IDLE';    s.style.color = 'var(--amber)'; }
@@ -389,6 +407,74 @@
     $('lights').classList.toggle('on', lightsOn);
     $('lights').textContent = lightsOn ? 'HEADLIGHTS ON' : 'HEADLIGHTS';
   });
+
+  // ============ GAMEPAD (optional) ============
+  // Standard mapping (Xbox / PlayStation layout), polled at 20 Hz while on:
+  //   left stick up/down → drive, right stick left/right → spot turn, both
+  //   proportional up to MAX LINEAR / MAX ANGULAR; the larger deflection wins
+  //   (one motion at a time, as above). D-pad = W/A/S/D at full speed.
+  //   A stop (while held) · B E-STOP · Y headlights · LB/RB max linear −/+.
+  // The same soft start and send loop as the keyboard. A lost gamepad, or the
+  // page losing focus, stops the rover.
+  const GP_DEADZONE = 0.15;
+  const BTN = { A: 0, B: 1, Y: 3, LB: 4, RB: 5, UP: 12, DOWN: 13, LEFT: 14, RIGHT: 15 };
+  let gpOn = false, gpPoll = null, gpPrev = [];
+
+  function stick(v) {                  // dead zone, then 0..1 beyond it
+    const a = Math.abs(v || 0);
+    return a < GP_DEADZONE ? 0 : Math.sign(v) * (a - GP_DEADZONE) / (1 - GP_DEADZONE);
+  }
+  function findGamepad() {
+    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    for (const p of pads) if (p && p.connected) return p;
+    return null;
+  }
+  function setGpCmd(c) {
+    const was = gpDriving();
+    gpCmd = c;
+    if (was || gpDriving()) recompute();   // starts the send loop, or lets it stop
+  }
+  function pollGamepad() {
+    const p = findGamepad();
+    if (!p) {
+      $('gp-state').textContent = 'no gamepad: plug one in and press a button';
+      gpPrev = []; setGpCmd([0, 0]); return;
+    }
+    $('gp-state').textContent = p.id.replace(/\s*\(.*$/, '') || 'gamepad';
+    if (!document.hasFocus()) { setGpCmd([0, 0]); return; }
+    const down = i => !!(p.buttons[i] && p.buttons[i].pressed);
+    const pressed = i => down(i) && !gpPrev[i];
+    if (pressed(BTN.B)) $('estop').click();
+    if (pressed(BTN.Y)) $('lights').click();
+    if (pressed(BTN.LB) || pressed(BTN.RB)) {
+      const s = $('lin-max');
+      s.value = (+s.value + (pressed(BTN.RB) ? 1 : -1) * +s.step).toFixed(2);
+      s.dispatchEvent(new Event('input'));
+    }
+    gpPrev = p.buttons.map(b => b.pressed);
+
+    let lin = -stick(p.axes[1]), ang = -stick(p.axes[2]);   // stick up = forward, right = CW
+    if (down(BTN.UP)) lin = 1; else if (down(BTN.DOWN)) lin = -1;
+    if (down(BTN.LEFT)) ang = 1; else if (down(BTN.RIGHT)) ang = -1;
+    if (Math.abs(lin) >= Math.abs(ang)) ang = 0; else lin = 0;
+    if (down(BTN.A) || down(BTN.B)) { lin = 0; ang = 0; }
+    setGpCmd([lin * maxLin, ang * maxAng]);
+  }
+  function setGamepad(on) {
+    gpOn = on;
+    try { localStorage.setItem('teleop_gamepad', on ? '1' : '0'); } catch (e) {}
+    $('gp-toggle').textContent = on ? 'GAMEPAD ON' : 'GAMEPAD OFF';
+    $('gp-toggle').classList.toggle('on', on);
+    $('gp-hint').style.display = on ? '' : 'none';
+    if (on && !gpPoll) { gpPoll = setInterval(pollGamepad, 50); pollGamepad(); }
+    if (!on) {
+      clearInterval(gpPoll); gpPoll = null; gpPrev = [];
+      setGpCmd([0, 0]); $('gp-state').textContent = '—';
+    }
+  }
+  $('gp-toggle').addEventListener('click', () => setGamepad(!gpOn));
+  window.addEventListener('blur', () => setGpCmd([0, 0]));
+  try { setGamepad(localStorage.getItem('teleop_gamepad') === '1'); } catch (e) { setGamepad(false); }
 
   paint();
 </script>
