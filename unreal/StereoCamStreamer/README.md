@@ -129,6 +129,22 @@ the RGB cameras.
    `navcam/central/object_mask_mapping`; `ros2 topic echo` it to read the legend,
    e.g. `{"1": "sky", "5": "landscape", "9": "boulder"}`.
 
+## Ground-truth depth (on by default)
+
+With **Stream Center Depth** (`bStreamCenterDepth`, Details → *StereoCam |
+Cameras*), the component also streams Unreal's own depth for the central camera.
+At Play it adds a depth-only `SceneCaptureComponent2D` attached to the centre
+capture, with its projection, FOV, resolution and hidden / show-only actors, so
+it sees exactly the same view; nothing has to be added to the blueprint. Each
+pixel is the scene depth in centimetres along the camera axis (planar depth),
+sent as float on **DepthCamId** (default 4, under *Advanced*; must match
+`depth_ground_truth_camera_id` in `component_stereo_depth/config/params.yaml`).
+
+The stereo node publishes it as `navcam/central/depth_ground_truth` (32FC1,
+metres, +Inf for the sky) and `.../visualization`, with the same stamp and frame
+as `image_color` and `image_depth`, so the stereo depth can be checked against
+it pixel for pixel.
+
 ## Exposure
 
 By default the captures auto-expose like any Unreal camera. Two optional
@@ -159,9 +175,16 @@ captures are resolved at BeginPlay).
 One packet per frame, little-endian, 24-byte header:
 
 ```
-'NAVF' | ver u8 | cam_id u8 | format u8 (1 = BGRA8) | pad u8
+'NAVF' | ver u8 | cam_id u8 | format u8 | pad u8
 width u16 | height u16 | frame_id u64 | payload u32 | pixels (w*h*4)
 ```
+
+`format` 1 is BGRA8 colour; 2 is R32F depth (float32 centimetres of planar
+depth, the ground-truth depth above). Both use 4 bytes per pixel.
+
+The socket is non-blocking: when a pump's frames exceed the send buffer, the
+sender waits for room and continues; only a real socket error drops the link
+(it then redials every 3 s).
 
 ## Version notes
 

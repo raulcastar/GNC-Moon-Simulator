@@ -121,6 +121,13 @@ lc_component_stereo_depth:
     # Clamp and colormap range for image_depth / image_depth/visualization.
     depth_max_distance:                    6.0   # metres
 
+    # Publishes navcam/central/depth_ground_truth (32FC1): Unreal's exact depth
+    # for the central camera's view, planar Z in metres like image_depth, +Inf
+    # for the sky; and depth_ground_truth/visualization (same colours as
+    # image_depth/visualization). Streamed by the StereoCamStreamer plugin
+    # (bStreamCenterDepth, DepthCamId) on this cam id; < 0 turns it off.
+    depth_ground_truth_camera_id:            4
+
     # Publishes navcam/central/object_mask (rgb8) and object_mask_mapping (the
     # mask_labels legend as JSON). The mask comes from the StereoCamStreamer
     # segmentation capture named by mask_camera_id; colours are baked into the

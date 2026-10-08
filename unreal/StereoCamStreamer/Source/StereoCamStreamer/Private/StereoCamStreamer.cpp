@@ -18,7 +18,7 @@ namespace
 		uint8  Magic[4];      // 'NAVF'
 		uint8  Version;       // 1
 		uint8  CamId;
-		uint8  Format;        // 1 = BGRA8
+		uint8  Format;        // 1 = BGRA8, 2 = R32F depth (cm)
 		uint8  Reserved;
 		uint16 Width;
 		uint16 Height;
@@ -43,6 +43,10 @@ void UStereoCamStreamer::BeginPlay()
 	ResolveCapture(RightCaptureName, RightCamId);
 	ResolveCapture(CenterCaptureName, CenterCamId);
 	ResolveCapture(MaskCaptureName, MaskCamId);   // optional; skipped if blank
+	if (bStreamCenterDepth)
+	{
+		AddCenterDepthCapture();
+	}
 
 	Stream = MakeShared<FStereoCamStreamState, ESPMode::ThreadSafe>();
 
@@ -273,6 +277,51 @@ void UStereoCamStreamer::ResolveCapture(const FName& Name, int32 CamId)
 	       Found->TextureTarget->SizeX, Found->TextureTarget->SizeY);
 }
 
+void UStereoCamStreamer::AddCenterDepthCapture()
+{
+	const FStereoCamResolved* Center = Active.FindByPredicate(
+		[this](const FStereoCamResolved& R) { return R.CamId == CenterCamId && R.Capture; });
+	if (!Center || !Center->Capture->TextureTarget)
+	{
+		UE_LOG(LogTemp, Warning,
+		       TEXT("StereoCamStreamer: no centre capture, so no ground-truth depth."));
+		return;
+	}
+	USceneCaptureComponent2D* Source = Center->Capture;
+	USceneCaptureComponent2D* Depth = NewObject<USceneCaptureComponent2D>(
+		GetOwner(), MakeUniqueObjectName(GetOwner(), USceneCaptureComponent2D::StaticClass(),
+		                                 TEXT("StereoCamCenterDepth")));
+	Depth->RegisterComponent();
+	Depth->AttachToComponent(Source, FAttachmentTransformRules::SnapToTargetNotIncludingScale);
+
+	// The same view as the centre camera: projection, FOV, what it shows.
+	Depth->ProjectionType = Source->ProjectionType;
+	Depth->FOVAngle = Source->FOVAngle;
+	Depth->OrthoWidth = Source->OrthoWidth;
+	Depth->PrimitiveRenderMode = Source->PrimitiveRenderMode;
+	Depth->HiddenActors = Source->HiddenActors;
+	Depth->ShowOnlyActors = Source->ShowOnlyActors;
+
+	UTextureRenderTarget2D* RT = NewObject<UTextureRenderTarget2D>(Depth);
+	RT->RenderTargetFormat = RTF_R32f;
+	RT->ClearColor = FLinearColor(1.0e9f, 0.0f, 0.0f, 0.0f);    // Nothing there: far
+	RT->InitAutoFormat(Source->TextureTarget->SizeX, Source->TextureTarget->SizeY);
+	RT->UpdateResourceImmediate(true);
+	Depth->TextureTarget = RT;
+	Depth->CaptureSource = SCS_SceneDepth;
+	Depth->bCaptureEveryFrame = true;
+	Depth->bCaptureOnMovement = false;
+
+	FStereoCamResolved Entry;
+	Entry.Capture = Depth;
+	Entry.CamId = DepthCamId;
+	Entry.Format = 2;
+	Active.Add(Entry);
+	UE_LOG(LogTemp, Log,
+	       TEXT("StereoCamStreamer: ground-truth depth of '%s' -> cam id %d (%dx%d, R32F cm)."),
+	       *Source->GetName(), DepthCamId, RT->SizeX, RT->SizeY);
+}
+
 bool UStereoCamStreamer::TryConnect()
 {
 	// Called only from Run() (background thread). Non-blocking connect with a
@@ -358,6 +407,7 @@ namespace
 	{
 		FTextureRenderTargetResource* Resource;
 		int32 CamId;
+		uint8 Format;
 		int32 W;
 		int32 H;
 	};
@@ -380,7 +430,7 @@ void UStereoCamStreamer::PumpCaptures()
 			Cam.Capture->TextureTarget->GameThread_GetRenderTargetResource();
 		if (Resource)
 		{
-			Caps.Add({ Resource, Cam.CamId,
+			Caps.Add({ Resource, Cam.CamId, Cam.Format,
 			           Cam.Capture->TextureTarget->SizeX,
 			           Cam.Capture->TextureTarget->SizeY });
 		}
@@ -417,7 +467,7 @@ void UStereoCamStreamer::PumpCaptures()
 				Hd->Magic[2] = 'V'; Hd->Magic[3] = 'F';
 				Hd->Version = 1;
 				Hd->CamId = static_cast<uint8>(Job.CamId);
-				Hd->Format = 1;                 // BGRA8
+				Hd->Format = Job.Format;        // 1 BGRA8, 2 R32F: 4 bytes per pixel either way
 				Hd->Reserved = 0;
 				Hd->Width = static_cast<uint16>(W);
 				Hd->Height = static_cast<uint16>(H);
@@ -442,8 +492,8 @@ void UStereoCamStreamer::PumpCaptures()
 			}
 
 			// Safety net: never let readbacks pile up unbounded and exhaust
-			// VRAM if the consumer somehow stalls. Up to 4 cameras x a few frames.
-			while (S->Pending.Num() > 12)
+			// VRAM if the consumer somehow stalls. Up to 5 cameras x a few frames.
+			while (S->Pending.Num() > 16)
 			{
 				S->Pending.RemoveAt(0);
 			}
@@ -453,6 +503,7 @@ void UStereoCamStreamer::PumpCaptures()
 			{
 				FPendingReadback Job;
 				Job.CamId = C.CamId;
+				Job.Format = C.Format;
 				Job.Width = C.W;
 				Job.Height = C.H;
 				Job.FrameId = FrameId;
@@ -512,6 +563,16 @@ uint32 UStereoCamStreamer::Run()
 			int32 Sent = 0;
 			if (!Socket->Send(Packet.GetData() + Offset, Packet.Num() - Offset, Sent))
 			{
+				// The socket is non-blocking: a full send buffer (several frames
+				// in one pump) answers "would block", which is not a broken link.
+				// Wait for room and try again; only a real error drops the link.
+				const ESocketErrors Error =
+					ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->GetLastErrorCode();
+				if (Error == SE_EWOULDBLOCK || Error == SE_NO_ERROR)
+				{
+					Socket->Wait(ESocketWaitConditions::WaitForWrite, FTimespan::FromMilliseconds(100));
+					continue;
+				}
 				bFailed = true;
 				break;
 			}

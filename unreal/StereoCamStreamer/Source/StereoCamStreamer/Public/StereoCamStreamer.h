@@ -16,7 +16,9 @@
 //   0      4     magic 'NAVF'
 //   4      1     version = 1
 //   5      1     cam_id            (matches ids in component_stereo_depth params)
-//   6      1     format = 1        (BGRA8, payload = width*height*4)
+//   6      1     format            1 = BGRA8 colour, 2 = R32F depth: centimetres along
+//                                  the camera axis (Unreal scene depth); payload =
+//                                  width*height*4 either way
 //   7      1     reserved
 //   8      2     width  (u16)
 //   10     2     height (u16)
@@ -50,6 +52,7 @@ struct STEREOCAMSTREAMER_API FStereoCamResolved
 	USceneCaptureComponent2D* Capture = nullptr;
 
 	int32 CamId = 0;
+	uint8 Format = 1;               // Wire format: 1 BGRA8, 2 R32F depth
 };
 
 // One in-flight asynchronous readback. Touched only on the render thread.
@@ -57,6 +60,7 @@ struct FPendingReadback
 {
 	TUniquePtr<FRHIGPUTextureReadback> Readback;
 	int32 CamId = 0;
+	uint8 Format = 1;
 	int32 Width = 0;
 	int32 Height = 0;
 	uint64 FrameId = 0;
@@ -136,6 +140,14 @@ public:
 	          meta = (GetOptions = "GetSceneCaptureNames"))
 	FName MaskCaptureName;
 
+	// Also stream the ground-truth depth of the central camera: a depth-only
+	// capture created at BeginPlay, attached to the centre capture with its
+	// FOV and resolution, so it sees exactly the same view. Each pixel is
+	// Unreal's scene depth (centimetres along the camera axis), sent as float
+	// (format 2) on DepthCamId. Nothing to add to the blueprint.
+	UPROPERTY(EditAnywhere, Category = "StereoCam|Cameras")
+	bool bStreamCenterDepth = true;
+
 	// Feeds the dropdowns above. Lists the blueprint's own SceneCapture2D
 	// components when editing the blueprint, plus every instance in the world
 	// when placed in a level.
@@ -206,6 +218,10 @@ public:
 	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "StereoCam|Cameras")
 	int32 MaskCamId = 3;
 
+	// Must match depth_ground_truth_camera_id in that file.
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "StereoCam|Cameras")
+	int32 DepthCamId = 4;
+
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType,
@@ -217,6 +233,9 @@ public:
 
 private:
 	void ResolveCapture(const FName& Name, int32 CamId);
+
+	// Creates the centre camera's depth capture (bStreamCenterDepth).
+	void AddCenterDepthCapture();
 
 	// Enqueues ONE render command per send tick that does everything on the
 	// render thread: drain the readbacks started last tick (now finished on

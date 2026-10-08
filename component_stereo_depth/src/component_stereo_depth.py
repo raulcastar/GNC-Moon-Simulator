@@ -12,7 +12,9 @@ person actually looks at:
                                          navcam/central/image_depth
     navcam/right/image_color             navcam/central/image_depth/visualization
     navcam/right/image_color/compressed  navcam/central/disparity
-    navcam/right/camera_info             navcam/central/object_mask
+    navcam/right/camera_info             navcam/central/depth_ground_truth
+                                         navcam/central/depth_ground_truth/visualization
+                                         navcam/central/object_mask
                                          navcam/central/object_mask_mapping
                                          navcam/central/shadow_mask
                                          navcam/central/shadow_label
@@ -22,6 +24,9 @@ TF frame names flatten the namespace: navcam_left, navcam_right, navcam_central.
 
 navcam/central/image_depth is the SGBM result reprojected onto the central
 camera's pixel grid: planar Z in metres, NaN where no surface was recovered.
+navcam/central/depth_ground_truth is Unreal's own depth for the same view (the
+plugin's depth capture on the central camera): planar Z in metres, exact, +Inf
+where there is no surface (sky).
 Disparity has no separate visualisation: it is a monotonic function of depth, so
 it would just render image_depth/visualization inverted.
 
@@ -206,7 +211,7 @@ class FrameStreamReceiver:
                 return buf
             (_, version, cam_id, fmt, _, w, h, fid,
              size) = self._HEADER.unpack_from(buf)
-            if version != 1 or fmt != 1 or size != w * h * 4 or w == 0:
+            if version != 1 or fmt not in (1, 2) or size != w * h * 4 or w == 0:
                 self._log.warn(f'Frame stream: bad header (v{version} fmt{fmt} '
                                f'{w}x{h} size {size}); resyncing.',
                                throttle_duration_sec=10.0)
@@ -215,13 +220,17 @@ class FrameStreamReceiver:
             end = self._HEADER.size + size
             if len(buf) < end:
                 return buf                   # payload still in flight
-            bgra = np.frombuffer(buf[self._HEADER.size:end],
-                                 dtype=np.uint8).reshape(h, w, 4)
-            rgb = np.ascontiguousarray(bgra[:, :, [2, 1, 0]])
+            if fmt == 2:                     # R32F depth, centimetres
+                image = np.frombuffer(buf[self._HEADER.size:end],
+                                      dtype='<f4').reshape(h, w).copy()
+            else:                            # BGRA8 colour
+                bgra = np.frombuffer(buf[self._HEADER.size:end],
+                                     dtype=np.uint8).reshape(h, w, 4)
+                image = np.ascontiguousarray(bgra[:, :, [2, 1, 0]])
             with self._lock:
                 ring = self._frames.setdefault(
                     cam_id, collections.deque(maxlen=self._RING))
-                ring.append((fid, rgb, time.monotonic()))
+                ring.append((fid, image, time.monotonic()))
             buf = buf[end:]
 
 
@@ -270,6 +279,9 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                 # Stream cam id of the object-segmentation capture (StereoCamStreamer
                 # MaskCamId). < 0 disables the mask.
                 ('mask_camera_id',          rclpy.Parameter.Type.INTEGER),
+                # Stream cam id of the plugin's ground-truth depth capture on the
+                # central camera (StereoCamStreamer DepthCamId). < 0 disables it.
+                ('depth_ground_truth_camera_id', rclpy.Parameter.Type.INTEGER),
                 # Legend for the object mask: "<stencil_id>:<name>" entries, one
                 # per tagged class, published as JSON on object_mask_mapping so a
                 # consumer knows what each stencil id in the scene means. The ids
@@ -495,7 +507,12 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         mask = None
         if self.enable_object_mask and self.mask_camera_id >= 0:
             mask = self._stream.frame_near(self.mask_camera_id, fid)
-        return left, right, center, mask
+        # Ground-truth depth (optional): the plugin's depth capture on the
+        # central camera, centimetres of planar depth, on its own cam id.
+        depth_gt = None
+        if self.depth_gt_camera_id >= 0:
+            depth_gt = self._stream.frame_near(self.depth_gt_camera_id, fid)
+        return left, right, center, mask, depth_gt
 
     # =========================================================================
     # Stereo matching
@@ -693,6 +710,9 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
     OTHER_RGB = (128, 128, 128)     # Rocks, rover in sunlight
     ROVER_SHADOW_RGB = (255, 140, 0)  # The rover's own cast shadow
 
+    # Ground-truth depth beyond this (metres) has no surface: the sky (+Inf).
+    GROUND_TRUTH_FAR_M = 1.0e5
+
     # Shadow class ids (shadow_label, mono8), for training.
     SHADOW_IDS = {0: 'sky', 1: 'sunlit_ground', 2: 'shadowed_ground',
                   3: 'sunlit_object', 4: 'shadowed_object', 5: 'rover_shadow'}
@@ -775,7 +795,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
             captured = self._capture_from_stream()
             if captured is None:
                 return
-            left, right, center, center_mask = captured
+            left, right, center, center_mask, depth_gt_cm = captured
             disp = self._compute_disparity(left, right)
             depth_left = self._depth_from_disparity(disp)
 
@@ -811,6 +831,23 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                     self._disparity_msg(disp_c, stamp, f_center, fx=self._c_fx,
                                         width=self._c_w, height=self._c_h,
                                         valid_window=False))
+
+            if depth_gt_cm is not None:
+                if depth_gt_cm.shape != center.shape[:2]:
+                    self.get_logger().warn(
+                        f'Ground-truth depth is {depth_gt_cm.shape[1]}x{depth_gt_cm.shape[0]}, '
+                        f'the central image {center.shape[1]}x{center.shape[0]}: skipped.',
+                        throttle_duration_sec=15.0)
+                else:
+                    depth_gt = depth_gt_cm / 100.0                       # metres
+                    depth_gt[~(depth_gt < self.GROUND_TRUTH_FAR_M)] = np.inf  # sky
+                    self._publish_image('center_depth_gt', depth_gt.astype(np.float32),
+                                        '32FC1', stamp, f_center)
+                    shown = np.where(np.isfinite(depth_gt),
+                                     np.clip(depth_gt, 0.0, self.depth_max_distance), np.nan)
+                    self._publish_image('center_depth_gt_vis',
+                                        self._colourise(shown, self.depth_max_distance),
+                                        'bgr8', stamp, f_center)
 
             if center_mask is not None:
                 if self.enable_shadow_mask:
@@ -866,6 +903,9 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self.right_camera_id  = self.get_parameter('right_camera_id').value
         self.center_camera_id = self.get_parameter('center_camera_id').value
         self.mask_camera_id   = self.get_parameter('mask_camera_id').value
+        self.depth_gt_camera_id = self.get_parameter('depth_ground_truth_camera_id').value
+        if self.depth_gt_camera_id is None:
+            self.depth_gt_camera_id = -1
         self.mask_labels      = self.get_parameter('mask_labels').value or []
         self.left_topic       = self.get_parameter('left_topic').value
         self.right_topic      = self.get_parameter('right_topic').value
@@ -935,6 +975,9 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         pub('center_depth', RosImage, f'{C}/image_depth')
         pub('center_depth_vis', RosImage, f'{C}/image_depth/visualization')
         pub('center_disparity', DisparityImage, f'{C}/disparity')
+        if self.depth_gt_camera_id >= 0:
+            pub('center_depth_gt', RosImage, f'{C}/depth_ground_truth')
+            pub('center_depth_gt_vis', RosImage, f'{C}/depth_ground_truth/visualization')
 
         if self.enable_object_mask:
             pub('center_object_mask', RosImage, f'{C}/object_mask')
@@ -954,6 +997,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self.get_logger().info(
             f'Publishing {L}/*, {R}/* (colour) and {C}/* '
             f'(colour + PLANAR depth + disparity'
+            f'{" + ground-truth depth" if self.depth_gt_camera_id >= 0 else ""}'
             f'{" + object mask" if self.enable_object_mask else ""}'
             f'{" + shadow mask" if self.enable_shadow_mask else ""}). '
             f'Frames: {self.left_frame}, {self.right_frame}, {self.center_frame}.')

@@ -242,6 +242,7 @@ _BAG_TOPICS = [
     '/mission_status/goal_reached', '/velodyne_points',
     '/local_mapping/elevation_map_raw', '/local_mapping/elevation_grid',
     '/navcam/central/image_color/compressed', '/navcam/central/image_depth',
+    '/navcam/central/depth_ground_truth',
     '/navcam/central/camera_info', '/navcam/central/object_mask',
     '/navcam/central/shadow_mask', '/navcam/central/shadow_label',
     '/navcam/central/shadow_label_mapping', '/navcam/central/object_mask_mapping',
@@ -388,6 +389,9 @@ class LifecycleMissionControlUI(rclpy.lifecycle.Node):
         self._subs.append(sub(
             Image, f'{ns}/central/image_depth/visualization',
             self._make_image_relay('depth', both=True), qos_profile_sensor_data))
+        self._subs.append(sub(
+            Image, f'{ns}/central/depth_ground_truth/visualization',
+            self._make_image_relay('depth_gt'), qos_profile_sensor_data))
         self._subs.append(sub(
             Image, f'{ns}/central/object_mask',
             self._make_image_relay('mask'), qos_profile_sensor_data))

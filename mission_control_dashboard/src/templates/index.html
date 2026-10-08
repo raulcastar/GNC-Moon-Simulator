@@ -171,9 +171,9 @@
      views also hide the telemetry panel. */
   main[data-view="cams"]  { grid-template-columns: 1fr; }
   main[data-view="cams"]  #col-map, main[data-view="cams"]  #col-right { display: none; }
-  /* full width: the eight feeds as a 4 x 2 grid */
-  main[data-view="cams"]  #cams { grid-template-columns: repeat(4, minmax(0, 1fr));
-                                  grid-template-rows: repeat(2, minmax(0, 1fr)); }
+  /* full width: the nine feeds as a 3 x 3 grid */
+  main[data-view="cams"]  #cams { grid-template-columns: repeat(3, minmax(0, 1fr));
+                                  grid-template-rows: repeat(3, minmax(0, 1fr)); }
   main[data-view="cams"]  .cam-row { display: contents; }
   /* click a feed to enlarge it to the whole tab (as on the camera wall); click
      again or press Esc to return */
@@ -294,10 +294,11 @@
         </div>
         <div class="cam-row" style="grid-template-columns:1fr 1fr 1fr">
           <div class="feed" id="f-depth"><div class="nosig">STEREO DEPTH</div><img></div>
+          <div class="feed" id="f-depth_gt"><div class="nosig">GROUND TRUTH DEPTH</div><img></div>
           <div class="feed" id="f-mask"><div class="nosig">SEGMENTATION</div><img></div>
-          <div class="feed" id="f-shadow"><div class="nosig">SHADOW MASK</div><img></div>
         </div>
-        <div class="cam-row" style="grid-template-columns:1fr 1fr">
+        <div class="cam-row" style="grid-template-columns:1fr 1fr 1fr">
+          <div class="feed" id="f-shadow"><div class="nosig">SHADOW MASK</div><img></div>
           <div class="feed" id="f-events"><div class="nosig">EVENT CAM</div><img></div>
           <div class="feed" id="f-spad"><div class="nosig">SPAD CAM</div><img></div>
         </div>
@@ -490,7 +491,8 @@ function updateMissionEta() {
 /* ---------------- feed health + node states ---------------- */
 const FEED_NAMES = {
   odom: 'odometry', imu: 'IMU', cam_central: 'navcam central', cam_left: 'navcam left',
-  cam_right: 'navcam right', depth: 'stereo depth', mask: 'segmentation', shadow: 'shadow mask', events: 'event camera',
+  cam_right: 'navcam right', depth: 'stereo depth', depth_gt: 'ground-truth depth', mask: 'segmentation',
+  shadow: 'shadow mask', events: 'event camera',
   spad: 'SPAD camera', lidar: 'lidar', local_dem: 'local DEM',
 };
 const ageClass = a => a === null || a === undefined ? 'none' : a < 3 ? 'ok' : a < 10 ? 'stale' : 'dead';
@@ -667,7 +669,8 @@ lc.addEventListener('wheel', e => {
 const demView = LocalDemView($('demView'), { info: $('dem-info'), nosig: $('dem-nosig') });
 socket.on('local_dem', m => demView.update(m));
 socket.on('local_dem_lidar', m => demView.updateLidar(m));
-FeedLegends.attach(socket, { depth: [$('f-depth')], mask: [$('f-mask')], shadow: [$('f-shadow')] });
+FeedLegends.attach(socket, { depth: [$('f-depth'), $('f-depth_gt')], mask: [$('f-mask')],
+                             shadow: [$('f-shadow')] });
 NavOverlay.attach(socket, [$('f-cam_central')]);
 
 /* ---------------- rover command buttons ---------------- */

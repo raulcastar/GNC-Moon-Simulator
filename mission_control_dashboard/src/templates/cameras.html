@@ -118,6 +118,7 @@
     ['cam_left',    'LEFT'],
     ['cam_right',   'RIGHT'],
     ['depth',       'STEREO DEPTH'],
+    ['depth_gt',    'GROUND TRUTH DEPTH'],
     ['mask',        'SEGMENTATION'],
     ['shadow',      'SHADOW MASK'],
     ['events',      'EVENT CAM'],
@@ -199,7 +200,7 @@
 
   // Depth / segmentation legends, and per-feed rate and age.
   FeedLegends.attach(socket, {
-    depth: [$('t-depth').querySelector('.feed')],
+    depth: [$('t-depth').querySelector('.feed'), $('t-depth_gt').querySelector('.feed')],
     mask: [$('t-mask').querySelector('.feed')],
     shadow: [$('t-shadow').querySelector('.feed')],
   });
