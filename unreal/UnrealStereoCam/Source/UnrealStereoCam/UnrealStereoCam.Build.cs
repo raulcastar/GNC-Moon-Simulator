@@ -1,8 +1,8 @@
 using UnrealBuildTool;
 
-public class StereoCamStreamer : ModuleRules
+public class UnrealStereoCam : ModuleRules
 {
-	public StereoCamStreamer(ReadOnlyTargetRules Target) : base(Target)
+	public UnrealStereoCam(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 

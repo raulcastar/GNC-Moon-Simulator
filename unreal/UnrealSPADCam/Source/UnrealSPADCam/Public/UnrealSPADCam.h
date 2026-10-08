@@ -2,7 +2,7 @@
 //
 // A SceneCapture renders an intensity image with each game frame; its readback
 // is asynchronous (never stalls the game thread, same design as the sibling
-// UnrealEventCam / StereoCamStreamer plugins). A worker thread converts each
+// UnrealEventCam / UnrealStereoCam plugins). A worker thread converts each
 // frame to 8-bit grayscale and streams it to a ROS node over TCP.
 //
 // The SPAD sensor MODEL (photon-flux estimation, Poisson photon arrivals, binary

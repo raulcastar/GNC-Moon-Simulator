@@ -1,4 +1,4 @@
-# StereoCamStreamer — camera frames without game-thread stalls
+# UnrealStereoCam — camera frames without game-thread stalls
 
 UnrealCV renders on demand: each `vget` blocks the game thread for a full
 render + synchronous GPU readback (~300 ms per camera, measured — the sim was
@@ -26,28 +26,28 @@ This folder **is** the plugin — copy it whole.
    this folder into it:
 
    ```
-   <YourProject>/Plugins/StereoCamStreamer/
-   ├── StereoCamStreamer.uplugin
-   └── Source/StereoCamStreamer/
-       ├── StereoCamStreamer.Build.cs
-       ├── Public/StereoCamStreamer.h
-       └── Private/{StereoCamStreamer.cpp, StereoCamStreamerModule.cpp}
+   <YourProject>/Plugins/UnrealStereoCam/
+   ├── UnrealStereoCam.uplugin
+   └── Source/UnrealStereoCam/
+       ├── UnrealStereoCam.Build.cs
+       ├── Public/UnrealStereoCam.h
+       └── Private/{UnrealStereoCam.cpp, UnrealStereoCamModule.cpp}
    ```
 
 3. Open the `.uproject`. The editor reports *"The following modules are
-   missing or built with a different engine version: StereoCamStreamer. Would
+   missing or built with a different engine version: UnrealStereoCam. Would
    you like to rebuild them now?"* — answer **Yes**. It compiles in a minute
    or two and the editor opens. (If it fails, the build log is at
    `<YourProject>/Saved/Logs/UnrealBuildTool/`; the usual cause is the C++
    workload missing from Visual Studio.)
 4. Confirm it's active under **Edit → Plugins → Project → Other →
-   Stereo Cam Streamer** (enabled by default).
+   Unreal Stereo Cam** (enabled by default).
 5. Add three **SceneCaptureComponent2D** components named exactly
    **NavcamLeft**, **NavcamRight**, **NavcamCenter**, posed like the three
    navcams (same transforms UnrealCV camera ids 1, 2, 0 have). Give each a
    **TextureRenderTarget2D** (640×480, RTF RGBA8). They can live on any actor
    — the rover pawn is the natural home so they move with it.
-6. Add the **StereoCamStreamer** component to any actor (the rover pawn is fine;
+6. Add the **UnrealStereoCam** component to any actor (the rover pawn is fine;
    it appears in the *Add Component* search once the plugin is built). The
    captures are selected **by component name** — no pickers, no actor linking.
    Its own actor is searched first, then the whole world. If you used the
@@ -117,7 +117,7 @@ the RGB cameras.
 4. **Mask capture.** A fourth `SceneCaptureComponent2D` (e.g. **`Navcam_Mask`**),
    posed and FOV-matched to `NavcamCenter`, with `PPM_GroundTruthMask` added to its
    *Post Process Settings → Post Process Materials* (weight 1). Leave its render
-   target empty (auto-created). On the **StereoCamStreamer** component set
+   target empty (auto-created). On the **UnrealStereoCam** component set
    **MaskCaptureName** to it; its **MaskCamId** (default 3, under *Advanced*)
    must equal `mask_camera_id` in the stereo node's params.
 
@@ -148,7 +148,7 @@ it pixel for pixel.
 ## Exposure
 
 By default the captures auto-expose like any Unreal camera. Two optional
-controls on the **StereoCamStreamer** component (Details → *StereoCam | Cameras*)
+controls on the **UnrealStereoCam** component (Details → *StereoCam | Cameras*)
 override that — pick **at most one**:
 
 - **Limit Auto Exposure** (`bLimitAutoExposure`) — keeps auto-exposure but clamps

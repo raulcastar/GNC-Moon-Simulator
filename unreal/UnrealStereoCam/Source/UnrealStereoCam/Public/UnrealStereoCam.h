@@ -1,4 +1,4 @@
-// StereoCamStreamer: pushes stereo/navcam frames to ROS without stalling the game.
+// UnrealStereoCam: pushes stereo/navcam frames to ROS without stalling the game.
 //
 // UnrealCV renders on demand: every vget blocks the game thread for a full
 // render + GPU readback (~300 ms per camera, measured). This component
@@ -38,13 +38,13 @@
 #include "HAL/Runnable.h"
 #include "HAL/RunnableThread.h"
 #include "Containers/Queue.h"
-#include "StereoCamStreamer.generated.h"
+#include "UnrealStereoCam.generated.h"
 
 class FSocket;
 
 // A capture resolved and validated at BeginPlay, ready to stream.
 USTRUCT()
-struct STEREOCAMSTREAMER_API FStereoCamResolved
+struct UNREALSTEREOCAM_API FStereoCamResolved
 {
 	GENERATED_BODY()
 
@@ -85,12 +85,12 @@ struct FStereoCamStreamState
 };
 
 UCLASS(ClassGroup = (Custom), meta = (BlueprintSpawnableComponent))
-class STEREOCAMSTREAMER_API UStereoCamStreamer : public UActorComponent, public FRunnable
+class UNREALSTEREOCAM_API UUnrealStereoCam : public UActorComponent, public FRunnable
 {
 	GENERATED_BODY()
 
 public:
-	UStereoCamStreamer();
+	UUnrealStereoCam();
 
 	// Where the ROS stereo node listens (see stream_port in its params.yaml).
 	UPROPERTY(EditAnywhere, Category = "StereoCam|Network")

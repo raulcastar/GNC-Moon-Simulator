@@ -2,7 +2,7 @@
 
 Renders an intensity image with each game frame, generates brightness-change
 **events** from it with the ESIM model, and streams them to a ROS node over TCP.
-Same no-stall design as the sibling `StereoCamStreamer` plugin: the SceneCapture
+Same no-stall design as the sibling `UnrealStereoCam` plugin: the SceneCapture
 renders on the render thread, the readback is asynchronous, and a worker thread
 runs the event model and drains to the socket. The game thread never blocks.
 

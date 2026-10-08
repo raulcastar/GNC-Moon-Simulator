@@ -2,7 +2,7 @@
 
 Renders an intensity image with each game frame and streams it to a ROS node
 over TCP, where the **spadSim** photon model turns it into single-photon binary
-frames. Same no-stall design as the sibling `UnrealEventCam` / `StereoCamStreamer`
+frames. Same no-stall design as the sibling `UnrealEventCam` / `UnrealStereoCam`
 plugins: the SceneCapture renders on the render thread, the readback is
 asynchronous, and a worker thread converts to 8-bit grayscale and drains to the
 socket. The game thread never blocks.

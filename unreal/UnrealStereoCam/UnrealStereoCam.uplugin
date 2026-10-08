@@ -2,7 +2,7 @@
 	"FileVersion": 3,
 	"Version": 1,
 	"VersionName": "1.0",
-	"FriendlyName": "Stereo Cam Streamer",
+	"FriendlyName": "Unreal Stereo Cam",
 	"Description": "Streams stereo/navcam frames to the ROS stereo node over TCP with asynchronous GPU readback - no game-thread stalls, unlike UnrealCV's render-on-demand.",
 	"Category": "Other",
 	"CreatedBy": "GNC Moon Simulator",
@@ -12,7 +12,7 @@
 	"EnabledByDefault": true,
 	"Modules": [
 		{
-			"Name": "StereoCamStreamer",
+			"Name": "UnrealStereoCam",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"
 		}

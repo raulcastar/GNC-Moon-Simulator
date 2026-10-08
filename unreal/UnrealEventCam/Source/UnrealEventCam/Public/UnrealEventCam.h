@@ -2,7 +2,7 @@
 //
 // A SceneCapture renders an intensity image with each game frame; its readback
 // is asynchronous (never stalls the game thread, same design as the sibling
-// StereoCamStreamer plugin). A worker thread converts each frame to grayscale,
+// UnrealStereoCam plugin). A worker thread converts each frame to grayscale,
 // runs the ESIM event-generation model (see EventSimulator.h — ported from
 // rpg_esim, MIT (c) 2018 Robotics and Perception Group), and streams the
 // resulting events to a ROS node over TCP.
@@ -62,7 +62,7 @@ struct FEventReadyFrame
 };
 
 // Shared between the render commands and the worker through a ref-counted
-// pointer, so teardown never has to block (same pattern as StereoCamStreamer):
+// pointer, so teardown never has to block (same pattern as UnrealStereoCam):
 //   Pending : created, polled, locked and freed ONLY on the render thread.
 //   Ready   : lock-free MPSC handoff, render thread -> worker thread.
 struct FEventStreamState
@@ -93,7 +93,7 @@ public:
 	// The SceneCapture2D this event camera renders from, chosen by name from a
 	// dropdown of every SceneCapture2D in reach (this blueprint's components, or
 	// the world when placed in a level). Same selection scheme as
-	// StereoCamStreamer — no object pickers, which cannot target per-instance
+	// UnrealStereoCam — no object pickers, which cannot target per-instance
 	// components from the details panel.
 	UPROPERTY(EditAnywhere, Category = "EventCam|Camera",
 	          meta = (GetOptions = "GetSceneCaptureNames"))

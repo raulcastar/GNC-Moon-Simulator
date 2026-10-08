@@ -4,7 +4,7 @@ lc_component_stereo_depth:
     image_reading_hz_rate:                 1.0
 
     # ── Frame stream ──────────────────────────────────────────────────────────
-    # Frames are pushed by the StereoCamStreamer plugin (unreal/StereoCamStreamer/)
+    # Frames are pushed by the UnrealStereoCam plugin (unreal/UnrealStereoCam/)
     # to this TCP server: captures render with the game frame and reach this node
     # with no game-thread stall. Left/right are paired by Unreal's frame counter,
     # so both eyes always come from the same world tick.
@@ -16,14 +16,14 @@ lc_component_stereo_depth:
     # central camera's pixel grid, so its depth, disparity, object mask and RGB
     # all overlay one another.
     #
-    # These are the StereoCamStreamer cam ids (its Left/Right/Center CamId),
+    # These are the UnrealStereoCam cam ids (its Left/Right/Center CamId),
     # not UnrealCV camera indices. On startup this node logs where the central
     # camera sits along the baseline: expect ~50%, ~0 cm off the eye-to-eye line.
     left_camera_id:                          1
     right_camera_id:                         2
     center_camera_id:                        0   # Navcam_Sensor
 
-    # Object-segmentation capture. Must equal the StereoCamStreamer
+    # Object-segmentation capture. Must equal the UnrealStereoCam
     # MaskCamId. Its SceneCapture uses a post-process material that colours the
     # Custom Depth-Stencil buffer — the UnrealCV object_mask, reproduced without
     # UnrealCV. Set < 0 to stream no mask (and set enable_object_mask: false).
@@ -34,7 +34,7 @@ lc_component_stereo_depth:
     # Studio's mask material (MASK_IDS in unreal_ground_truth.py), each drawn in
     # a fixed colour (MASK_PALETTE there, MASK_COLOURS in the dashboard). The
     # rover, landscape and rocks carry their id as their CustomDepth Stencil
-    # Value in Unreal (see the StereoCamStreamer README).
+    # Value in Unreal (see the UnrealStereoCam README).
     mask_labels:
       - "0:unlabeled"      # Nothing tagged (black)
       - "1:sky"            # Nothing within 100 km (Terrain Studio)
@@ -56,7 +56,7 @@ lc_component_stereo_depth:
 
     # ── Rig geometry ──────────────────────────────────────────────────────────
     # A stream cannot be measured, so BOTH ARE REQUIRED: set them to the
-    # StereoCamStreamer captures' real geometry.
+    # UnrealStereoCam captures' real geometry.
     #   baseline_m  metres between the eyes
     #   hfov_deg    the captures' FOVAngle
     baseline_m:                            0.2   # metres between the eyes
@@ -124,12 +124,12 @@ lc_component_stereo_depth:
     # Publishes navcam/central/depth_ground_truth (32FC1): Unreal's exact depth
     # for the central camera's view, planar Z in metres like image_depth, +Inf
     # for the sky; and depth_ground_truth/visualization (same colours as
-    # image_depth/visualization). Streamed by the StereoCamStreamer plugin
+    # image_depth/visualization). Streamed by the UnrealStereoCam plugin
     # (bStreamCenterDepth, DepthCamId) on this cam id; < 0 turns it off.
     depth_ground_truth_camera_id:            4
 
     # Publishes navcam/central/object_mask (rgb8) and object_mask_mapping (the
-    # mask_labels legend as JSON). The mask comes from the StereoCamStreamer
+    # mask_labels legend as JSON). The mask comes from the UnrealStereoCam
     # segmentation capture named by mask_camera_id; colours are baked into the
     # Unreal post-process material. Needs that capture to exist, or it
     # self-disables.

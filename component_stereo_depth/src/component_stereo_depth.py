@@ -1,5 +1,5 @@
 """
-ROS 2 Lifecycle Node for the simulated stereo navcam rig (StereoCamStreamer).
+ROS 2 Lifecycle Node for the simulated stereo navcam rig (UnrealStereoCam).
 
 Serves three cameras under one hierarchical namespace. The left and right eyes
 publish colour; the central camera publishes colour plus the full depth product,
@@ -30,8 +30,8 @@ where there is no surface (sky).
 Disparity has no separate visualisation: it is a monotonic function of depth, so
 it would just render image_depth/visualization inverted.
 
-Frames arrive over TCP from the StereoCamStreamer Unreal plugin
-(unreal/StereoCamStreamer/): each SceneCapture renders with the game frame and is
+Frames arrive over TCP from the UnrealStereoCam Unreal plugin
+(unreal/UnrealStereoCam/): each SceneCapture renders with the game frame and is
 pushed here, so there is no render-on-demand and no game-thread stall. Every
 capture enqueued in one Unreal tick carries the same frame id, which is what
 pairs the left/right eyes as one rigid stereo view.
@@ -76,7 +76,7 @@ def _frame_id(topic: str) -> str:
 
 class FrameStreamReceiver:
     """
-    TCP server for the StereoCamStreamer plugin (unreal/StereoCamStreamer/).
+    TCP server for the UnrealStereoCam plugin (unreal/UnrealStereoCam/).
 
     Unreal renders the navcams with each frame and pushes them here over one
     connection, so no UnrealCV render-on-demand — and no game-thread stall —
@@ -110,7 +110,7 @@ class FrameStreamReceiver:
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
         self._log.info(f'Frame stream: listening on {self._addr[0]}:{self._addr[1]} '
-                       f'for the StereoCamStreamer plugin.')
+                       f'for the UnrealStereoCam plugin.')
 
     def stop(self) -> None:
         self._stop.set()
@@ -235,7 +235,7 @@ class FrameStreamReceiver:
 
 
 class LifecycleStereoDepth(rclpy.lifecycle.Node):
-    """Stereo matching node fed by the StereoCamStreamer plugin over TCP."""
+    """Stereo matching node fed by the UnrealStereoCam plugin over TCP."""
 
     def __init__(self, node_name: str, **kwargs):
         super().__init__(node_name, **kwargs)
@@ -247,7 +247,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self.cv_bridge = CvBridge()
         self._is_active = False
 
-        # Frames are pushed by the StereoCamStreamer plugin over TCP.
+        # Frames are pushed by the UnrealStereoCam plugin over TCP.
         self._stream: Optional[FrameStreamReceiver] = None
         self._last_stream_fid: int = -1
 
@@ -268,7 +268,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self.declare_parameters(
             namespace='',
             parameters=[
-                # The StereoCamStreamer plugin (unreal/StereoCamStreamer/) pushes
+                # The UnrealStereoCam plugin (unreal/UnrealStereoCam/) pushes
                 # frames to this TCP server: each SceneCapture renders with the
                 # game frame, so there is no render-on-demand and no game stall.
                 ('stream_bind_ip',          rclpy.Parameter.Type.STRING),
@@ -276,11 +276,11 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                 ('left_camera_id',          rclpy.Parameter.Type.INTEGER),
                 ('right_camera_id',         rclpy.Parameter.Type.INTEGER),
                 ('center_camera_id',        rclpy.Parameter.Type.INTEGER),
-                # Stream cam id of the object-segmentation capture (StereoCamStreamer
+                # Stream cam id of the object-segmentation capture (UnrealStereoCam
                 # MaskCamId). < 0 disables the mask.
                 ('mask_camera_id',          rclpy.Parameter.Type.INTEGER),
                 # Stream cam id of the plugin's ground-truth depth capture on the
-                # central camera (StereoCamStreamer DepthCamId). < 0 disables it.
+                # central camera (UnrealStereoCam DepthCamId). < 0 disables it.
                 ('depth_ground_truth_camera_id', rclpy.Parameter.Type.INTEGER),
                 # Legend for the object mask: "<stencil_id>:<name>" entries, one
                 # per tagged class, published as JSON on object_mask_mapping so a
@@ -433,7 +433,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
 
         Stream mode has no UnrealCV to measure, so the geometry is declared:
         baseline_m and hfov_deg from parameters, image size from the frames,
-        the eyes co-rotated (SGBM requires it anyway — the StereoCamStreamer
+        the eyes co-rotated (SGBM requires it anyway — the UnrealStereoCam
         captures must share a rotation), and the centre camera on the baseline
         at center_offset_m from the left eye (midpoint when negative).
         """
@@ -464,7 +464,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
 
     def _capture_from_stream(self):
         """
-        Take the newest same-tick pair from the StereoCamStreamer plugin.
+        Take the newest same-tick pair from the UnrealStereoCam plugin.
 
         Frames were rendered with the game frame and pushed here — no UnrealCV,
         no game-thread stall. Returns None when there is nothing new to
@@ -476,7 +476,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                                        self.center_camera_id)
         if got is None:
             self.get_logger().warn(
-                'No streamed frames yet. Is the StereoCamStreamer component in '
+                'No streamed frames yet. Is the UnrealStereoCam component in '
                 'the level, and the game playing?', throttle_duration_sec=15.0)
             return None
         left, right, center, fid, age = got
@@ -928,27 +928,27 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                                    and self.get_parameter('enable_shadow_mask').value)
         hz                    = self.get_parameter('image_reading_hz_rate').value
 
-        # Frames come from the StereoCamStreamer plugin and the rig geometry from
+        # Frames come from the UnrealStereoCam plugin and the rig geometry from
         # parameters. Nothing can be measured, so the two geometry inputs are
         # mandatory.
         if self.baseline_m_param <= 0.0 or self.hfov_deg_param <= 0.0:
             raise ValueError(
                 'the rig cannot be measured from a stream: set baseline_m and '
                 'hfov_deg to the real rig values (they are required).')
-        # The object mask is served by a dedicated StereoCamStreamer capture
+        # The object mask is served by a dedicated UnrealStereoCam capture
         # (post-process material over the Custom Depth-Stencil buffer). It works
         # as long as mask_camera_id names that capture.
         if self.enable_object_mask:
             if self.mask_camera_id is None or self.mask_camera_id < 0:
                 self.get_logger().warn(
                     'enable_object_mask is on but mask_camera_id is unset '
-                    '(< 0): the mask needs the StereoCamStreamer segmentation '
+                    '(< 0): the mask needs the UnrealStereoCam segmentation '
                     'capture. Disabling the object mask.')
                 self.enable_object_mask = False
             else:
                 self.get_logger().info(
                     f'Object mask served from stream cam id '
-                    f'{self.mask_camera_id} (StereoCamStreamer segmentation '
+                    f'{self.mask_camera_id} (UnrealStereoCam segmentation '
                     f'capture).')
         self._baseline_m = self.baseline_m_param
         self._swap_lr = False

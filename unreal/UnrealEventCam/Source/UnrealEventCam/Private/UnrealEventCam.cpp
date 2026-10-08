@@ -75,7 +75,7 @@ void UUnrealEventCam::EndPlay(const EEndPlayReason::Type Reason)
 
 TArray<FString> UUnrealEventCam::GetSceneCaptureNames() const
 {
-	// Same discovery as StereoCamStreamer: the owner's SceneCapture2Ds and every
+	// Same discovery as UnrealStereoCam: the owner's SceneCapture2Ds and every
 	// instance in the world when placed in a level, plus the blueprint's own
 	// components when editing the blueprint (this component is then a template
 	// with no owner).

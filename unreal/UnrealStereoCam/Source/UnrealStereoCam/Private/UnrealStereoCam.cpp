@@ -1,4 +1,4 @@
-#include "StereoCamStreamer.h"
+#include "UnrealStereoCam.h"
 
 #include "Sockets.h"
 #include "SocketSubsystem.h"
@@ -29,12 +29,12 @@ namespace
 	static_assert(sizeof(FNavFrameHeader) == 24, "header must be 24 bytes");
 }
 
-UStereoCamStreamer::UStereoCamStreamer()
+UUnrealStereoCam::UUnrealStereoCam()
 {
 	PrimaryComponentTick.bCanEverTick = true;
 }
 
-void UStereoCamStreamer::BeginPlay()
+void UUnrealStereoCam::BeginPlay()
 {
 	Super::BeginPlay();
 
@@ -56,7 +56,7 @@ void UStereoCamStreamer::BeginPlay()
 	SenderThread = FRunnableThread::Create(this, TEXT("StereoCamSender"));
 }
 
-void UStereoCamStreamer::EndPlay(const EEndPlayReason::Type Reason)
+void UUnrealStereoCam::EndPlay(const EEndPlayReason::Type Reason)
 {
 	bStopSender = true;
 	if (SenderThread)
@@ -80,7 +80,7 @@ void UStereoCamStreamer::EndPlay(const EEndPlayReason::Type Reason)
 	Super::EndPlay(Reason);
 }
 
-TArray<FString> UStereoCamStreamer::GetSceneCaptureNames() const
+TArray<FString> UUnrealStereoCam::GetSceneCaptureNames() const
 {
 	TSet<FString> Names;
 
@@ -151,7 +151,7 @@ namespace
 	}
 }
 
-void UStereoCamStreamer::ResolveCapture(const FName& Name, int32 CamId)
+void UUnrealStereoCam::ResolveCapture(const FName& Name, int32 CamId)
 {
 	if (Name.IsNone())
 	{
@@ -188,7 +188,7 @@ void UStereoCamStreamer::ResolveCapture(const FName& Name, int32 CamId)
 			{
 				Found = C;
 				UE_LOG(LogTemp, Log,
-				       TEXT("StereoCamStreamer: '%s' matched component '%s' on "
+				       TEXT("UnrealStereoCam: '%s' matched component '%s' on "
 				            "'%s' (underscores/case ignored)."),
 				       *Name.ToString(), *C->GetName(),
 				       *GetNameSafe(C->GetOwner()));
@@ -205,7 +205,7 @@ void UStereoCamStreamer::ResolveCapture(const FName& Name, int32 CamId)
 			                          *GetNameSafe(C->GetOwner())));
 		}
 		UE_LOG(LogTemp, Error,
-		       TEXT("StereoCamStreamer: no SceneCapture2D named '%s' anywhere in "
+		       TEXT("UnrealStereoCam: no SceneCapture2D named '%s' anywhere in "
 		            "the world. Available: [%s]"),
 		       *Name.ToString(), *FString::Join(Names, TEXT(", ")));
 		return;
@@ -221,7 +221,7 @@ void UStereoCamStreamer::ResolveCapture(const FName& Name, int32 CamId)
 		RT->UpdateResourceImmediate(true);
 		Found->TextureTarget = RT;
 		UE_LOG(LogTemp, Log,
-		       TEXT("StereoCamStreamer: created a %dx%d RGBA8 render target for '%s'."),
+		       TEXT("UnrealStereoCam: created a %dx%d RGBA8 render target for '%s'."),
 		       CaptureWidth, CaptureHeight, *Name.ToString());
 	}
 
@@ -263,7 +263,7 @@ void UStereoCamStreamer::ResolveCapture(const FName& Name, int32 CamId)
 		PP.bOverride_AutoExposureMaxBrightness = true;
 		PP.AutoExposureMaxBrightness = MaxEv;
 		UE_LOG(LogTemp, Log,
-		       TEXT("StereoCamStreamer: '%s' auto-exposure clamped to EV100 "
+		       TEXT("UnrealStereoCam: '%s' auto-exposure clamped to EV100 "
 		            "[%.2f, %.2f]."),
 		       *Name.ToString(), MinEv, MaxEv);
 	}
@@ -272,19 +272,19 @@ void UStereoCamStreamer::ResolveCapture(const FName& Name, int32 CamId)
 	Entry.Capture = Found;
 	Entry.CamId = CamId;
 	Active.Add(Entry);
-	UE_LOG(LogTemp, Log, TEXT("StereoCamStreamer: '%s' -> cam id %d (%dx%d)."),
+	UE_LOG(LogTemp, Log, TEXT("UnrealStereoCam: '%s' -> cam id %d (%dx%d)."),
 	       *Name.ToString(), CamId,
 	       Found->TextureTarget->SizeX, Found->TextureTarget->SizeY);
 }
 
-void UStereoCamStreamer::AddCenterDepthCapture()
+void UUnrealStereoCam::AddCenterDepthCapture()
 {
 	const FStereoCamResolved* Center = Active.FindByPredicate(
 		[this](const FStereoCamResolved& R) { return R.CamId == CenterCamId && R.Capture; });
 	if (!Center || !Center->Capture->TextureTarget)
 	{
 		UE_LOG(LogTemp, Warning,
-		       TEXT("StereoCamStreamer: no centre capture, so no ground-truth depth."));
+		       TEXT("UnrealStereoCam: no centre capture, so no ground-truth depth."));
 		return;
 	}
 	USceneCaptureComponent2D* Source = Center->Capture;
@@ -318,11 +318,11 @@ void UStereoCamStreamer::AddCenterDepthCapture()
 	Entry.Format = 2;
 	Active.Add(Entry);
 	UE_LOG(LogTemp, Log,
-	       TEXT("StereoCamStreamer: ground-truth depth of '%s' -> cam id %d (%dx%d, R32F cm)."),
+	       TEXT("UnrealStereoCam: ground-truth depth of '%s' -> cam id %d (%dx%d, R32F cm)."),
 	       *Source->GetName(), DepthCamId, RT->SizeX, RT->SizeY);
 }
 
-bool UStereoCamStreamer::TryConnect()
+bool UUnrealStereoCam::TryConnect()
 {
 	// Called only from Run() (background thread). Non-blocking connect with a
 	// short bounded wait: FSocket::Connect() on a BLOCKING socket can take the
@@ -335,7 +335,7 @@ bool UStereoCamStreamer::TryConnect()
 	FIPv4Address Ip;
 	if (!FIPv4Address::Parse(ServerIp, Ip))
 	{
-		UE_LOG(LogTemp, Error, TEXT("StereoCamStreamer: bad ServerIp '%s'."), *ServerIp);
+		UE_LOG(LogTemp, Error, TEXT("UnrealStereoCam: bad ServerIp '%s'."), *ServerIp);
 		return false;
 	}
 	TSharedRef<FInternetAddr> Addr = Subsystem->CreateInternetAddr();
@@ -361,7 +361,7 @@ bool UStereoCamStreamer::TryConnect()
 		if (!bLoggedWaiting)
 		{
 			UE_LOG(LogTemp, Warning,
-			       TEXT("StereoCamStreamer: cannot reach %s:%d yet — retrying "
+			       TEXT("UnrealStereoCam: cannot reach %s:%d yet — retrying "
 			            "every 3 s until the ROS stereo node is up."),
 			       *ServerIp, ServerPort);
 			bLoggedWaiting = true;
@@ -374,11 +374,11 @@ bool UStereoCamStreamer::TryConnect()
 	bLoggedWaiting = false;
 	Socket = NewSocket;
 	bConnected = true;
-	UE_LOG(LogTemp, Log, TEXT("StereoCamStreamer: connected to %s:%d."), *ServerIp, ServerPort);
+	UE_LOG(LogTemp, Log, TEXT("UnrealStereoCam: connected to %s:%d."), *ServerIp, ServerPort);
 	return true;
 }
 
-void UStereoCamStreamer::TickComponent(float DeltaTime, ELevelTick TickType,
+void UUnrealStereoCam::TickComponent(float DeltaTime, ELevelTick TickType,
                                     FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
@@ -413,7 +413,7 @@ namespace
 	};
 }
 
-void UStereoCamStreamer::PumpCaptures()
+void UUnrealStereoCam::PumpCaptures()
 {
 	// Gather render-target pointers on the game thread (the only step that
 	// must be here), then post ONE render command that owns the whole readback
@@ -527,7 +527,7 @@ namespace
 	}
 }
 
-uint32 UStereoCamStreamer::Run()
+uint32 UUnrealStereoCam::Run()
 {
 	// Hold our own reference for the thread's lifetime, so the ready-frame
 	// queue stays valid even as the component drops its reference at EndPlay.
@@ -588,14 +588,14 @@ uint32 UStereoCamStreamer::Run()
 				while (S->Ready.Dequeue(Discard)) {}    // stale frames, drop them
 			}
 			UE_LOG(LogTemp, Warning,
-			       TEXT("StereoCamStreamer: link lost; redialling every 3 s."));
+			       TEXT("UnrealStereoCam: link lost; redialling every 3 s."));
 		}
 	}
 	CloseSocket(Socket);
 	return 0;
 }
 
-void UStereoCamStreamer::Stop()
+void UUnrealStereoCam::Stop()
 {
 	bStopSender = true;
 }

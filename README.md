@@ -2,7 +2,7 @@
 
 ROS 2 (Jazzy) guidance, navigation and control stack for a lunar rover simulated
 in Unreal Engine. Sensor data crosses from Unreal into ROS over dedicated Unreal
-plugins (StereoCamStreamer for the cameras, UnrealLidarCam for the lidar, a TCP
+plugins (UnrealStereoCam for the cameras, UnrealLidarCam for the lidar, a TCP
 link for the rover); every component runs in its own container and talks over Zenoh.
 
 ## Quick start
@@ -51,7 +51,7 @@ docker compose exec component_local_mapping \
 
 | Package | Role |
 |---|---|
-| `component_stereo_depth` | Receives the three navcams from the StereoCamStreamer plugin and computes stereo depth. |
+| `component_stereo_depth` | Receives the three navcams from the UnrealStereoCam plugin and computes stereo depth. |
 | `component_lidar` | Lidar point cloud from the UnrealLidarCam plugin (`lidar/points`). |
 | `component_local_mapping` | Builds a local DEM and occupancy grid from the central navcam's depth. |
 | `component_path_planner` | Global path over the elevation grid. |
@@ -65,7 +65,7 @@ Three independent links, and they fail differently:
 
 | Link | Transport | Carries |
 |---|---|---|
-| StereoCamStreamer | TCP 3004 | navcam frames + object mask (Unreal → ROS) |
+| UnrealStereoCam | TCP 3004 | navcam frames + object mask (Unreal → ROS) |
 | UnrealLidarCam | TCP 3007 | lidar scans, configurable aperture (Unreal → ROS) |
 | Rover plugin | TCP 3003 | wheel commands out, odometry in |
 
@@ -150,7 +150,7 @@ quantisation of one.
 
 ### How frames arrive
 
-The **StereoCamStreamer** plugin (`unreal/StereoCamStreamer/` — build
+The **UnrealStereoCam** plugin (`unreal/UnrealStereoCam/` — build
 instructions in its README) renders each navcam **with the game frame** on the
 render thread, reads it back asynchronously, and pushes it to the node over TCP
 port 3004 — no render-on-demand, no game-thread stall. `component_stereo_depth`
@@ -166,7 +166,7 @@ frame or two of slack is fine.
 
 SGBM assumes epipolar lines are image rows. That holds only when the two eyes
 share a rotation and are offset purely along the left camera's right axis, so the
-StereoCamStreamer captures must be **co-rotated and offset laterally** on the
+UnrealStereoCam captures must be **co-rotated and offset laterally** on the
 mount, with the central capture between them.
 
 A stream cannot be measured, so the geometry is **declared from parameters** in
@@ -209,7 +209,7 @@ whenever `d ≤ u`, and distant surfaces have small `d`.
 Exposure matters for matching: if the two eyes auto-expose independently they
 diverge most when a bright source is in one field of view, and the photometric
 mismatch looks exactly like a glare effect. Clamp or lock the captures' exposure
-in Unreal — see the StereoCamStreamer README's **Exposure** section (Min/Max
+in Unreal — see the UnrealStereoCam README's **Exposure** section (Min/Max
 EV100, or a full manual lock).
 
 ## Local mapping

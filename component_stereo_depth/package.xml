@@ -3,7 +3,7 @@
 <package format="3">
   <name>component_stereo_depth</name>
   <version>0.0.0</version>
-  <description>Stereo disparity and depth from the simulated StereoCamStreamer stereo rig for the GNC Moon Simulator.</description>
+  <description>Stereo disparity and depth from the simulated UnrealStereoCam stereo rig for the GNC Moon Simulator.</description>
   <maintainer email="raul.castilla@uni.lu">Raul Castilla-Arquillo</maintainer>
   <license>MIT License</license>
 
