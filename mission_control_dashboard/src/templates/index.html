@@ -175,6 +175,13 @@
   main[data-view="cams"]  #cams { grid-template-columns: repeat(4, minmax(0, 1fr));
                                   grid-template-rows: repeat(2, minmax(0, 1fr)); }
   main[data-view="cams"]  .cam-row { display: contents; }
+  /* click a feed to enlarge it to the whole tab (as on the camera wall); click
+     again or press Esc to return */
+  main[data-view="cams"]  #cams .feed { cursor: zoom-in; }
+  main[data-view="cams"]  #cams[data-focus] { grid-template-columns: minmax(0, 1fr);
+                                              grid-template-rows: minmax(0, 1fr); }
+  main[data-view="cams"]  #cams[data-focus] .feed { display: none; }
+  main[data-view="cams"]  #cams[data-focus] .feed.focus { display: block; cursor: zoom-out; }
   main[data-view="map"]   { grid-template-columns: 1fr; }
   main[data-view="map"]   #col-cams, main[data-view="map"]  #col-right { display: none; }
   main[data-view="dem"]   { grid-template-columns: 1fr; }
@@ -946,7 +953,27 @@ $('btn-map').onclick = () => socket.emit('refresh_map', {});
    must resize to their new box, so redraw them once on the next frame. The
    choice is remembered across refreshes. */
 const mainEl = document.querySelector('main');
+
+/* CAMERAS tab: click a feed to enlarge it, click again or Esc to return. */
+const camsEl = $('cams');
+function focusFeed(feed) {
+  camsEl.querySelectorAll('.feed').forEach(f => f.classList.toggle('focus', f === feed));
+  if (feed) camsEl.dataset.focus = feed.id; else delete camsEl.dataset.focus;
+  requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));  /* legends follow */
+}
+camsEl.querySelectorAll('.feed').forEach(feed => {
+  feed.title = feed.querySelector('.nosig').textContent.replace(/ — NO SIGNAL$/, '');
+  feed.addEventListener('click', () => {
+    if (mainEl.dataset.view !== 'cams') return;
+    focusFeed(camsEl.dataset.focus === feed.id ? null : feed);
+  });
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && camsEl.dataset.focus) focusFeed(null);
+});
+
 function setView(v) {
+  if (v !== 'cams' && camsEl.dataset.focus) focusFeed(null);
   mainEl.dataset.view = v;
   document.querySelectorAll('.viewtabs button')
           .forEach(b => b.classList.toggle('on', b.dataset.view === v));

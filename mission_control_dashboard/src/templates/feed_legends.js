@@ -148,7 +148,7 @@
     const rows = [];
     ['ground', 'objects', 'other', 'sky'].forEach(group => {
       const members = ids.filter(id => groupOf(id) === group);
-      if (!members.length && group !== 'sky') return;
+      if (!members.length) return;
       rows.push(`<div class="fl-grp">${group}</div>`);
       members.forEach(id => {
         const c = MASK_COLOURS[id];
@@ -156,7 +156,6 @@
         rows.push(row(sw, id, legend[id].replace('_', ' ')));
       });
     });
-    rows.push(row('background:#000', '&ndash;', 'untagged'));
     box(feed, 'mask').innerHTML = rows.join('');
   }
 
