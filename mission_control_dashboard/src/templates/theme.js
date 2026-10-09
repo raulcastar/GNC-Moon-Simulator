@@ -69,6 +69,62 @@
     window.dispatchEvent(new Event('resize'));       /* views that measure text re-layout */
   }
 
+  /* ---- logo: a shaded moon with craters, circled by an orbit and a spacecraft ----
+     The back half of the orbit is drawn first so the moon hides it. The header logo
+     uses the theme variables; the favicon gets the same drawing with the colours
+     filled in (an icon cannot read CSS variables). */
+  function logoSvg(c, cls) {
+    return `<svg ${cls ? `class="${cls}" ` : ''}xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true">` +
+      `<g fill="none" stroke="${c.accent}" stroke-width="2.6" stroke-linecap="round" transform="rotate(-20 32 32)">` +
+      `<path d="M3 32 A29 10 0 0 1 61 32"/></g>` +
+      `<circle cx="32" cy="32" r="17" fill="${c.panel2}" stroke="${c.text}" stroke-width="2.2"/>` +
+      `<path d="M32 15 A17 17 0 0 1 32 49 A9 17 0 0 0 32 15 Z" fill="${c.bg}" opacity=".6"/>` +
+      `<g fill="none" stroke="${c.dim}" stroke-width="1.6"><circle cx="25" cy="27" r="4"/>` +
+      `<circle cx="31" cy="40" r="3"/><circle cx="35" cy="22" r="2"/></g>` +
+      `<g transform="rotate(-20 32 32)"><path d="M3 32 A29 10 0 0 0 61 32" fill="none" stroke="${c.accent}" ` +
+      `stroke-width="2.6" stroke-linecap="round"/><circle cx="46.5" cy="40.7" r="3" fill="${c.amber}"/></g></svg>`;
+  }
+  const CSS_COLOURS = { accent: 'var(--accent)', panel2: 'var(--panel2)', text: 'var(--text)', bg: 'var(--bg)',
+                        dim: 'var(--dim)', amber: 'var(--amber)' };
+  /* One-colour outline of the logo, used as a mask for the empty-feed watermark. */
+  const MARK = 'url("data:image/svg+xml,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" stroke="#000" stroke-linecap="round">' +
+    '<circle cx="32" cy="32" r="17" stroke-width="2.2"/><circle cx="25" cy="27" r="4" stroke-width="1.6"/>' +
+    '<circle cx="31" cy="40" r="3" stroke-width="1.6"/><circle cx="35" cy="22" r="2" stroke-width="1.6"/>' +
+    '<g transform="rotate(-20 32 32)"><path d="M3 32 A29 10 0 0 0 61 32" stroke-width="2.6"/>' +
+    '<circle cx="46.5" cy="40.7" r="3" fill="#000" stroke="none"/></g></svg>') + '")';
+
+  const style = document.createElement('style');
+  style.textContent = `
+    .gnc-logo { width: calc(30px * var(--fs, 1)); height: calc(30px * var(--fs, 1)); flex: 0 0 auto; display: block; }
+    header.hero .gnc-logo { width: 68px; height: 68px; margin: 0 auto 10px;
+                            animation: gnc-glow 4s ease-in-out infinite; }
+    @keyframes gnc-glow { 0%, 100% { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 35%, transparent)); }
+                          50%      { filter: drop-shadow(0 0 14px color-mix(in srgb, var(--accent) 60%, transparent)); } }
+    @media (prefers-reduced-motion: reduce) { header.hero .gnc-logo { animation: none; } }
+    .nosig { flex-direction: column; gap: 10px; }
+    .nosig::before { content: ''; width: clamp(26px, 18%, 72px); aspect-ratio: 1; flex: 0 0 auto;
+                     background: var(--view-text, #4d6580); opacity: .45;
+                     -webkit-mask: ${MARK} center / contain no-repeat; mask: ${MARK} center / contain no-repeat; }`;
+  document.head.appendChild(style);
+
+  function setFavicon(vars) {
+    const c = {};
+    for (const k of Object.keys(CSS_COLOURS)) c[k] = vars['--' + k];
+    let link = document.querySelector('link[rel="icon"]');
+    if (!link) { link = document.createElement('link'); link.rel = 'icon'; document.head.appendChild(link); }
+    link.href = 'data:image/svg+xml,' + encodeURIComponent(logoSvg(c));
+  }
+
+  /* The logo goes in front of each window's title. */
+  document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('header .brand').forEach(b => {
+      if (!b.previousElementSibling || !b.previousElementSibling.classList.contains('gnc-logo')) {
+        b.insertAdjacentHTML('beforebegin', logoSvg(CSS_COLOURS, 'gnc-logo'));
+      }
+    });
+  });
+
   function apply(name) {
     const theme = THEMES[name] || THEMES.mission;
     const root = document.documentElement;
@@ -76,6 +132,7 @@
     root.dataset.theme = THEMES[name] ? name : 'mission';
     root.style.colorScheme = theme.light ? 'light' : 'dark';
     window.GNC_THEME = root.dataset.theme;
+    setFavicon(theme.vars);
     window.dispatchEvent(new Event('gnc-theme'));
   }
 
