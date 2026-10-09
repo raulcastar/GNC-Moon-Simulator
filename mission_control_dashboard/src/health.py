@@ -28,7 +28,10 @@ class HealthMixin:
         threading.Thread(target=self._restart_node_impl, args=(name,), daemon=True).start()
 
     def _console(self, level: str, text: str) -> None:
-        """Log to ROS and mirror onto the operator console."""
+        """
+        Log to ROS. The consoles show it through /rosout like every other node's
+        message (sending it to them here as well printed it twice).
+        """
         # One call site per severity: rclpy refuses a call site whose severity changes
         # between calls ("Logger severity cannot be changed between calls").
         logger = self.get_logger()
@@ -38,8 +41,6 @@ class HealthMixin:
             logger.warn(text)
         else:
             logger.info(text)
-        socketio.emit('log', {'level': level, 'node': 'dashboard',
-                              'text': text, 'stamp': time.time()})
 
     def _restart_node_impl(self, name: str) -> None:
         """

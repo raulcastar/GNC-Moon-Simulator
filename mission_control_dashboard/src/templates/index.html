@@ -150,6 +150,12 @@
     padding: 2px 8px; cursor: pointer; border-radius: 2px;
   }
   #console-bar button.on { color: var(--accent); border-color: var(--accent); }
+  #console-bar input, #console-bar select {
+    background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 2px;
+    font-family: var(--mono); font-size: 10px; padding: 2px 6px; letter-spacing: 0;
+  }
+  #console-bar input { width: 180px; }
+  #console-bar select { max-width: 220px; }
   #log {
     flex: 1; overflow-y: auto; padding: 4px 10px; font-size: 11.5px; line-height: 1.5;
   }
@@ -366,10 +372,12 @@
   <div class="panel-title" id="console-bar">
     <span class="tag">≡</span>SYSTEM CONSOLE — /rosout
     <span style="flex:1"></span>
+    <input id="log-text" placeholder="filter text…" spellcheck="false">
+    <select id="log-node" title="Only one node's messages"><option value="">all nodes</option></select>
     <button data-f="ALL" class="on">ALL</button>
-    <button data-f="WARN">WARN+</button>
-    <button data-f="ERROR">ERR</button>
-    <button id="btn-pause">PAUSE</button>
+    <button data-f="WARN" id="lf-warn" title="Warnings and errors">WARN+</button>
+    <button data-f="ERROR" id="lf-err" title="Errors only">ERR</button>
+    <button id="btn-pause" title="Hold new messages (they are kept, not dropped)">PAUSE</button>
     <button id="btn-clear">CLEAR</button>
   </div>
   <div id="log"></div>
@@ -513,35 +521,71 @@ $('btn-sys').onclick = () => window.open(`http://${window.location.hostname || '
 $('btn-snap').onclick = () => { window.location.href = '/snapshot.zip'; addLocal('INFO', 'Snapshot downloaded.'); };
 $('btn-rec').onclick = () => socket.emit('bag', { action: bag.recording ? 'stop' : 'start' });
 
-/* ---------------- console ---------------- */
-let logFilter = 'ALL', paused = false;
-const logDiv = $('log');
+/* ---------------- console ----------------
+   Every message is kept (the last LOG_KEEP) and the view is that buffer through
+   the filters: severity, node and text. Changing a filter re-renders it, so
+   nothing hidden by a filter is lost. PAUSE holds new rows (counted on RESUME). */
+const LOG_KEEP = 2000;
 const LVL = { INFO: 1, WARN: 2, ERROR: 3, FATAL: 3 };
-function addRow(level, node, text, stamp) {
-  if (paused) return;
-  if (logFilter === 'WARN'  && (LVL[level]||1) < 2) return;
-  if (logFilter === 'ERROR' && (LVL[level]||1) < 3) return;
-  const atBottom = logDiv.scrollHeight - logDiv.scrollTop - logDiv.clientHeight < 40;
-  const d = document.createElement('div');
-  d.className = 'row';
-  const ts = new Date((stamp || Date.now()/1000) * 1000).toISOString().substr(11, 8);
-  d.innerHTML = `<span class="t">${ts}</span> <span class="${level}">${level.padEnd(5)}</span> ` +
-                `<span class="n">[${node}]</span> <span class="${level}">${escHtml(text)}</span>`;
-  logDiv.appendChild(d);
-  while (logDiv.childNodes.length > 500) logDiv.removeChild(logDiv.firstChild);
-  if (atBottom) logDiv.scrollTop = logDiv.scrollHeight;
+const logDiv = $('log');
+let logBuf = [], logFilter = 'ALL', logNode = '', logText = '', paused = false, held = 0;
+const lvlOf = l => LVL[l] || 1;
+const passes = e => (logFilter === 'ALL' || lvlOf(e.level) >= (logFilter === 'WARN' ? 2 : 3)) &&
+                    (!logNode || e.node === logNode) &&
+                    (!logText || (e.node + ' ' + e.text).toLowerCase().includes(logText));
+function rowHtml(e) {
+  const ts = new Date((e.stamp || Date.now() / 1000) * 1000).toISOString().substr(11, 8);
+  const lv = escHtml(e.level);
+  return `<div class="row"><span class="t">${ts}</span> <span class="${lv}">${lv.padEnd(5)}</span> ` +
+         `<span class="n">[${escHtml(e.node)}]</span> <span class="${lv}">${escHtml(e.text)}</span></div>`;
 }
-const addLocal = (lvl, txt) => addRow(lvl, 'console', txt, Date.now()/1000);
+function renderLog() {
+  const shown = logBuf.filter(passes);
+  logDiv.innerHTML = shown.length ? shown.slice(-600).map(rowHtml).join('')
+    : `<div class="row t">${logBuf.length ? 'no message matches the filters' : 'no messages yet'}</div>`;
+  logDiv.scrollTop = logDiv.scrollHeight;
+  updateLogBar();
+}
+function updateLogBar() {
+  const w = logBuf.filter(e => lvlOf(e.level) >= 2).length, er = logBuf.filter(e => lvlOf(e.level) >= 3).length;
+  $('lf-warn').textContent = `WARN+ ${w}`; $('lf-err').textContent = `ERR ${er}`;
+  $('btn-pause').textContent = paused ? (held ? `RESUME (${held} new)` : 'RESUME') : 'PAUSE';
+  const nodes = [...new Set(logBuf.map(e => e.node))].sort(), sel = $('log-node');
+  if (sel.options.length - 1 !== nodes.length) {
+    sel.innerHTML = '<option value="">all nodes</option>' +
+      nodes.map(n => `<option value="${escHtml(n)}"${n === logNode ? ' selected' : ''}>${escHtml(n)}</option>`).join('');
+  }
+}
+function addRow(level, node, text, stamp) {
+  const e = { level: String(level || 'INFO'), node: String(node || '?'), text: String(text), stamp };
+  logBuf.push(e);
+  if (logBuf.length > LOG_KEEP) logBuf.splice(0, logBuf.length - LOG_KEEP);
+  if (paused) { held++; updateLogBar(); return; }
+  if (!passes(e)) { updateLogBar(); return; }
+  const atBottom = logDiv.scrollHeight - logDiv.scrollTop - logDiv.clientHeight < 40;
+  if (logDiv.firstChild && !logDiv.firstChild.querySelector('.n')) logDiv.innerHTML = '';   /* the placeholder */
+  logDiv.insertAdjacentHTML('beforeend', rowHtml(e));
+  while (logDiv.childNodes.length > 600) logDiv.removeChild(logDiv.firstChild);
+  if (atBottom) logDiv.scrollTop = logDiv.scrollHeight;
+  updateLogBar();
+}
+const addLocal = (lvl, txt) => addRow(lvl, 'console', txt, Date.now() / 1000);
 socket.on('log', m => addRow(m.level, m.node, m.text, m.stamp));
 
 document.querySelectorAll('#console-bar button[data-f]').forEach(b =>
   b.onclick = () => {
     logFilter = b.dataset.f;
-    document.querySelectorAll('#console-bar button[data-f]').forEach(x => x.classList.remove('on'));
-    b.classList.add('on');
+    document.querySelectorAll('#console-bar button[data-f]').forEach(x => x.classList.toggle('on', x === b));
+    renderLog();
   });
-$('btn-pause').onclick = e => { paused = !paused; e.target.textContent = paused ? 'RESUME' : 'PAUSE'; e.target.classList.toggle('on', paused); };
-$('btn-clear').onclick = () => logDiv.innerHTML = '';
+$('log-node').onchange = e => { logNode = e.target.value; renderLog(); };
+$('log-text').oninput = e => { logText = e.target.value.trim().toLowerCase(); renderLog(); };
+$('btn-pause').onclick = e => {
+  paused = !paused; e.target.classList.toggle('on', paused);
+  if (!paused) { held = 0; renderLog(); } else updateLogBar();
+};
+$('btn-clear').onclick = () => { logBuf = []; held = 0; renderLog(); };
+renderLog();
 
 /* ---------------- lidar: 3D view (shared, lidar_view.js) ---------------- */
 const lidarView = LidarView($('lidarView'), { info: $('lidar-info') });

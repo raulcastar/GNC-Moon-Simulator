@@ -85,7 +85,14 @@
   #bag-body td.when { color: var(--dim); }
 
   /* ---- player ---- */
-  #player { padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; }
+  #player { padding: 10px 14px; display: flex; flex-direction: column; gap: 9px; }
+  .transport { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+  .transport .grp { display: inline-flex; align-items: center; gap: 6px; }
+  .transport label { color: var(--dim); font-size: 10px; letter-spacing: 1px; }
+  .transport .unit { color: var(--dim); font-size: 10px; }
+  .transport input[type=number] { width: 64px; }
+  #selected { padding: 8px 12px; }
+  #selected .hint { padding: 2px 0; }
   #now { font-size: 13px; color: var(--accent); word-break: break-all; min-height: 18px; }
   #now small { display: block; color: var(--dim); font-size: 10px; margin-top: 2px; letter-spacing: 1px; }
   #bar { position: relative; height: 16px; background: var(--bg); border: 1px solid var(--line); border-radius: 3px;
@@ -95,13 +102,10 @@
           border-right: 2px solid var(--accent); }
   #times { display: flex; justify-content: space-between; color: var(--dim); font-size: 10px; margin-top: -6px; }
   #times b { color: var(--text); font-weight: normal; }
-  .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   button.btn { font-size: 11px; padding: 7px 14px; color: var(--text); background: var(--panel2); }
   button.btn:hover:not(:disabled) { border-color: var(--cyan); color: var(--cyan); }
   button.btn.play { border-color: var(--accent); color: var(--accent); }
   button.btn.stop:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
-  .opts { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; align-items: center; }
-  .opts label { color: var(--dim); font-size: 10px; letter-spacing: 1px; }
   .rates { display: flex; gap: 4px; flex-wrap: wrap; }
   .rates button { font-size: 10px; padding: 3px 8px; }
   .rates button.on { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: bold; }
@@ -145,8 +149,7 @@
   #bag-body .nt { display: block; color: var(--dim); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* ---- selected bag: rename, notes, delete ---- */
-  #manage { display: none; grid-template-columns: auto 1fr auto; gap: 6px 8px; align-items: center;
-            border: 1px dashed var(--line); border-radius: 4px; padding: 8px; }
+  #manage { display: none; grid-template-columns: auto 1fr auto; gap: 6px 8px; align-items: center; }
   #manage.open { display: grid; }
   #manage label { color: var(--dim); font-size: 10px; letter-spacing: 1px; }
   #m-msg { font-size: 10.5px; color: var(--dim); } #m-msg.err { color: var(--red); }
@@ -196,6 +199,22 @@
         <div class="hint" id="bag-hint"></div>
       </div>
     </div>
+
+    <!-- ============ SELECTED BAG ============ -->
+    <div class="panel" style="flex: 0 0 auto">
+      <div class="panel-title"><span class="tag">▸</span>SELECTED BAG<span class="n" id="sel-name"></span></div>
+      <div id="selected">
+        <div class="hint" id="manage-hint">Select a bag in the list to rename it, edit its notes or delete it.</div>
+        <div id="manage">
+          <label>NAME</label><input type="text" id="m-name" maxlength="80">
+          <button class="small" id="m-rename" title="Rename the bag folder">RENAME</button>
+          <label>NOTES</label><textarea id="m-notes" rows="2"></textarea>
+          <button class="small" id="m-save" title="Save the notes with the bag (notes.json)">SAVE</button>
+          <span></span><span id="m-msg"></span>
+          <button class="small danger" id="m-delete" title="Delete this bag from disk">DELETE</button>
+        </div>
+      </div>
+    </div>
     </div>
 
     <div class="col">
@@ -204,28 +223,16 @@
         <div class="panel-title"><span class="tag">▸</span>PLAYER<span class="n" id="state">idle</span></div>
         <div id="player">
           <div id="now">no bag selected<small>pick one on the left</small></div>
-          <div id="manage">
-            <label>NAME</label><input type="text" id="m-name" maxlength="80">
-            <button class="small" id="m-rename" title="Rename the bag folder">RENAME</button>
-            <label>NOTES</label><textarea id="m-notes" rows="2"></textarea>
-            <button class="small" id="m-save" title="Save the notes with the bag (notes.json)">SAVE</button>
-            <span></span><span id="m-msg"></span>
-            <button class="small danger" id="m-delete" title="Delete this bag from disk">DELETE</button>
-          </div>
           <div id="bar" class="off" title="Click to seek"><div id="fill"></div></div>
           <div id="times"><span><b id="t-pos">0:00</b> / <span id="t-dur">0:00</span></span><span id="t-left"></span></div>
-          <div class="controls">
+          <div class="transport">
             <button class="btn play" id="play" disabled>▶ PLAY</button>
             <button class="btn" id="pause" disabled>❚❚ PAUSE</button>
             <button class="btn stop" id="stop" disabled>■ STOP</button>
-          </div>
-          <div class="opts">
-            <label>SPEED</label>
-            <div class="rates" id="rates"></div>
-            <label>LOOP</label>
-            <div><input type="checkbox" id="loop"> <span class="hint" style="padding:0">start again at the end</span></div>
-            <label>START AT</label>
-            <div><input type="number" id="offset" min="0" step="1" value="0"> <span class="hint" style="padding:0">s into the bag</span></div>
+            <span class="grp"><label>SPEED</label><span class="rates" id="rates"></span></span>
+            <span class="grp"><label for="loop">LOOP</label><input type="checkbox" id="loop" title="Start again at the end"></span>
+            <span class="grp"><label for="offset">START</label><input type="number" id="offset" min="0" step="1" value="0"
+              title="Seconds into the bag to start from"><span class="unit">s</span></span>
           </div>
           <div id="msg" class="ok">Replayed topics reach every node as if live: open the
             OVERVIEW to watch. Stop Play in Unreal first.</div>
@@ -245,9 +252,8 @@
           <thead><tr><th>TOPIC (ticked = replayed)</th><th>TYPE</th><th class="num">MSGS</th></tr></thead>
           <tbody id="topic-body"></tbody></table>
         </div>
-        <div class="note">Topics marked <span style="color:var(--amber)">live</span> are recomputed by a running node
-          from the replayed sensors (local DEM, IMU, planner) or are commands, so they start unticked: replaying
-          them too would put two publishers on one topic. Tick them to see the recorded versions instead.</div>
+        <div class="note" title="A running node recomputes these from the replayed sensors (local DEM, IMU, planner), or they are commands. Replaying them too would put two publishers on one topic; tick them to see the recorded versions instead.">
+          <span style="color:var(--amber)">live</span> = recomputed by a running node, or a command: left out by default (hover for why).</div>
       </div>
     </div>
   </main>
@@ -311,7 +317,12 @@
       `${escHtml(t.name)}</label>${t.name in liveOutputs ? `<span class="live" title="Left out by default: ${escHtml(liveOutputs[t.name])}"> · live</span>` : ''}</td>` +
       `<td class="c" title="${escHtml(t.type)}">${escHtml(t.type.replace('/msg/', '/'))}</td>` +
       `<td class="num">${t.count}</td></tr>`).join('');
-    $('manage').classList.toggle('open', !!b && st.state !== 'playing' && st.state !== 'paused');
+    const busy = st.state === 'playing' || st.state === 'paused';
+    $('manage').classList.toggle('open', !!b && !busy && !b.recording);
+    $('sel-name').textContent = b ? b.name : '';
+    $('manage-hint').style.display = (!b || busy) ? '' : 'none';
+    $('manage-hint').textContent = !b ? 'Select a bag in the list to rename it, edit its notes or delete it.'
+                                      : 'Stop the replay to rename, edit or delete this bag.';
     if (b && document.activeElement !== $('m-name') && document.activeElement !== $('m-notes')) {
       $('m-name').value = b.name; $('m-notes').value = b.notes || '';
     }
