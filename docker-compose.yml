@@ -1,209 +1,122 @@
 # docker-compose.yml
+#
+# Every service runs on the host network and IPC namespace (Zenoh shared memory)
+# and restarts with Docker. A component image is its package's extra
+# dependencies plus GNC_PACKAGE; the shared /entrypoint.sh (docker/entrypoint.sh,
+# baked into the base image) builds the mounted workspace and launches it.
+#
+# Base image first:  docker build -t gnc_moon_simulator/base:1.0 -f docker/base.Dockerfile docker
+# (docker_build.sh does that, then builds and starts everything below).
+
+x-host: &host
+  network_mode: host
+  ipc: host
+  restart: unless-stopped
+
+x-ros-env: &ros-env
+  ROS_DOMAIN_ID: 0
+  RMW_IMPLEMENTATION: rmw_zenoh_cpp
+  RCUTILS_COLORIZED_OUTPUT: 1
+
+# For nodes that can open a debug window on the host's X server (off by default).
+x-display-env: &display-env
+  DISPLAY: ${DISPLAY}
+  QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
+
+x-ros-node: &ros-node
+  <<: *host
+  entrypoint: >
+    bash -lc "/entrypoint.sh"
+  environment:
+    <<: *ros-env
+
 services:
   zenoh_router:
+    <<: *host
     build:
       context: ./docker
       dockerfile: base.Dockerfile
     image: gnc_moon_simulator/zenoh_router:dev
-    network_mode: host
-    ipc: host
-    restart: unless-stopped
-    privileged: true
     environment:
       ROS_DOMAIN_ID: 0
-      ROBOT_NAMESPACE: ""
-      LAUNCH_ARGS: ""
       RCUTILS_COLORIZED_OUTPUT: 1
-      DISPLAY: ${DISPLAY}
-      QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
     command: >
       bash -lc "source /opt/ros/jazzy/setup.bash && ros2 run rmw_zenoh_cpp rmw_zenohd"
 
   component_lidar:
-    build:
-      context: ./component_lidar
-      dockerfile: Dockerfile
+    <<: *ros-node
+    build: ./component_lidar
     image: gnc_moon_simulator/component_lidar:dev
-    network_mode: host
-    ipc: host
-    restart: unless-stopped
-    entrypoint: >
-      bash -lc "/entrypoint.sh"
-    privileged: true
-    environment:
-      ROS_DOMAIN_ID: 0
-      ROBOT_NAMESPACE: ""
-      LAUNCH_ARGS: ""
-      RMW_IMPLEMENTATION: rmw_zenoh_cpp
-      RCUTILS_COLORIZED_OUTPUT: 1
-      DISPLAY: ${DISPLAY}
-      QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
     volumes:
       - ./component_lidar:/opt/ros/jazzy/src/component_lidar
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
 
-  # Owns the single UnrealCV client connection and serves all three navcams:
-  # navcam_left/* and navcam_right/* (colour), navcam_central/* (colour, planar
-  # depth, disparity, object mask). Replaced component_cameras, which was
-  # deleted — UnrealCV allows one client at a time, so nothing else may connect.
+  # Simulated stereo navcam rig: receives the UnrealStereoCam plugin's TCP frame
+  # stream (port 3004) and serves all three navcams: navcam/left/* and
+  # navcam/right/* (colour), navcam/central/* (colour, SGBM depth, disparity,
+  # ground-truth depth, object and shadow masks).
   component_stereo_depth:
-    build:
-      context: ./component_stereo_depth
-      dockerfile: Dockerfile
+    <<: *ros-node
+    build: ./component_stereo_depth
     image: gnc_moon_simulator/component_stereo_depth:dev
-    network_mode: host
-    ipc: host
-    restart: unless-stopped
-    entrypoint: >
-      bash -lc "/entrypoint.sh"
-    privileged: true
-    environment:
-      ROS_DOMAIN_ID: 0
-      ROBOT_NAMESPACE: ""
-      LAUNCH_ARGS: ""
-      RMW_IMPLEMENTATION: rmw_zenoh_cpp
-      RCUTILS_COLORIZED_OUTPUT: 1
-      DISPLAY: ${DISPLAY}
-      QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
     volumes:
       - ./component_stereo_depth:/opt/ros/jazzy/src/component_stereo_depth
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
 
   component_rover_leo_raph:
-    build:
-      context: ./component_rover_leo_raph
-      dockerfile: Dockerfile
+    <<: *ros-node
+    build: ./component_rover_leo_raph
     image: gnc_moon_simulator/component_rover_leo_raph:dev
-    network_mode: host
-    ipc: host
-    restart: unless-stopped
-    entrypoint: >
-      bash -lc "/entrypoint.sh"  
-    privileged: true
-    environment:
-      ROS_DOMAIN_ID: 0
-      ROBOT_NAMESPACE: ""
-      RMW_IMPLEMENTATION: rmw_zenoh_cpp
-      LAUNCH_ARGS: ""
-      RCUTILS_COLORIZED_OUTPUT: 1
-      DISPLAY: ${DISPLAY}
-      QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
     volumes:
       - ./component_rover_leo_raph:/opt/ros/jazzy/src/component_rover_leo_raph
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
 
+  # Global planner and local trajectory controller. enable_path_visualization
+  # (config/params.yaml) opens a matplotlib window on the host display.
   component_path_planner:
-    build:
-      context: ./component_path_planner
-      dockerfile: Dockerfile
+    <<: *ros-node
+    build: ./component_path_planner
     image: gnc_moon_simulator/component_path_planner:dev
-    network_mode: host
-    ipc: host
-    restart: unless-stopped
-    entrypoint: >
-      bash -lc "/entrypoint.sh"
-    privileged: true
     environment:
-      ROS_DOMAIN_ID: 0
-      RMW_IMPLEMENTATION: rmw_zenoh_cpp
-      ROBOT_NAMESPACE: ""
-      LAUNCH_ARGS: ""
-      RCUTILS_COLORIZED_OUTPUT: 1
-      DISPLAY: ${DISPLAY}
-      QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
+      <<: [*ros-env, *display-env]
     volumes:
       - ./component_path_planner:/opt/ros/jazzy/src/component_path_planner
       - ./custom_map_interfaces:/opt/ros/jazzy/src/custom_map_interfaces
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
 
-
-  # Builds the local DEM from stereo depth — starts automatically; the mission
-  # control dashboard renders its elevation_grid live.
+  # Builds the local DEM from stereo depth; the mission control dashboard renders
+  # its elevation_grid live. debug_mode (config/params.yaml) opens a matplotlib
+  # window on the host display.
   component_local_mapping:
-    build:
-      context: ./component_local_mapping
-      dockerfile: Dockerfile
+    <<: *ros-node
+    build: ./component_local_mapping
     image: gnc_moon_simulator/component_local_mapping:dev
-    network_mode: host
-    ipc: host
-    restart: unless-stopped
-    entrypoint: >
-      bash -lc "/entrypoint.sh"
-    privileged: true
     environment:
-      ROS_DOMAIN_ID: 0
-      ROBOT_NAMESPACE: ""
-      LAUNCH_ARGS: ""
-      RMW_IMPLEMENTATION: rmw_zenoh_cpp
-      RCUTILS_COLORIZED_OUTPUT: 1
-      DISPLAY: ${DISPLAY}
-      QT_X11_NO_MITSHM: 1
+      <<: [*ros-env, *display-env]
     volumes:
       - ./component_local_mapping:/opt/ros/jazzy/src/component_local_mapping
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
 
   # Simulated IMU: differentiates /odom (Unreal pose telemetry) into sensor_msgs/Imu.
   component_imu:
-    build:
-      context: ./component_imu
-      dockerfile: Dockerfile
+    <<: *ros-node
+    build: ./component_imu
     image: gnc_moon_simulator/component_imu:dev
-    network_mode: host
-    ipc: host
-    restart: unless-stopped
-    entrypoint: >
-      bash -lc "/entrypoint.sh"
-    privileged: true
-    environment:
-      ROS_DOMAIN_ID: 0
-      ROBOT_NAMESPACE: ""
-      LAUNCH_ARGS: ""
-      RMW_IMPLEMENTATION: rmw_zenoh_cpp
-      RCUTILS_COLORIZED_OUTPUT: 1
     volumes:
       - ./component_imu:/opt/ros/jazzy/src/component_imu
 
   # Simulation clock: receives the UnrealSimClock plugin's TCP time stream
   # (port 3008) and publishes /clock; the GNC nodes run on it (use_sim_time).
   component_sim_clock:
-    build:
-      context: ./component_sim_clock
-      dockerfile: Dockerfile
+    <<: *ros-node
+    build: ./component_sim_clock
     image: gnc_moon_simulator/component_sim_clock:dev
-    network_mode: host
-    ipc: host
-    restart: unless-stopped
-    entrypoint: >
-      bash -lc "/entrypoint.sh"
-    privileged: true
-    environment:
-      ROS_DOMAIN_ID: 0
-      ROBOT_NAMESPACE: ""
-      LAUNCH_ARGS: ""
-      RMW_IMPLEMENTATION: rmw_zenoh_cpp
-      RCUTILS_COLORIZED_OUTPUT: 1
     volumes:
       - ./component_sim_clock:/opt/ros/jazzy/src/component_sim_clock
 
   # Simulated event (DVS) camera: receives the UnrealEventCam plugin's TCP event
   # stream (port 3005) and publishes an event-frame visualisation.
   component_event_camera:
-    build:
-      context: ./component_event_camera
-      dockerfile: Dockerfile
+    <<: *ros-node
+    build: ./component_event_camera
     image: gnc_moon_simulator/component_event_camera:dev
-    network_mode: host
-    ipc: host
-    restart: unless-stopped
-    entrypoint: >
-      bash -lc "/entrypoint.sh"
-    privileged: true
-    environment:
-      ROS_DOMAIN_ID: 0
-      ROBOT_NAMESPACE: ""
-      LAUNCH_ARGS: ""
-      RMW_IMPLEMENTATION: rmw_zenoh_cpp
-      RCUTILS_COLORIZED_OUTPUT: 1
     volumes:
       - ./component_event_camera:/opt/ros/jazzy/src/component_event_camera
 
@@ -211,50 +124,23 @@ services:
   # intensity stream (port 3006), runs the spadSim photon model, and publishes
   # single-photon binary frames plus a digitised reconstruction.
   component_spad_camera:
-    build:
-      context: ./component_spad_camera
-      dockerfile: Dockerfile
+    <<: *ros-node
+    build: ./component_spad_camera
     image: gnc_moon_simulator/component_spad_camera:dev
-    network_mode: host
-    ipc: host
-    restart: unless-stopped
-    entrypoint: >
-      bash -lc "/entrypoint.sh"
-    privileged: true
-    environment:
-      ROS_DOMAIN_ID: 0
-      ROBOT_NAMESPACE: ""
-      LAUNCH_ARGS: ""
-      RMW_IMPLEMENTATION: rmw_zenoh_cpp
-      RCUTILS_COLORIZED_OUTPUT: 1
     volumes:
       - ./component_spad_camera:/opt/ros/jazzy/src/component_spad_camera
 
   # Web mission control on http://localhost:5000 — starts automatically.
   mission_control_dashboard:
-    build:
-      context: ./mission_control_dashboard
-      dockerfile: Dockerfile
+    <<: *ros-node
+    build: ./mission_control_dashboard
     image: gnc_moon_simulator/mission_control_dashboard:dev
-    network_mode: host
-    ipc: host
-    restart: unless-stopped
-    entrypoint: >
-      bash -lc "/entrypoint.sh"
-    privileged: true
-    environment:
-      ROS_DOMAIN_ID: 0
-      ROBOT_NAMESPACE: ""
-      LAUNCH_ARGS: ""
-      RMW_IMPLEMENTATION: rmw_zenoh_cpp
-      RCUTILS_COLORIZED_OUTPUT: 1
-      DISPLAY: ${DISPLAY}
-      QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
     volumes:
       - ./mission_control_dashboard:/opt/ros/jazzy/src/mission_control_dashboard
       - ./custom_map_interfaces:/opt/ros/jazzy/src/custom_map_interfaces
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      
+
+  # Interactive shell with the ROS 2 tools (rviz2, rqt) on the host display:
+  #   docker compose exec debug_cli bash
   debug_cli:
     build:
       context: ./docker
@@ -262,17 +148,10 @@ services:
     image: gnc_moon_simulator/debug_cli:dev
     network_mode: host
     ipc: host
-    entrypoint: ["/bin/bash", "-c", "source /opt/ros/jazzy/setup.bash && exec /bin/bash"]    
-    privileged: true
+    entrypoint: ["/bin/bash", "-c", "source /opt/ros/jazzy/setup.bash && exec /bin/bash"]
     stdin_open: true # Equivalent to -i
     tty: true        # Equivalent to -t
     environment:
-      ROS_DOMAIN_ID: 0
-      ROBOT_NAMESPACE: ""
-      LAUNCH_ARGS: ""
-      RMW_IMPLEMENTATION: rmw_zenoh_cpp
-      RCUTILS_COLORIZED_OUTPUT: 1
-      DISPLAY: ${DISPLAY}
-      QT_X11_NO_MITSHM: 1 # Prevents shared memory errors with Qt/Rviz
+      <<: [*ros-env, *display-env]
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw

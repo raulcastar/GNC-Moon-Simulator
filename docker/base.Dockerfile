@@ -64,4 +64,11 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /opt/ros/jazzy/src
 RUN rm -rf ./*
 
+# Shared component entrypoint: each component image sets GNC_PACKAGE (and
+# GNC_LAUNCH when its launch file is not lc_<package>.launch.py).
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENV ROS_DOMAIN_ID=0     RMW_IMPLEMENTATION=rmw_zenoh_cpp
+
 CMD ["bash"]

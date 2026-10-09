@@ -4,13 +4,7 @@ FROM gnc_moon_simulator/base:1.0
 RUN apt-get update && apt-get install -y --no-install-recommends python3-tk && \
     rm -rf /var/lib/apt/lists/*
 
-# ---- Runtime entrypoint ----
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
-# Defaults (override with -e at runtime)
-ENV ROS_DOMAIN_ID=0 \
-    RMW_IMPLEMENTATION=rmw_zenoh_cpp \
-    VERBOSITY=-v4
+# What the shared entrypoint (base image) launches.
+ENV GNC_PACKAGE=component_local_mapping
 
 CMD ["bash", "/entrypoint.sh"]
