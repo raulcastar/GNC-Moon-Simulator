@@ -135,7 +135,7 @@ for _app in (app, app_teleop, app_sys, app_replay):
 
 
 # ---- colour theme, shared by every window (chosen in the hub) ----
-THEMES = ('mission', 'midnight', 'night', 'daylight')
+THEMES = ('mission', 'midnight', 'night', 'daylight', 'slate', 'solarized', 'amber', 'contrast', 'paper')
 FONTS = ('small', 'normal', 'large', 'xlarge')
 # Kept next to the package sources (mounted from the repository), so it survives
 # container rebuilds; git-ignored.

@@ -26,11 +26,36 @@
       '--text': '#eab7aa', '--dim': '#9c6b60', '--accent': '#ff6a45', '--cyan': '#d98a74', '--amber': '#e8a24c',
       '--red': '#ff3b3b', '--view': '#0b0505', '--view2': '#110808', '--view-line': '#2e1414',
       '--view-text': '#7a443a' } },
-    daylight: { label: 'Daylight', vars: {
+    daylight: { label: 'Daylight', light: true, vars: {
       '--bg': '#eef1f5', '--panel': '#ffffff', '--panel2': '#f3f5f8', '--line': '#cfd7e2', '--grid': '#e4e9f0',
       '--text': '#1b2533', '--dim': '#5b6b80', '--accent': '#0a8a68', '--cyan': '#1f6fd1', '--amber': '#a86400',
       '--red': '#c8323f', '--view': '#e6ebf1', '--view2': '#dee4eb', '--view-line': '#c2ccd8',
       '--view-text': '#7a8a9e' } },
+    slate: { label: 'Slate', vars: {
+      '--bg': '#16181c', '--panel': '#1f2228', '--panel2': '#272b33', '--line': '#383d47', '--grid': '#1b1e23',
+      '--text': '#e4e6ea', '--dim': '#9097a3', '--accent': '#7aa2f7', '--cyan': '#7dcfff', '--amber': '#e0af68',
+      '--red': '#f7768e', '--view': '#121418', '--view2': '#181b20', '--view-line': '#2a2f38',
+      '--view-text': '#5c6370' } },
+    solarized: { label: 'Solarized', vars: {
+      '--bg': '#002b36', '--panel': '#073642', '--panel2': '#0b4150', '--line': '#1d5563', '--grid': '#04313d',
+      '--text': '#eee8d5', '--dim': '#93a1a1', '--accent': '#2aa198', '--cyan': '#268bd2', '--amber': '#b58900',
+      '--red': '#dc322f', '--view': '#00222b', '--view2': '#032a34', '--view-line': '#164a57',
+      '--view-text': '#4f7380' } },
+    amber: { label: 'Amber CRT', vars: {
+      '--bg': '#0f0a02', '--panel': '#171005', '--panel2': '#201707', '--line': '#3d2c0c', '--grid': '#1a1204',
+      '--text': '#ffcc66', '--dim': '#b38a3c', '--accent': '#ffb000', '--cyan': '#ffd27a', '--amber': '#ff8c1a',
+      '--red': '#ff4d2e', '--view': '#0b0701', '--view2': '#120c03', '--view-line': '#33240a',
+      '--view-text': '#7a5a20' } },
+    contrast: { label: 'High Contrast', vars: {
+      '--bg': '#000000', '--panel': '#0a0a0a', '--panel2': '#141414', '--line': '#6b6b6b', '--grid': '#1f1f1f',
+      '--text': '#ffffff', '--dim': '#d0d0d0', '--accent': '#00ff9c', '--cyan': '#00d4ff', '--amber': '#ffd400',
+      '--red': '#ff4040', '--view': '#000000', '--view2': '#0a0a0a', '--view-line': '#505050',
+      '--view-text': '#a0a0a0' } },
+    paper: { label: 'Paper', light: true, vars: {
+      '--bg': '#f4efe6', '--panel': '#fbf8f2', '--panel2': '#f0e9dc', '--line': '#d6ccb8', '--grid': '#e8e0d0',
+      '--text': '#2b2620', '--dim': '#6e6354', '--accent': '#1f7a5c', '--cyan': '#2c5d8f', '--amber': '#9a5b00',
+      '--red': '#b3312c', '--view': '#e9e2d4', '--view2': '#e2dacb', '--view-line': '#c8bca6',
+      '--view-text': '#8a7d68' } },
   };
 
   /* Text size: every CSS font size in the dashboard is a multiple of --fs. */
@@ -49,7 +74,7 @@
     const root = document.documentElement;
     for (const [k, v] of Object.entries(theme.vars)) root.style.setProperty(k, v);
     root.dataset.theme = THEMES[name] ? name : 'mission';
-    root.style.colorScheme = name === 'daylight' ? 'light' : 'dark';
+    root.style.colorScheme = theme.light ? 'light' : 'dark';
     window.GNC_THEME = root.dataset.theme;
     window.dispatchEvent(new Event('gnc-theme'));
   }
