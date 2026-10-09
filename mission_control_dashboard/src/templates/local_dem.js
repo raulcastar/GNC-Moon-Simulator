@@ -127,22 +127,29 @@
     for (const name of ['chase', 'top']) {
       const b = document.createElement('button');
       b.textContent = name.toUpperCase();
-      b.onclick = () => { Object.assign(orbit, views[name]); setActive(name); draw(); };
+      b.onclick = () => {
+        Object.assign(orbit, views[name]); setActive(name); draw();
+        try { localStorage.setItem('dem_view', name); } catch (e) {}
+      };
       buttons[name] = b; viewBox.appendChild(b);
     }
     function setActive(name) {
       for (const k in buttons) buttons[k].classList.toggle('on', k === name);
     }
-    setActive('chase');
+    let saved = 'chase';
+    try { if (views[localStorage.getItem('dem_view')]) saved = localStorage.getItem('dem_view'); } catch (e) {}
+    Object.assign(orbit, views[saved]); setActive(saved);
 
     /* lidar overlay toggle (independent of the view buttons) */
     let lidar = null, showLidar = true;
+    try { showLidar = localStorage.getItem('dem_lidar') !== '0'; } catch (e) {}
     const lidarBtn = document.createElement('button');
     lidarBtn.textContent = 'LIDAR';
-    lidarBtn.classList.add('on');
+    lidarBtn.classList.toggle('on', showLidar);
     lidarBtn.onclick = () => {
       showLidar = !showLidar;
       lidarBtn.classList.toggle('on', showLidar);
+      try { localStorage.setItem('dem_lidar', showLidar ? '1' : '0'); } catch (e) {}
       if (lidar) lidar.visible = showLidar;
       draw();
     };

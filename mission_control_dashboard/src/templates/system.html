@@ -5,64 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GNC Moon Simulator — System</title>
 <script src="/theme.js"></script>
+<link rel="stylesheet" href="/base.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+<script src="/alerts.js"></script>
 <script src="/dash_common.js"></script>
 <style>
-  :root {
-    --bg:      #10151c;
-    --panel:   #18212e;
-    --panel2:  #202b3a;
-    --line:    #2c3a4e;
-    --text:    #e6edf5;
-    --dim:     #8aa0b8;
-    --accent:  #33d6a6;
-    --cyan:    #59b0ff;
-    --amber:   #ffbe5c;
-    --red:     #ff6b7d;
-    --grid:    #131e2c;
-    --mono:    'Consolas','Menlo','DejaVu Sans Mono',monospace;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; }
-  body {
-    background: var(--bg); color: var(--text); font-family: var(--mono);
-    font-size: calc(12px * var(--fs, 1)); overflow: hidden;
-    display: grid; grid-template-rows: 46px 1fr; gap: 6px; padding: 6px;
-  }
 
-  /* ============ HEADER ============ */
-  header {
-    display: flex; align-items: center; gap: 12px; padding: 0 12px;
-    background: linear-gradient(180deg, var(--panel2), var(--panel));
-    border: 1px solid var(--line); border-radius: 4px;
-  }
-  a.back {
-    color: var(--dim); text-decoration: none; font-size: calc(11px * var(--fs, 1)); letter-spacing: 1px;
-    border: 1px solid var(--line); padding: 6px 11px; border-radius: 4px; white-space: nowrap;
-  }
-  a.back:hover { color: var(--cyan); border-color: var(--cyan); }
-  .brand { color: var(--accent); font-weight: bold; letter-spacing: 3px; font-size: calc(15px * var(--fs, 1));
-           text-shadow: 0 0 12px rgba(51,214,166,.3); white-space: nowrap; }
-  .brand small { color: var(--dim); letter-spacing: 1px; font-size: calc(10px * var(--fs, 1)); display: block; }
-  .spacer { flex: 1; }
-  .conn { display: flex; align-items: center; gap: 7px; font-size: calc(10px * var(--fs, 1)); letter-spacing: 1px;
-          color: var(--dim); white-space: nowrap; }
-  .conn .dot { width: 10px; height: 10px; border-radius: 50%; background: #402028; }
-  .conn .dot.ok { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  body { font-size: calc(12px * var(--fs, 1)); overflow: hidden; display: grid; grid-template-rows: 46px 1fr; gap: 6px; padding: 6px; }
 
   /* ============ LAYOUT ============ */
   main { display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: 6px; min-height: 0; }
   .col { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
-  .panel {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
-    display: flex; flex-direction: column; min-height: 0; overflow: hidden;
-  }
-  .panel-title {
-    padding: 5px 10px; font-size: calc(10px * var(--fs, 1)); letter-spacing: 2px; color: var(--dim);
-    border-bottom: 1px solid var(--line); background: var(--panel2);
-    display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
-  }
-  .panel-title .tag { color: var(--accent); }
+
   .panel-title .n { margin-left: auto; font-size: calc(9px * var(--fs, 1)); letter-spacing: 1px; }
   .scroll { overflow: auto; min-height: 0; }
 
@@ -102,7 +56,7 @@
   #topics-list tbody tr:hover td { background: rgba(89,176,255,.07); }
   #topics-list tr.sel td { background: rgba(53,224,181,.12); color: var(--accent); }
   #topic-detail { padding: 10px 12px; }
-  .hint { color: var(--dim); line-height: 1.5; }
+  .hint { line-height: 1.5; }
   #topic-detail .name { color: var(--accent); font-size: calc(14px * var(--fs, 1)); word-break: break-all; }
   #topic-detail .type { color: var(--dim); margin: 2px 0 10px; }
   #topic-detail .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 8px; }
@@ -164,6 +118,7 @@
   const $ = id => document.getElementById(id);
   const esc = escHtml;
   const socket = io();
+  GNCAlerts.attach(socket);
 
   // ---- feeds, nodes, recording (the 'health' push, once a second) ----
   const FEED_NAMES = {

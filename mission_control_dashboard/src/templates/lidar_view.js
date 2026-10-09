@@ -96,6 +96,7 @@
     /* Camera: orbit around `target`; yaw = heading of the view direction, pitch = look-down angle. */
     const cam = { tx: 10, ty: 0, tz: 0, yaw: 0, pitch: 0.45, dist: 40, ox: 0, oy: 0 };   /* ox/oy: screen offset (px) */
     let preset = 'chase', auto = true;     /* auto: refit on each new scan until the user moves the view */
+    try { if (['chase', 'top', 'side'].includes(localStorage.getItem('lidar_preset'))) preset = localStorage.getItem('lidar_preset'); } catch (e) {}
 
     function setButtons() {
       root.querySelectorAll('[data-view]').forEach(b => b.classList.toggle('on', auto && b.dataset.view === preset));
@@ -291,6 +292,7 @@
     canvas.addEventListener('dblclick', () => { auto = true; fit(); setButtons(); draw(); });
     root.querySelectorAll('[data-view]').forEach(b => b.onclick = () => {
       auto = true; fit(b.dataset.view === 'fit' ? null : b.dataset.view); setButtons(); draw();
+      try { localStorage.setItem('lidar_preset', preset); } catch (e) {}
     });
     root.querySelectorAll('[data-color]').forEach(b => b.onclick = () => {
       colorMode = b.dataset.color;

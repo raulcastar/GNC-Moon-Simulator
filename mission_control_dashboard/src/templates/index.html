@@ -4,7 +4,9 @@
 <meta charset="UTF-8">
 <title>GNC Moon Simulator — Overview</title>
 <script src="/theme.js"></script>
+<link rel="stylesheet" href="/base.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+<script src="/alerts.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="/local_dem.js"></script>
 <script src="/feed_legends.js"></script>
@@ -12,42 +14,16 @@
 <script src="/dash_common.js"></script>
 <script src="/lidar_view.js"></script>
 <style>
-  :root {
-    --bg:      #10151c;
-    --panel:   #18212e;
-    --panel2:  #202b3a;
-    --line:    #2c3a4e;
-    --text:    #e6edf5;
-    --dim:     #8aa0b8;
-    --accent:  #33d6a6;
-    --cyan:    #59b0ff;
-    --amber:   #ffbe5c;
-    --red:     #ff6b7d;
-    --grid:    #131e2c;
-    --mono:    'Consolas','Menlo','DejaVu Sans Mono',monospace;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; }
-  body {
-    background: var(--bg); color: var(--text); font-family: var(--mono);
-    font-size: calc(13px * var(--fs, 1)); overflow: hidden;
-    display: grid; grid-template-rows: calc(46px * var(--fs, 1)) 1fr 190px; grid-template-columns: minmax(0, 1fr);
-    gap: 6px; padding: 6px;
-  }
+
+  body { font-size: calc(13px * var(--fs, 1)); overflow: hidden; display: grid; grid-template-rows: calc(46px * var(--fs, 1)) 1fr 190px; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 6px; }
 
   /* ============ HEADER ============ */
-  header {
-    display: flex; align-items: center; gap: 18px; padding: 0 14px;
-    background: linear-gradient(180deg, var(--panel2), var(--panel));
-    border: 1px solid var(--line); border-radius: 4px; min-width: 0; overflow-x: auto; scrollbar-width: none;
-  }
-  .brand { color: var(--accent); font-weight: bold; letter-spacing: 3px; font-size: calc(15px * var(--fs, 1));
-           text-shadow: 0 0 12px rgba(53,224,181,.35); white-space: nowrap; }
-  .brand small { color: var(--dim); letter-spacing: 1px; font-size: calc(10px * var(--fs, 1)); display: block; }
+  header { gap: 18px; padding: 0 14px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+
   .clock { text-align: center; }
   .clock .lbl { color: var(--dim); font-size: calc(9px * var(--fs, 1)); letter-spacing: 2px; }
   .clock .val { color: var(--cyan); font-size: calc(16px * var(--fs, 1)); letter-spacing: 1px; }
-  .spacer { flex: 1; }
+
   .lights { display: flex; gap: 14px; }
   .light { text-align: center; font-size: calc(9px * var(--fs, 1)); letter-spacing: 1px; color: var(--dim); }
   .light .dot {
@@ -63,16 +39,6 @@
   main { display: grid; grid-template-columns: 29% minmax(0, 1fr) 27%; gap: 6px; min-height: 0; }
   .col { display: flex; flex-direction: column; gap: 6px; min-height: 0; min-width: 0; }
 
-  .panel {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
-    display: flex; flex-direction: column; min-height: 0; overflow: hidden;
-  }
-  .panel-title {
-    padding: 4px 10px; font-size: calc(10px * var(--fs, 1)); letter-spacing: 2px; color: var(--dim);
-    border-bottom: 1px solid var(--line); background: var(--panel2);
-    display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
-  }
-  .panel-title .tag { color: var(--accent); }
   .panel-title .age { margin-left: auto; color: var(--dim); font-size: calc(9px * var(--fs, 1)); }
 
   /* ============ CAMERA FEEDS ============ */
@@ -116,6 +82,38 @@
   #map-hint { padding: 3px 10px; color: var(--dim); font-size: calc(10px * var(--fs, 1)); border-top: 1px solid var(--line);
               display: flex; gap: 14px; }
   #map-hint b { color: var(--cyan); font-weight: normal; }
+  /* mission timeline: the planner's states over time, under the map */
+  #mtl { border-top: 1px solid var(--line); padding: 4px 10px 5px; flex: 0 0 auto; }
+  #mtl-head { display: flex; align-items: center; gap: 12px; font-size: calc(9px * var(--fs, 1));
+              letter-spacing: 1px; color: var(--dim); }
+  #mtl-head .ttl { letter-spacing: 2px; }
+  #mtl-head b { color: var(--text); font-weight: normal; }
+  #mtl-head b.ok { color: var(--accent); } #mtl-head b.bad { color: var(--red); }
+  #mtl-clear { margin-left: auto; }
+  #mtl-track { position: relative; height: 18px; margin-top: 4px; background: var(--view);
+               border: 1px solid var(--line); border-radius: 2px; overflow: hidden; }
+  #mtl-track .empty { position: absolute; inset: 0; display: flex; align-items: center; padding-left: 8px;
+                      color: var(--view-text); font-size: calc(9px * var(--fs, 1)); letter-spacing: 1px; }
+  .mtl-seg { position: absolute; top: 4px; bottom: 4px; min-width: 2px; border-radius: 1px; }
+  .mtl-seg.planning { background: var(--amber); }
+  .mtl-seg.replan { background: repeating-linear-gradient(90deg, var(--amber) 0 3px, transparent 3px 5px); }
+  .mtl-seg.driving { background: var(--cyan); }
+  .mtl-goal { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--text); }
+  .mtl-mk { position: absolute; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%;
+            border: 2px solid var(--view); box-sizing: content-box; cursor: default; }
+  .mtl-mk.reached { background: var(--accent); }
+  .mtl-mk.aborted { background: var(--red); border-radius: 2px; transform: rotate(45deg); }
+  .mtl-mk.cancelled { background: var(--dim); border-radius: 2px; }
+  .mtl-session { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--dim); }
+  #mtl-axis { display: flex; justify-content: space-between; gap: 10px; margin-top: 3px; color: var(--dim);
+              font-size: calc(8px * var(--fs, 1)); letter-spacing: 1px; }
+  #mtl-key { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #mtl-key .k { display: inline-block; width: 9px; height: 6px; margin: 0 3px 0 8px; vertical-align: middle; }
+  #mtl-key .k.planning { background: var(--amber); } #mtl-key .k.driving { background: var(--cyan); }
+  #mtl-key .k.reached { background: var(--accent); border-radius: 50%; width: 6px; }
+  #mtl-key .k.aborted { background: var(--red); width: 6px; transform: rotate(45deg); }
+  #mtl-key .k.cancelled { background: var(--dim); width: 6px; }
+  #mtl-key .k.session { border-left: 1px dashed var(--dim); width: 1px; height: 9px; }
   #map-hint .sw { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 4px; }
 
   /* ============ LIDAR + TELEMETRY ============ */
@@ -169,9 +167,6 @@
   #log .INFO  { color: var(--text); }
   #log .WARN  { color: var(--amber); }
   #log .ERROR, #log .FATAL { color: var(--red); }
-  ::-webkit-scrollbar { width: 8px; }
-  ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
-  ::-webkit-scrollbar-track { background: transparent; }
 
   /* ============ VIEW TABS ============ */
   .viewtabs { display: flex; gap: 4px; margin-left: 12px; }
@@ -333,6 +328,17 @@
         <span><b style="color:#ff6b7d">■</b> LOCAL OBSTACLES</span>
         <span><b>⇕</b> WHEEL ZOOM · DRAG PAN</span>
       </div>
+      <div id="mtl">
+        <div id="mtl-head">
+          <span class="ttl">MISSION TIMELINE</span><span id="mtl-sum"></span>
+          <button id="mtl-clear" style="background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);font-size:calc(9px * var(--fs, 1));padding:1px 7px;cursor:pointer" title="Clear the timeline (all overview windows)">CLEAR</button>
+        </div>
+        <div id="mtl-track"></div>
+        <div id="mtl-axis"><span id="mtl-start"></span><span id="mtl-key">
+          <i class="k planning"></i>planning <i class="k driving"></i>driving
+          <i class="k reached"></i>reached <i class="k aborted"></i>aborted <i class="k cancelled"></i>cancelled
+          <i class="k session"></i>new session</span><span id="mtl-end"></span></div>
+      </div>
     </div>
   </div>
 
@@ -389,6 +395,7 @@
 
 <script>
 const socket = io();
+GNCAlerts.attach(socket);
 const $ = id => document.getElementById(id);
 
 /* ---------------- clocks ---------------- */
@@ -520,6 +527,68 @@ socket.on('health', h => {
              : `Record a rosbag with the ${(bag.preset || 'navigation').toUpperCase()} preset`) +
               ' — presets, names, notes and the recorded bags are in the BAGS window (menu, port 5007)';
 });
+/* ---------------- mission timeline ----------------
+   The planner's state changes since the dashboard started (or CLEAR), on a time
+   axis under the map: bars while planning (striped: replanning) and driving,
+   a white tick per goal sent, markers where a goal was reached, aborted or
+   cancelled, dashed lines at new Unreal Play sessions. Hover for details. */
+const MTL_KEEP = 400;
+const MTL_BAR = { planning: 'planning', replan: 'replanning', driving: 'driving' };
+const MTL_END = { reached: 'reached', aborted: 'aborted', cancelled: 'cancelled' };
+let mtl = [], mtlSkew = 0;          /* mtlSkew: browser clock minus server clock (s) */
+const hms = t => new Date(t * 1000).toISOString().substr(11, 8);      /* UTC, like the header and the log */
+const xyText = p => p ? `(${p[0].toFixed(1)}, ${p[1].toFixed(1)})` : '—';
+const durText = s => s < 60 ? `${Math.round(s)} s` : s < 3600 ? `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`
+                                                    : `${Math.floor(s / 3600)} h ${Math.round(s % 3600 / 60)} min`;
+function renderTimeline() {
+  const track = $('mtl-track');
+  if (!mtl.length) {
+    track.innerHTML = '<span class="empty">No mission events yet: click the map to send a goal.</span>';
+    $('mtl-sum').textContent = ''; $('mtl-start').textContent = ''; $('mtl-end').textContent = '';
+    return;
+  }
+  const now = Math.max(Date.now() / 1000 - mtlSkew, mtl[mtl.length - 1].t);
+  const t0 = mtl[0].t, span = Math.max(60, now - t0);
+  const at = t => (100 * (t - t0) / span).toFixed(3) + '%';
+  const n = { goals: 0, reached: 0, aborted: 0, cancelled: 0, replan: 0 };
+  let html = '';
+  mtl.forEach((e, i) => {
+    const end = i + 1 < mtl.length ? mtl[i + 1].t : now;
+    if (MTL_BAR[e.kind]) {
+      html += `<div class="mtl-seg ${e.kind}" style="left:${at(e.t)};width:${(100 * (end - e.t) / span).toFixed(3)}%" ` +
+              `title="${hms(e.t)} · ${MTL_BAR[e.kind]} to ${xyText(e.goal)} · ${durText(end - e.t)}"></div>`;
+    }
+    if (e.kind === 'planning') {
+      n.goals++;
+      html += `<div class="mtl-goal" style="left:${at(e.t)}" ` +
+              `title="${hms(e.t)} · goal ${n.goals} sent: ${xyText(e.goal)} · rover at ${xyText(e.pos)}"></div>`;
+    }
+    if (e.kind === 'replan') n.replan++;
+    if (MTL_END[e.kind]) {
+      n[e.kind]++;
+      html += `<div class="mtl-mk ${e.kind}" style="left:${at(e.t)}" title="${hms(e.t)} · goal ${xyText(e.goal)} ` +
+              `${MTL_END[e.kind]}${e.reason ? ': ' + escHtml(e.reason) : ''} · rover at ${xyText(e.pos)}"></div>`;
+    }
+    if (e.kind === 'session') {
+      html += `<div class="mtl-session" style="left:${at(e.t)}" title="${hms(e.t)} · new Unreal Play session"></div>`;
+    }
+  });
+  track.innerHTML = html;
+  $('mtl-sum').innerHTML = `<b>${n.goals}</b> goal${n.goals === 1 ? '' : 's'} · <b class="ok">${n.reached}</b> reached · ` +
+    `<b class="bad">${n.aborted}</b> aborted · <b>${n.cancelled}</b> cancelled · <b>${n.replan}</b> replan${n.replan === 1 ? '' : 's'}`;
+  $('mtl-start').textContent = hms(t0);
+  $('mtl-end').textContent = `now (${durText(now - t0)})`;
+}
+socket.on('timeline', list => { mtl = (list || []).slice(-MTL_KEEP); renderTimeline(); });
+socket.on('timeline_event', e => {
+  mtlSkew = Date.now() / 1000 - e.t;                    /* the event just happened on the server */
+  mtl.push(e); if (mtl.length > MTL_KEEP) mtl.shift();
+  renderTimeline();
+});
+$('mtl-clear').onclick = () => socket.emit('timeline_clear');
+setInterval(() => { if (!document.hidden && mtl.length) renderTimeline(); }, 1000);
+renderTimeline();
+
 /* SYSTEM: feed rates, lifecycle nodes and the ROS 2 topics live in their own window (5006). */
 $('btn-sys').onclick = () => window.open(`http://${window.location.hostname || 'localhost'}:5006/`, 'gnc_system');
 $('btn-snap').onclick = () => { window.location.href = '/snapshot.zip'; addLocal('INFO', 'Snapshot downloaded.'); };
@@ -580,8 +649,14 @@ document.querySelectorAll('#console-bar button[data-f]').forEach(b =>
   b.onclick = () => {
     logFilter = b.dataset.f;
     document.querySelectorAll('#console-bar button[data-f]').forEach(x => x.classList.toggle('on', x === b));
+    try { localStorage.setItem('log_level', logFilter); } catch (e) {}
     renderLog();
   });
+try {     /* the severity filter chosen last time in this window */
+  const lv = localStorage.getItem('log_level');
+  const b = lv && document.querySelector(`#console-bar button[data-f="${lv}"]`);
+  if (b) { logFilter = lv; document.querySelectorAll('#console-bar button[data-f]').forEach(x => x.classList.toggle('on', x === b)); }
+} catch (e) {}
 $('log-node').onchange = e => { logNode = e.target.value; renderLog(); };
 $('log-text').oninput = e => { logText = e.target.value.trim().toLowerCase(); renderLog(); };
 $('btn-pause').onclick = e => {
@@ -821,7 +896,7 @@ $('map-wrap').addEventListener('wheel', e => {
   const r = mapStack.getBoundingClientRect();
   const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
   let nz = Math.min(40, Math.max(1, vz * f));
-  following = false; $('btn-follow').style.color = '';
+  following = false; $('btn-follow').style.color = ''; try { localStorage.setItem('map_follow', '0'); } catch (e) {}
   const k = nz / vz;
   vtx += (e.clientX - r.left) * (1 - k);
   vty += (e.clientY - r.top)  * (1 - k);
@@ -844,7 +919,7 @@ window.addEventListener('mousemove', e => {
   }
   if (dragged) {
     vtx = panStart.tx + dx; vty = panStart.ty + dy; applyView();
-    following = false; $('btn-follow').style.color = '';
+    following = false; $('btn-follow').style.color = ''; try { localStorage.setItem('map_follow', '0'); } catch (e) {}
   }
 });
 window.addEventListener('mouseup', e => {
@@ -863,7 +938,7 @@ window.addEventListener('mouseup', e => {
   socket.emit('send_goal', { x: gx, y: gy });
 });
 
-$('btn-zoomreset').onclick = () => { following = false; $('btn-follow').style.color = ''; resetView(); };
+$('btn-zoomreset').onclick = () => { following = false; $('btn-follow').style.color = ''; try { localStorage.setItem('map_follow', '0'); } catch (e) {} resetView(); };
 
 /* FOLLOW ROVER: zoom in and keep the rover centred as it drives */
 let following = false;
@@ -880,8 +955,14 @@ function followRover() {
 $('btn-follow').onclick = () => {
   following = !following;
   $('btn-follow').style.color = following ? 'var(--accent)' : '';
+  try { localStorage.setItem('map_follow', following ? '1' : '0'); } catch (e) {}
   if (following) { vz = Math.max(vz, 24); followRover(); }
 };
+try {     /* FOLLOW ROVER stays on across reloads; it starts with the first pose */
+  if (localStorage.getItem('map_follow') === '1') {
+    following = true; $('btn-follow').style.color = 'var(--accent)'; vz = Math.max(vz, 24);
+  }
+} catch (e) {}
 $('btn-map').onclick = () => socket.emit('refresh_map', {});
 
 /* ---------------- view switcher ----------------

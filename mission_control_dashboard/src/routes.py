@@ -211,6 +211,13 @@ def handle_connect(auth=None):
         web.node.get_logger().info("Operator console connected.")
         web.node.fetch_maps(request.sid)
         _send_cached(socketio, request.sid)
+        socketio.emit('timeline', list(web.node._timeline), to=request.sid)
+
+
+@socketio.on('timeline_clear')
+def handle_timeline_clear(json_data=None):
+    if web.node is not None:
+        web.node.clear_timeline()
 
 
 @socketio.on('send_goal')

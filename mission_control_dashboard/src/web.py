@@ -100,6 +100,15 @@ def _feed_legends_js():
     return send_from_directory(template_dir, 'feed_legends.js', mimetype='application/javascript')
 
 
+def _alerts_js():
+    return send_from_directory(template_dir, 'alerts.js', mimetype='application/javascript', max_age=0)
+
+
+def _base_css():
+    """The look shared by every window (colours, header, panels)."""
+    return send_from_directory(template_dir, 'base.css', mimetype='text/css', max_age=0)
+
+
 def _dash_common_js():
     """Serves the helpers shared by the overview, teleop and system pages."""
     return send_from_directory(template_dir, 'dash_common.js', mimetype='application/javascript')
@@ -191,5 +200,7 @@ def _set_theme():
 
 for _app in (app, app_hub, app_teleop, app_cams, app_map, app_sys, app_replay):
     _app.add_url_rule('/theme.js', 'theme_js', _theme_js)
+    _app.add_url_rule('/base.css', 'base_css', _base_css)
+    _app.add_url_rule('/alerts.js', 'alerts_js', _alerts_js)
     _app.add_url_rule('/theme.json', 'theme_json', _theme_json)
 app_hub.add_url_rule('/theme', 'set_theme', _set_theme, methods=['POST'])

@@ -49,7 +49,7 @@ from .mapping import MappingMixin
 from .recording import RecordingMixin
 from .replay import ReplayMixin
 from .settings import (CAM_PRODUCT_MIN_PERIOD, DEFAULT_BAG_PRESET, HEALTH_PERIOD, INSPECT_PERIOD,
-                       LIFECYCLE_NODES, REMOTE_PARAMS)
+                       LIFECYCLE_NODES, REMOTE_PARAMS, TIMELINE_MAX)
 from .telemetry import TelemetryMixin
 from .topics import TopicsMixin
 from .web import (app, app_cams, app_hub, app_map, app_replay, app_sys, app_teleop, sio_cams, sio_hub,
@@ -91,6 +91,9 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
         self._last_cloud = None         # lidar xyz, rover frame
         self._last_odom = None          # pose and attitude
         self._mission = {'state': 'unknown', 'goal': None, 'reason': ''}
+        self._timeline = collections.deque(maxlen=TIMELINE_MAX)   # mission events, oldest first
+        self._feeds_seen = set()        # feeds that delivered data in this Play session
+        self._nodes_seen = set()        # lifecycle nodes seen active
         self._grid_pose = None          # local grid origin in odom: (x, y, yaw)
         self._hfov = None               # central camera horizontal FOV (rad)
         self._cam_info = None           # (fx, fy, cx, cy, width, height)

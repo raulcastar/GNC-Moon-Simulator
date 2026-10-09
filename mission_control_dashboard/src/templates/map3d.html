@@ -5,35 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GNC Moon Simulator — 3D Map</title>
 <script src="/theme.js"></script>
+<link rel="stylesheet" href="/base.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+<script src="/alerts.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="/local_dem.js"></script>
 <script src="/lidar_view.js"></script>
 <style>
-  :root {
-    --bg:      #10151c;
-    --panel:   #18212e;
-    --panel2:  #202b3a;
-    --line:    #2c3a4e;
-    --text:    #e6edf5;
-    --dim:     #8aa0b8;
-    --accent:  #33d6a6;   /* X axis */
-    --cyan:    #59b0ff;   /* Y axis */
-    --amber:   #ffbe5c;   /* Z axis */
-    --red:     #ff6b7d;
-    --grid:    #131e2c;
-    --mono:    'Consolas','Menlo','DejaVu Sans Mono',monospace;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; }
-  body { background: var(--bg); color: var(--text); font-family: var(--mono);
-         display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 
-  header { display: flex; align-items: center; gap: 18px; padding: 10px 16px;
-           background: linear-gradient(180deg, var(--panel2), var(--panel));
-           border-bottom: 1px solid var(--line); flex: 0 0 auto; }
-  .brand { color: var(--accent); font-weight: bold; letter-spacing: 3px; font-size: calc(15px * var(--fs, 1)); }
-  .brand small { color: var(--dim); letter-spacing: 2px; font-size: calc(10px * var(--fs, 1)); font-weight: normal; }
+  body { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+
+  header { gap: 18px; padding: 10px 16px; border: 0; border-radius: 0; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+
+  .brand small { letter-spacing: 2px; }
   a.hub { text-decoration: none; color: var(--text); border: 1px solid var(--line);
           background: var(--panel2); border-radius: 6px; padding: 7px 12px; font-size: calc(12px * var(--fs, 1));
           letter-spacing: 2px; transition: border-color .12s, color .12s; }
@@ -47,13 +31,9 @@
   .tele .v { color: var(--cyan); }
 
   main { flex: 1 1 auto; display: flex; min-height: 0; gap: 8px; padding: 8px; }
-  .panel { flex: 1 1 0; min-width: 320px; display: flex; flex-direction: column;
-           background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-           overflow: hidden; position: relative; }
-  .panel-title { display: flex; align-items: center; gap: 8px; padding: 8px 12px;
-                 border-bottom: 1px solid var(--line); font-size: calc(12px * var(--fs, 1)); letter-spacing: 2px;
-                 color: var(--dim); flex: 0 0 auto; }
-  .panel-title .tag { color: var(--accent); }
+  .panel { flex: 1 1 0; min-width: 320px; border-radius: 8px; position: relative; }
+  .panel-title { padding: 8px 12px; font-size: calc(12px * var(--fs, 1)); }
+
   .panel-title .age { margin-left: auto; color: var(--dim); font-size: calc(11px * var(--fs, 1)); letter-spacing: 1px; }
   .view { flex: 1 1 auto; position: relative; min-height: 0; background: var(--view, #10151c); }
   .view canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
@@ -67,7 +47,7 @@
 <body>
   <header>
     <a class="hub" id="hub-link">◀ HUB</a>
-    <div class="brand">3D MAP<br><small>LIDAR · LOCAL ELEVATION MAP</small></div>
+    <div class="brand">3D MAP<small>LIDAR · LOCAL ELEVATION MAP</small></div>
     <div class="status"><span class="dot" id="cdot"></span><span id="cstate">OFFLINE</span></div>
     <div class="tele">
       <div><span class="k">POS</span> <span class="v" id="t-pos">—</span> m</div>
@@ -102,6 +82,7 @@
   $('hub-link').href = `http://${host}:5000/`;
 
   const socket = io();
+  GNCAlerts.attach(socket);
   socket.on('connect',    () => { $('cdot').classList.add('ok'); $('cstate').textContent = 'ONLINE'; });
   socket.on('disconnect', () => { $('cdot').classList.remove('ok'); $('cstate').textContent = 'OFFLINE'; });
 

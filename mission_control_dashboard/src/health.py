@@ -6,7 +6,7 @@ import time
 from lifecycle_msgs.srv import ChangeState, GetState
 from rcl_interfaces.srv import GetParameters
 
-from .settings import HEALTH_WINDOW, NODE_POLL_TICKS, REMOTE_PARAMS
+from .settings import FEED_NAMES, FEED_STALE_S, HEALTH_WINDOW, NODE_POLL_TICKS, REMOTE_PARAMS
 from .web import sio_cams, sio_map, sio_replay, sio_sys, sio_teleop, socketio
 
 
@@ -93,7 +93,8 @@ class HealthMixin:
             recent = sum(1 for t in times if now - t <= HEALTH_WINDOW)
             feeds[name] = {'hz': round(recent / HEALTH_WINDOW, 1),
                            'age': round(now - times[-1], 1) if times else None}
-        payload = {'feeds': feeds, 'nodes': dict(self._node_states), 'bag': self._bag_status()}
+        payload = {'feeds': feeds, 'nodes': dict(self._node_states), 'bag': self._bag_status(),
+                   'alerts': self._alerts(feeds)}
         for server in (socketio, sio_cams, sio_teleop, sio_map, sio_sys, sio_replay):
             server.emit('health', payload)
 
@@ -102,6 +103,37 @@ class HealthMixin:
         if self._health_ticks % NODE_POLL_TICKS == 1:
             self._poll_nodes()
         self._fetch_remote_params()
+
+    def _alerts(self, feeds: dict) -> list:
+        """
+        Problems worth a banner in every window, as [{key, level, text}].
+
+        Only something that was working counts: a feed that delivered data in the
+        current Play session and then went quiet, or a lifecycle node that was
+        active and left that state. A stopped simulation (or a replay) clears the
+        feeds' history, so stopping Play or a feed that is switched off raises
+        nothing.
+        """
+        alerts = []
+        if not self._live_simulation():
+            self._feeds_seen.clear()
+        else:
+            for name, f in sorted(feeds.items()):
+                if f['age'] is not None and f['age'] <= FEED_STALE_S:
+                    self._feeds_seen.add(name)
+                elif name in self._feeds_seen and f['age'] is not None:
+                    alerts.append({'key': f'feed:{name}', 'level': 'warn',
+                                   'text': f"{FEED_NAMES.get(name, name)}: no data for {f['age']:.0f} s"})
+        for name, state in sorted(self._node_states.items()):
+            short = name.replace('lc_component_', '')
+            if state == 'active':
+                self._nodes_seen.add(name)
+            elif name in self._nodes_seen and state != 'unknown':
+                if name in self._restart_busy:
+                    alerts.append({'key': f'node:{name}', 'level': 'info', 'text': f'{short}: restarting'})
+                else:
+                    alerts.append({'key': f'node:{name}', 'level': 'error', 'text': f'{short} node is {state}'})
+        return alerts
 
     def _poll_nodes(self) -> None:
         """Queries each node's lifecycle state; replies arrive asynchronously."""

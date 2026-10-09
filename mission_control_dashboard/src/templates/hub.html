@@ -5,36 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GNC Moon Simulator — Mission Control</title>
 <script src="/theme.js"></script>
+<link rel="stylesheet" href="/base.css">
 <style>
-  :root {
-    --bg:      #10151c;
-    --panel:   #18212e;
-    --panel2:  #202b3a;
-    --line:    #2c3a4e;
-    --text:    #e6edf5;
-    --dim:     #8aa0b8;
-    --accent:  #33d6a6;
-    --cyan:    #59b0ff;
-    --amber:   #ffbe5c;
-    --red:     #ff6b7d;
-    --grid:    #131e2c;
-    --mono:    'Consolas','Menlo','DejaVu Sans Mono',monospace;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; }
-  body {
-    background:
-      radial-gradient(1200px 600px at 50% -10%, rgba(53,224,181,.06), transparent 60%),
-      var(--bg);
-    color: var(--text); font-family: var(--mono);
-    display: flex; flex-direction: column; align-items: center;
-    justify-content: center; min-height: 100%; padding: 32px; gap: 34px;
-  }
+
+  body { background: radial-gradient(1200px 600px at 50% -10%, rgba(53,224,181,.06), transparent 60%), var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100%; padding: 32px; gap: 34px; }
   header { text-align: center; }
-  .brand { color: var(--accent); font-weight: bold; letter-spacing: 6px; font-size: calc(30px * var(--fs, 1));
-           text-shadow: 0 0 22px rgba(53,224,181,.35); }
-  .brand small { display: block; color: var(--dim); letter-spacing: 3px; font-size: calc(12px * var(--fs, 1));
-                 margin-top: 8px; font-weight: normal; }
+  .brand { letter-spacing: 6px; font-size: calc(30px * var(--fs, 1)); text-shadow: 0 0 22px rgba(53,224,181,.35); }
+  .brand small { letter-spacing: 3px; font-size: calc(12px * var(--fs, 1)); margin-top: 8px; }
 
   /* Rows of up to three equal cards; a shorter last row stays centred (a grid
      would leave a lone card hanging at the left). */

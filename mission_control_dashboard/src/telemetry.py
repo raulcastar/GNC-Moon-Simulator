@@ -24,8 +24,36 @@ class TelemetryMixin:
         except ValueError:
             return
         mission['t'] = time.time()
+        self._record_timeline(mission)
         self._mission = mission
         emit_all('mission', mission)
+
+    def _record_timeline(self, mission: dict) -> None:
+        """
+        Adds a mission state change to the overview's timeline.
+
+        The event kinds are the planner's states, plus 'replan' (planning again
+        while driving to the same goal) and 'session' (a new Unreal Play session).
+        The rover position is kept so an event can be located on the map.
+        """
+        prev = self._mission
+        state, goal = mission.get('state'), mission.get('goal')
+        if state == prev.get('state') and goal == prev.get('goal'):
+            return
+        kind = state
+        if state == 'planning' and prev.get('state') == 'driving' and goal == prev.get('goal'):
+            kind = 'replan'
+        elif state == 'idle' and mission.get('reason') == 'new session':
+            kind = 'session'
+        pos = self._odom_pose
+        event = {'t': mission['t'], 'kind': kind, 'goal': goal, 'reason': mission.get('reason', ''),
+                 'pos': [round(pos[0], 1), round(pos[1], 1)] if pos else None}
+        self._timeline.append(event)
+        socketio.emit('timeline_event', event)
+
+    def clear_timeline(self) -> None:
+        self._timeline.clear()
+        socketio.emit('timeline', [])
 
     def odom_callback(self, msg: Odometry) -> None:
         if not self._is_active():

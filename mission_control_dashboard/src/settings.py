@@ -50,6 +50,17 @@ REPLAY_LIVE_OUTPUTS = {
     '/headlights_cmd': 'a command',
 }
 NODE_POLL_TICKS = 3           # health ticks between lifecycle state polls
+# Alerts (the banner in every window): a feed that delivered data while Unreal
+# is in Play and then goes quiet this long; a lifecycle node that was active and
+# left that state.
+FEED_STALE_S = 5.0
+FEED_NAMES = {
+    'odom': 'Odometry', 'imu': 'IMU', 'cam_central': 'Central navcam', 'cam_left': 'Left navcam',
+    'cam_right': 'Right navcam', 'cam_rear': 'Rear camera', 'depth': 'Stereo depth',
+    'depth_gt': 'Ground-truth depth', 'mask': 'Segmentation', 'shadow': 'Shadow mask',
+    'events': 'Event camera', 'spad': 'SPAD camera', 'lidar': 'Lidar', 'local_dem': 'Local elevation map',
+}
+TIMELINE_MAX = 400            # mission events kept for the overview's timeline
 DEM_LIDAR_MAX_POINTS = 4000   # lidar points overlaid on the local DEM
 OBSTACLE_MAX_POINTS = 800     # local obstacle cells drawn on the global map
 LIDAR_SELF_RADIUS = 0.6       # m; lidar returns closer than this hit the rover

@@ -1,0 +1,78 @@
+/* Shared look of every dashboard window: colours, header, panels, brand, the
+ * back link and the connection dot. Each page links it before its own <style>.
+ *
+ * Every rule sits inside :where(), which gives it zero specificity: a page's
+ * own rule for the same element always wins, so a page states only how it
+ * differs. The colours below are the defaults (the Mission theme); theme.js
+ * overrides them with the theme chosen in the hub.
+ */
+
+:root {
+  --bg:      #10151c;
+  --panel:   #18212e;
+  --panel2:  #202b3a;
+  --line:    #2c3a4e;
+  --text:    #e6edf5;
+  --dim:     #8aa0b8;
+  --accent:  #33d6a6;
+  --cyan:    #59b0ff;
+  --amber:   #ffbe5c;
+  --red:     #ff6b7d;
+  --grid:    #131e2c;
+  --view:    #10151c;
+  --view2:   #161d28;
+  --view-line: #1b2a3c;
+  --view-text: #4d6580;
+  --mono: 'Consolas','Menlo','DejaVu Sans Mono',monospace;
+}
+
+:where(*) { box-sizing: border-box; margin: 0; padding: 0; }
+:where(html, body) { height: 100%; }
+:where(body) { background: var(--bg); color: var(--text); font-family: var(--mono); }
+
+:where(::-webkit-scrollbar) { width: 8px; height: 8px; }
+:where(::-webkit-scrollbar-thumb) { background: var(--line); border-radius: 4px; }
+:where(::-webkit-scrollbar-track) { background: transparent; }
+
+/* ---- window header (the hub's centred title is header.hero) ---- */
+:where(body > header:not(.hero)) {
+  display: flex; align-items: center; gap: 12px; padding: 0 12px;
+  background: linear-gradient(180deg, var(--panel2), var(--panel));
+  border: 1px solid var(--line); border-radius: 4px;
+}
+:where(.brand) {
+  color: var(--accent); font-weight: bold; letter-spacing: 3px; font-size: calc(15px * var(--fs, 1));
+  text-shadow: 0 0 12px color-mix(in srgb, var(--accent) 30%, transparent); white-space: nowrap;
+}
+:where(.brand small) {
+  color: var(--dim); letter-spacing: 1px; font-size: calc(10px * var(--fs, 1)); display: block; font-weight: normal;
+}
+:where(.spacer) { flex: 1; }
+
+/* back-to-menu link */
+:where(a.back) {
+  color: var(--dim); text-decoration: none; font-size: calc(11px * var(--fs, 1)); letter-spacing: 1px;
+  border: 1px solid var(--line); padding: 6px 11px; border-radius: 4px; white-space: nowrap;
+}
+:where(a.back:hover) { color: var(--cyan); border-color: var(--cyan); }
+
+/* socket connection indicator */
+:where(.conn) {
+  display: flex; align-items: center; gap: 7px; font-size: calc(10px * var(--fs, 1)); letter-spacing: 1px;
+  color: var(--dim); white-space: nowrap;
+}
+:where(.conn .dot) { width: 10px; height: 10px; border-radius: 50%; background: #402028; }
+:where(.conn .dot.ok) { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+
+/* ---- panels ---- */
+:where(.panel) {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+  display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+}
+:where(.panel-title) {
+  padding: 4px 10px; font-size: calc(10px * var(--fs, 1)); letter-spacing: 2px; color: var(--dim);
+  border-bottom: 1px solid var(--line); background: var(--panel2);
+  display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
+}
+:where(.panel-title .tag) { color: var(--accent); }
+:where(.hint) { color: var(--dim); line-height: 1.6; }
