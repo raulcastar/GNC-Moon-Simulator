@@ -118,6 +118,7 @@ BAG_PRESETS = {
         'topics': _NAVIGATION + [
             '/lidar/points', '/navcam/central/depth_ground_truth',
             '/navcam/central/object_mask', '/navcam/central/object_mask_mapping',
+            '/navcam/central/object_mask_classes',
             '/navcam/central/shadow_mask', '/navcam/central/shadow_label',
             '/navcam/central/shadow_label_mapping',
             '/navcam/left/image_color/compressed', '/navcam/left/camera_info',

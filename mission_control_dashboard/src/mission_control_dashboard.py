@@ -106,6 +106,7 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
         self._elev_requested = 0.0
         self._overlay_shown = False     # a non-empty path overlay is on screen
         self._mask_legend = {}          # stencil id -> class name
+        self._mask_classes = []         # [{id, name, group, rgb}] (object_mask_classes)
         self._remote = {k: None for k in REMOTE_PARAMS}
         self._node_states = {n: 'unknown' for n in LIFECYCLE_NODES}
         self._cli_get_state, self._cli_change_state, self._cli_params = {}, {}, {}
@@ -177,6 +178,7 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
                 QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)),
             sub(CameraInfo, f'{ns}/central/camera_info', self.camera_info_callback, 10),
             sub(String, f'{ns}/central/object_mask_mapping', self.mask_legend_callback, 10),
+            sub(String, f'{ns}/central/object_mask_classes', self.mask_classes_callback, 10),
         ]
 
         # Compressed colour passes straight through: it is already JPEG.

@@ -1,0 +1,27 @@
+{
+  "about": [
+    "Object-mask classes: the id each class is drawn with in Unreal's ground-truth mask, its",
+    "colour and its group. Terrain Studio bakes these into the mask material and tags the",
+    "actors; the GNC stereo node publishes them (object_mask_mapping, object_mask_classes)",
+    "and the dashboard draws its legend from them.",
+    "The same file is in both repositories:",
+    "  Unreal-Moon-Terrain-Generation/config/mask_classes.json",
+    "  GNC-Moon-Simulator/component_stereo_depth/config/mask_classes.json",
+    "Edit both together; Terrain Studio's ground-truth page reports when they differ.",
+    "Colours are 8-bit and even: the lowest bit of each channel carries the shadow mask.",
+    "Ids above the last one here (custom stencils) are drawn in a colour hashed from the id."
+  ],
+  "classes": [
+    {"id": 0,  "name": "unlabeled",   "group": "other",   "rgb": [0, 0, 0],       "about": "Nothing tagged"},
+    {"id": 1,  "name": "sky",         "group": "sky",     "rgb": [36, 40, 96],    "about": "Nothing within 100 km"},
+    {"id": 2,  "name": "rover",       "group": "objects", "rgb": [250, 194, 16],  "about": "The rover (stencil set in its Blueprint)"},
+    {"id": 3,  "name": "sun",         "group": "sky",     "rgb": [28, 128, 162],  "about": "The sun's disc, from the Directional Light"},
+    {"id": 4,  "name": "sun_glare",   "group": "sky",     "rgb": [230, 14, 118],  "about": "Sky around the sun the navcam washes out"},
+    {"id": 5,  "name": "landscape",   "group": "ground",  "rgb": [10, 96, 216],   "about": "The Landscape"},
+    {"id": 6,  "name": "crater",      "group": "ground",  "rgb": [124, 50, 208],  "about": "Crater floor, from the crater map"},
+    {"id": 7,  "name": "crater_rim",  "group": "ground",  "rgb": [86, 52, 82],    "about": "Crater rim, from the crater map"},
+    {"id": 8,  "name": "wheel_track", "group": "ground",  "rgb": [64, 124, 162],  "about": "Tracks the rover's wheels leave"},
+    {"id": 9,  "name": "boulder",     "group": "objects", "rgb": [238, 244, 242], "about": "Rocks at least the boulder radius"},
+    {"id": 10, "name": "small_rock",  "group": "objects", "rgb": [210, 62, 6],    "about": "Smaller rocks"}
+  ]
+}

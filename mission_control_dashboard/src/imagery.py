@@ -205,3 +205,15 @@ class ImageryMixin:
         if legend != self._mask_legend:
             self._mask_legend = legend
             emit_feeds('mask_legend', legend)
+
+    def mask_classes_callback(self, msg: String) -> None:
+        """Object-mask classes with colours and groups (component_stereo_depth's mask_classes.json)."""
+        try:
+            classes = [{'id': int(c['id']), 'name': str(c['name']), 'group': str(c.get('group', 'other')),
+                        'rgb': [int(v) for v in c['rgb']][:3]} for c in json.loads(msg.data)]
+        except (ValueError, TypeError, KeyError) as exc:
+            self.get_logger().warn(f'object_mask_classes unreadable: {exc}', throttle_duration_sec=30.0)
+            return
+        if classes != self._mask_classes:
+            self._mask_classes = classes
+            emit_feeds('mask_classes', classes)

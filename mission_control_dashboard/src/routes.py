@@ -267,6 +267,8 @@ def _send_cached(server, sid):
     server.emit('config', web.node._remote, to=sid)
     if web.node._mask_legend:
         server.emit('mask_legend', web.node._mask_legend, to=sid)
+    if web.node._mask_classes:
+        server.emit('mask_classes', web.node._mask_classes, to=sid)
     server.emit('mission', web.node._mission, to=sid)
 
 

@@ -42,24 +42,13 @@ lc_component_stereo_depth:
       - "10:rear_cam:90"
     extra_cameras_hz:                      5.0
 
-    # Legend for the object mask, published as JSON on object_mask_mapping.
-    # One "<id>:<name>" per class. The ids are consecutive and set by Terrain
-    # Studio's mask material (MASK_IDS in unreal_ground_truth.py), each drawn in
-    # a fixed colour (MASK_PALETTE there, MASK_COLOURS in the dashboard). The
-    # rover, landscape and rocks carry their id as their CustomDepth Stencil
-    # Value in Unreal (see the UnrealStereoCam README).
-    mask_labels:
-      - "0:unlabeled"      # Nothing tagged (black)
-      - "1:sky"            # Nothing within 100 km (Terrain Studio)
-      - "2:rover"
-      - "3:sun"            # The sun's disc in the sky (Terrain Studio, from the Directional Light)
-      - "4:sun_glare"      # Sky around it the navcam washes out (Terrain Studio glare radius)
-      - "5:landscape"
-      - "6:crater"         # Crater ground truth from the Terrain Studio (crater map)
-      - "7:crater_rim"
-      - "8:wheel_track"    # Tracks the rover's wheels leave on the ground (Terrain Studio)
-      - "9:boulder"
-      - "10:small_rock"
+    # Object-mask classes: id, name, colour and group of each class, published
+    # as JSON on object_mask_mapping (id -> name) and object_mask_classes (the
+    # full list; the dashboard draws its legend from it). The file is the same
+    # as Terrain Studio's config/mask_classes.json, which bakes the ids and
+    # colours into the Unreal mask material: edit both together. Empty: this
+    # package's config/mask_classes.json.
+    mask_classes_file:                     ""
 
     # Hierarchical topic namespaces. TF frame names are derived by flattening
     # them ('navcam/central' -> 'navcam_central'), since tf2 forbids '/'.
@@ -141,8 +130,8 @@ lc_component_stereo_depth:
     # (bStreamCenterDepth, DepthCamId) on this cam id; < 0 turns it off.
     depth_ground_truth_camera_id:            4
 
-    # Publishes navcam/central/object_mask (rgb8) and object_mask_mapping (the
-    # mask_labels legend as JSON). The mask comes from the UnrealStereoCam
+    # Publishes navcam/central/object_mask (rgb8), object_mask_mapping and
+    # object_mask_classes (mask_classes_file as JSON). The mask comes from the UnrealStereoCam
     # segmentation capture named by mask_camera_id; colours are baked into the
     # Unreal post-process material. Needs that capture to exist, or it
     # self-disables.

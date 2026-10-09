@@ -16,6 +16,7 @@ person actually looks at:
                                          navcam/central/depth_ground_truth/visualization
                                          navcam/central/object_mask
                                          navcam/central/object_mask_mapping
+                                         navcam/central/object_mask_classes
                                          navcam/central/shadow_mask
                                          navcam/central/shadow_label
                                          navcam/central/shadow_label_mapping
@@ -44,6 +45,7 @@ frames.
 from typing import Dict, Optional, Tuple
 import collections
 import math
+import os
 import socket
 import struct
 import threading
@@ -55,6 +57,7 @@ import numpy as np
 import cv2
 
 import rclpy
+from ament_index_python.packages import get_package_share_directory
 import rclpy.lifecycle
 from rclpy.lifecycle import Publisher, State, TransitionCallbackReturn
 from rclpy.timer import Timer
@@ -109,6 +112,8 @@ class FrameStreamReceiver:
         self._server: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
         self.connections = 0                    # Unreal streamers connected now
+        self.known_ids: set = set()             # camera ids the node uses (set after configure)
+        self._unknown_ids: set = set()          # ids already warned about
 
     def start(self) -> None:
         self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -255,6 +260,13 @@ class FrameStreamReceiver:
                 bgra = np.frombuffer(buf[start:end],
                                      dtype=np.uint8).reshape(h, w, 4)
                 image = np.ascontiguousarray(bgra[:, :, [2, 1, 0]])
+            if self.known_ids and cam_id not in self.known_ids and cam_id not in self._unknown_ids:
+                self._unknown_ids.add(cam_id)
+                self._log.warn(
+                    f'Frame stream: camera id {cam_id} ({w}x{h}) is not one this node '
+                    f'uses (configured: {sorted(self.known_ids)}); its frames are ignored. '
+                    'Check the camera ids in the UnrealStereoCam components against '
+                    'config/params.yaml.')
             with self._lock:
                 ring = self._frames.setdefault(
                     cam_id, collections.deque(maxlen=self._RING))
@@ -270,6 +282,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
 
         self._pubs: Dict[str, Publisher] = {}   # keyed by short name
         self._cached_color_map_json: str = "{}"
+        self._mask_classes_json: str = "[]"
 
         self._timer: Optional[Timer] = None
         self._extra_timer: Optional[Timer] = None
@@ -320,12 +333,10 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                 # given) at extra_cameras_hz, independently of the stereo pair.
                 ('extra_cameras',           rclpy.Parameter.Type.STRING_ARRAY),
                 ('extra_cameras_hz',        rclpy.Parameter.Type.DOUBLE),
-                # Legend for the object mask: "<stencil_id>:<name>" entries, one
-                # per tagged class, published as JSON on object_mask_mapping so a
-                # consumer knows what each stencil id in the scene means. The ids
-                # must match the CustomDepth Stencil Value set on the actors in
-                # Unreal.
-                ('mask_labels',             rclpy.Parameter.Type.STRING_ARRAY),
+                # Object-mask classes (id, name, colour, group): a JSON file,
+                # the same as Terrain Studio's config/mask_classes.json. Empty:
+                # config/mask_classes.json of this package.
+                ('mask_classes_file',       rclpy.Parameter.Type.STRING),
                 # Topic namespaces, one per physical camera
                 ('left_topic',              rclpy.Parameter.Type.STRING),
                 ('right_topic',             rclpy.Parameter.Type.STRING),
@@ -358,43 +369,45 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
     # Object-mask legend
     # =========================================================================
 
-    def _build_stream_label_map(self) -> str:
+    def _load_mask_classes(self) -> Tuple[str, str]:
         """
-        Stencil-id -> name legend for the streamed object mask, from the
-        mask_labels parameter ("<id>:<name>" entries).
+        The object-mask classes from mask_classes_file, as the two JSON strings
+        published with the mask: the id -> name legend (object_mask_mapping,
+        e.g. {"1": "sky", "5": "landscape"}) and the full class list with
+        colours and groups (object_mask_classes).
 
-        The mask itself only carries the material's hashed colours, so this is
-        the authoritative record of what each id in the Unreal scene means. It
-        is published as JSON on object_mask_mapping, e.g.
-        {"1": "sky", "5": "landscape", "9": "boulder"}. Malformed entries
-        are skipped with a warning rather than aborting configuration.
+        The mask itself only carries colours, so this file is the record of
+        what each id in the Unreal scene means; Terrain Studio bakes the same
+        file into the mask material. Malformed entries are skipped with a
+        warning rather than aborting configuration.
         """
-        labels: Dict[str, str] = {}
-        for entry in self.mask_labels:
-            head, sep, name = str(entry).partition(':')
-            key, name = head.strip(), name.strip()
-            if not sep or not key or not name:
-                self.get_logger().warn(
-                    f"Ignoring malformed mask_labels entry '{entry}'; expected "
-                    f"'<stencil_id>:<name>'.")
+        path = self.get_parameter('mask_classes_file').value or os.path.join(
+            get_package_share_directory('component_stereo_depth'), 'config', 'mask_classes.json')
+        try:
+            with open(path, encoding='utf-8') as handle:
+                entries = json.load(handle).get('classes') or []
+        except (OSError, ValueError) as exc:
+            self.get_logger().error(f'Object-mask classes unreadable ({path}): {exc}. '
+                                    'object_mask_mapping will publish "{}".')
+            return '{}', '[]'
+        classes = []
+        for entry in entries:
+            cid, name, rgb = entry.get('id'), entry.get('name'), entry.get('rgb')
+            if (not isinstance(cid, int) or not isinstance(name, str) or not name
+                    or not isinstance(rgb, list) or len(rgb) != 3):
+                self.get_logger().warn(f'{path}: ignoring malformed class {entry}.')
                 continue
-            if not key.lstrip('-').isdigit():
-                self.get_logger().warn(
-                    f"Ignoring mask_labels entry '{entry}': '{key}' is not an "
-                    f"integer stencil id.")
-                continue
-            labels[str(int(key))] = name
-        if labels:
+            classes.append({'id': cid, 'name': name, 'group': entry.get('group', 'other'),
+                            'rgb': [int(v) for v in rgb]})
+        classes.sort(key=lambda c: c['id'])
+        legend = {str(c['id']): c['name'] for c in classes}
+        if classes:
             self.get_logger().info(
-                f'Object mask legend ({len(labels)} ids): '
-                + ', '.join(f'{k}={v}' for k, v in sorted(
-                    labels.items(), key=lambda kv: int(kv[0]))))
+                f'Object mask classes ({len(classes)}, {path}): '
+                + ', '.join(f'{c["id"]}={c["name"]}' for c in classes))
         else:
-            self.get_logger().warn(
-                'mask_labels is empty; object_mask_mapping will publish "{}". '
-                'Add "<id>:<name>" entries matching the CustomDepth Stencil '
-                'Values you set in Unreal.')
-        return json.dumps(labels)
+            self.get_logger().warn(f'{path} lists no classes; object_mask_mapping will publish "{{}}".')
+        return json.dumps(legend), json.dumps(classes)
 
     def _build_matcher(self) -> None:
         """
@@ -904,6 +917,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                 msg_map = String()
                 msg_map.data = self._cached_color_map_json
                 self._pubs['center_object_mask_mapping'].publish(msg_map)
+                self._pubs['center_object_mask_classes'].publish(String(data=self._mask_classes_json))
 
             if self.debug_mode:
                 matched = np.isfinite(disp).mean() * 100
@@ -971,7 +985,6 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self.depth_gt_camera_id = self.get_parameter('depth_ground_truth_camera_id').value
         if self.depth_gt_camera_id is None:
             self.depth_gt_camera_id = -1
-        self.mask_labels      = self.get_parameter('mask_labels').value or []
         self.left_topic       = self.get_parameter('left_topic').value
         self.right_topic      = self.get_parameter('right_topic').value
         self.center_topic     = self.get_parameter('center_topic').value
@@ -1047,17 +1060,17 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         if self.enable_object_mask:
             pub('center_object_mask', RosImage, f'{C}/object_mask')
             pub('center_object_mask_mapping', String, f'{C}/object_mask_mapping')
+            pub('center_object_mask_classes', String, f'{C}/object_mask_classes')
             if self.enable_shadow_mask:
                 pub('center_shadow_mask', RosImage, f'{C}/shadow_mask')
                 pub('center_shadow_label', RosImage, f'{C}/shadow_label')
                 pub('center_shadow_label_mapping', String, f'{C}/shadow_label_mapping')
                 self._shadow_ids_json = json.dumps(
                     {str(k): v for k, v in self.SHADOW_IDS.items()})
-            # Colours are baked into the Unreal post-process material, so there is
-            # no name->colour legend to query. Instead publish the user-declared
-            # stencil-id -> name legend (mask_labels), which is what tells a
-            # consumer what each id in the scene represents.
-            self._cached_color_map_json = self._build_stream_label_map()
+            # The colours are baked into the Unreal post-process material from the
+            # same class file, so publishing it tells a consumer what each id and
+            # colour in the mask represents.
+            self._cached_color_map_json, self._mask_classes_json = self._load_mask_classes()
 
         self.get_logger().info(
             f'Publishing {L}/*, {R}/* (colour) and {C}/* '
@@ -1090,6 +1103,12 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
             self.get_parameter('stream_bind_ip').value,
             self.get_parameter('stream_port').value,
             self.get_logger())
+        # Every camera id a parameter names, so a frame on another id (an Unreal
+        # component configured with a different id) is reported once.
+        self._stream.known_ids = {i for i in (
+            self.left_camera_id, self.right_camera_id, self.center_camera_id,
+            self.mask_camera_id if self.enable_object_mask else -1,
+            self.depth_gt_camera_id) if i is not None and i >= 0} | {e[0] for e in self._extras}
         self._stream.start()
 
         self._timer = self.create_timer(1.0 / hz, self.read_stereo_pair)

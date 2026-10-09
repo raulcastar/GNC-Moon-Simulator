@@ -2,8 +2,9 @@
  * Feed legends — shared by the overview, camera wall and teleop pages.
  *
  *   depth: JET colour bar over 0 … depth_max_distance (component_stereo_depth)
- *   mask:   class colours and stencil ids of the object mask, named by
- *           object_mask_mapping and grouped into ground / objects
+ *   mask:   class colours, ids and groups of the object mask, from
+ *           object_mask_classes (component_stereo_depth's mask_classes.json;
+ *           names only, from object_mask_mapping, for bags recorded before it)
  *   shadow: shadow mask colours with the shadow_label class ids, grouped
  *
  * Usage: FeedLegends.attach(socket, { depth: [feedEl, …], mask: [feedEl, …],
@@ -14,30 +15,8 @@
 (function () {
   'use strict';
 
-  /* Object-mask colour per id: the fixed palette of PPM_GroundTruthMask
-     (MASK_PALETTE in Terrain Studio's unreal_ground_truth.py; lowest bit of each
-     channel cleared, as it carries the shadow mask). Keep the two in step. */
-  const MASK_COLOURS = {
-    '0':  [0, 0, 0],         /* unlabeled   */
-    '1':  [36, 40, 96],      /* sky         */
-    '2':  [250, 194, 16],    /* rover       */
-    '3':  [28, 128, 162],    /* sun         */
-    '4':  [230, 14, 118],    /* sun glare   */
-    '5':  [10, 96, 216],     /* landscape   */
-    '6':  [124, 50, 208],    /* crater      */
-    '7':  [86, 52, 82],      /* crater rim  */
-    '8':  [64, 124, 162],    /* wheel track */
-    '9':  [238, 244, 242],   /* boulder     */
-    '10': [210, 62, 6],      /* small rock  */
-  };
-
-  /* Object-mask classes per group (by name, from object_mask_mapping). */
-  const MASK_GROUPS = [
-    ['ground', ['landscape', 'crater', 'crater_rim', 'wheel_track']],
-    ['objects', ['rover', 'boulder', 'small_rock']],
-    ['sky', ['sky', 'sun', 'sun_glare']],
-    ['other', ['unlabeled']],
-  ];
+  /* Object-mask legend groups, in display order. */
+  const MASK_GROUP_ORDER = ['ground', 'objects', 'other', 'sky'];
 
   /* Shadow feed: colour and shadow_label id per class, grouped. Must match
      SHADOW_IDS in component_stereo_depth. */
@@ -139,21 +118,20 @@
            `<span class="fl-id">${id}</span>${name}</div>`;
   }
 
-  function mask(feed, legend) {
-    const ids = Object.keys(legend).sort((a, b) => a - b);
-    const groupOf = id => {
-      const g = MASK_GROUPS.find(([, names]) => names.includes(legend[id]));
-      return g ? g[0] : 'other';
-    };
+  /* classes: [{id, name, group, rgb}]; without colours (an older bag) every
+     class is listed under 'other' with a hatched swatch. */
+  function mask(feed, classes) {
+    const groups = [...MASK_GROUP_ORDER, ...new Set(classes.map(c => c.group))]
+      .filter((g, i, all) => all.indexOf(g) === i);
     const rows = [];
-    ['ground', 'objects', 'other', 'sky'].forEach(group => {
-      const members = ids.filter(id => groupOf(id) === group);
+    groups.forEach(group => {
+      const members = classes.filter(c => (c.group || 'other') === group).sort((a, b) => a.id - b.id);
       if (!members.length) return;
       rows.push(`<div class="fl-grp">${group}</div>`);
-      members.forEach(id => {
-        const c = MASK_COLOURS[id];
-        const sw = c ? `background:rgb(${c.join(',')})` : 'background:repeating-linear-gradient(45deg,#555 0 2px,#222 2px 4px)';
-        rows.push(row(sw, id, legend[id].replace('_', ' ')));
+      members.forEach(c => {
+        const sw = c.rgb ? `background:rgb(${c.rgb.join(',')})`
+                         : 'background:repeating-linear-gradient(45deg,#555 0 2px,#222 2px 4px)';
+        rows.push(row(sw, c.id, String(c.name).replace(/_/g, ' ')));
       });
     });
     box(feed, 'mask').innerHTML = rows.join('');
@@ -182,15 +160,19 @@
           (els.depth || []).forEach(f => depth(f, maxM));
         }
       });
-      let lastLegend = null;
+      /* The classes message (with colours) wins; the id -> name legend alone
+         is shown only until it arrives, or for a bag recorded without it. */
+      let lastClasses = null, haveColours = false;
+      const showMask = classes => { lastClasses = classes; (els.mask || []).forEach(f => mask(f, classes)); };
+      socket.on('mask_classes', classes => { haveColours = true; showMask(classes); });
       socket.on('mask_legend', legend => {
-        lastLegend = legend;
-        (els.mask || []).forEach(f => mask(f, legend));
+        if (haveColours) return;
+        showMask(Object.entries(legend).map(([id, name]) => ({ id: +id, name, group: 'other' })));
       });
       /* re-render on resize so the compact form follows the tile size */
       window.addEventListener('resize', () => {
         (els.depth || []).forEach(f => depth(f, maxM));
-        if (lastLegend) (els.mask || []).forEach(f => mask(f, lastLegend));
+        if (lastClasses) (els.mask || []).forEach(f => mask(f, lastClasses));
         (els.shadow || []).forEach(f => shadow(f));
       });
     },

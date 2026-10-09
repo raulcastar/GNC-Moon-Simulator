@@ -122,12 +122,14 @@ the RGB cameras.
    must equal `mask_camera_id` in the stereo node's params.
 
 5. **Name the ids (what each number means).** The mask image carries only
-   colours, so the id→name legend is declared on the ROS side in
-   `component_stereo_depth/config/params.yaml → mask_labels` as `"<id>:<name>"`
-   entries — **keep these ids in sync with the CustomDepth Stencil Values from
-   step 2**. The stereo node republishes them as JSON on
-   `navcam/central/object_mask_mapping`; `ros2 topic echo` it to read the legend,
-   e.g. `{"1": "sky", "5": "landscape", "9": "boulder"}`.
+   colours, so the classes (id, name, colour, group) are listed in
+   `component_stereo_depth/config/mask_classes.json` — the same file as Terrain
+   Studio's `config/mask_classes.json`, which sets the CustomDepth Stencil Values
+   of step 2 and the mask colours. **Edit both copies together**; Terrain
+   Studio's ground-truth page says when they differ. The stereo node republishes
+   it as JSON on `navcam/central/object_mask_mapping` (id → name, e.g.
+   `{"1": "sky", "5": "landscape", "9": "boulder"}`) and
+   `navcam/central/object_mask_classes` (with colours and groups).
 
 ## Ground-truth depth (on by default)
 
