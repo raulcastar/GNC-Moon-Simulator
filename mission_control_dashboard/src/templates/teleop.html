@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GNC MOON SIM — Teleop</title>
+<title>GNC Moon Simulator — Teleoperation</title>
+<script src="/theme.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 <script src="/feed_legends.js"></script>
 <script src="/nav_overlay.js"></script>
@@ -20,6 +21,7 @@
     --cyan:    #59b0ff;
     --amber:   #ffbe5c;
     --red:     #ff6b7d;
+    --grid:    #131e2c;
     --mono:    'Consolas','Menlo','DejaVu Sans Mono',monospace;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -82,12 +84,12 @@
      natural size, so live frames would stretch the strip and squeeze the top */
   #cam-top { flex: 1; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr);
              gap: 6px; min-height: 0; }
-  .feed { position: relative; background: #000; min-height: 0; overflow: hidden; flex: 1; }
+  .feed { position: relative; background: var(--view, #10151c); min-height: 0; overflow: hidden; flex: 1; }
   .feed img { width: 100%; height: 100%; object-fit: contain; display: block; }
   .feed .nosig {
     position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-    color: #24344a; font-size: 12px; letter-spacing: 4px;
-    background: repeating-linear-gradient(0deg, #10151c 0 2px, #161d28 2px 4px);
+    color: var(--view-text, #4d6580); font-size: 12px; letter-spacing: 4px;
+    background: repeating-linear-gradient(0deg, var(--view, #10151c) 0 2px, var(--view2, #161d28) 2px 4px);
   }
   #cam-side { flex: 0 0 150px; display: grid; grid-template-columns: 1fr 1fr 1fr;
               grid-template-rows: minmax(0, 1fr); gap: 6px; min-height: 0; }
@@ -103,7 +105,7 @@
 
   /* ---- telemetry ---- */
   .tl { display: flex; justify-content: space-between; padding: 5px 12px;
-        border-bottom: 1px dashed #131e2c; }
+        border-bottom: 1px dashed var(--grid); }
   .tl .k { color: var(--dim); letter-spacing: 1px; font-size: 11px; }
   .tl .v { color: var(--accent); font-size: 15px; }
   .tl .v.cy { color: var(--cyan); }
@@ -148,7 +150,7 @@
 
   /* ---- console ---- */
   #console { flex: 1; overflow-y: auto; padding: 6px 10px; font-size: 11px; min-height: 0; }
-  #console .ln { padding: 1px 0; border-bottom: 1px dashed #101a26; white-space: nowrap;
+  #console .ln { padding: 1px 0; border-bottom: 1px dashed var(--grid); white-space: nowrap;
                  overflow: hidden; text-overflow: ellipsis; }
   #console .WARN { color: var(--amber); }
   #console .ERROR, #console .FATAL { color: var(--red); }
@@ -157,7 +159,7 @@
 <body>
   <header>
     <a class="back" href="#" id="hublink">◀ HUB</a>
-    <div class="brand">TELEOP<small>MANUAL DRIVE-BY-WIRE</small></div>
+    <div class="brand">TELEOPERATION<small>MANUAL DRIVING</small></div>
     <div class="spacer"></div>
     <button class="hdr" id="views" title="Choose which cameras are shown">VIEWS ▾</button>
     <button class="hdr" id="lights">HEADLIGHTS</button>
@@ -244,8 +246,7 @@
           <div class="hint">
             <kbd>W</kbd>/<kbd>S</kbd> drive straight · <kbd>A</kbd>/<kbd>D</kbd> spot turn ·
             <kbd>Space</kbd> stop.<br>
-            <span class="warn">Driving here cancels any active GNC goal — both command the
-            same rover.</span>
+            <span class="warn">Manual commands cancel any active autonomous goal.</span>
           </div>
         </div>
       </div>
@@ -497,7 +498,7 @@
   function pollGamepad() {
     const p = findGamepad();
     if (!p) {
-      $('gp-state').textContent = 'no gamepad: plug one in and press a button';
+      $('gp-state').textContent = 'No gamepad detected: connect one and press any button.';
       gpPrev = []; setGpCmd([0, 0]); return;
     }
     $('gp-state').textContent = p.id.replace(/\s*\(.*$/, '') || 'gamepad';

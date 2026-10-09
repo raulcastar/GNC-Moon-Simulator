@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>GNC MOON SIM — Mission Control</title>
+<title>GNC Moon Simulator — Overview</title>
+<script src="/theme.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="/local_dem.js"></script>
@@ -22,6 +23,7 @@
     --cyan:    #59b0ff;
     --amber:   #ffbe5c;
     --red:     #ff6b7d;
+    --grid:    #131e2c;
     --mono:    'Consolas','Menlo','DejaVu Sans Mono',monospace;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -82,15 +84,15 @@
   .cam-row { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr); gap: 6px; min-height: 0; }
   /* feeds switched off in VIEWS, and rows left with none */
   #cams .feed.off, #cams .cam-row.empty { display: none !important; }
-  .feed { position: relative; background: #000; min-height: 0; overflow: hidden; }
+  .feed { position: relative; background: var(--view, #10151c); min-height: 0; overflow: hidden; }
   .feed img {
     width: 100%; height: 100%; object-fit: contain; display: block;
     image-rendering: auto;
   }
   .feed .nosig {
     position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-    color: #24344a; font-size: 12px; letter-spacing: 4px;
-    background: repeating-linear-gradient(0deg, #10151c 0 2px, #161d28 2px 4px);
+    color: var(--view-text, #4d6580); font-size: 12px; letter-spacing: 4px;
+    background: repeating-linear-gradient(0deg, var(--view, #10151c) 0 2px, var(--view2, #161d28) 2px 4px);
   }
 
   /* ============ MAP ============ */
@@ -124,7 +126,7 @@
           grid-template-columns: 1fr 1fr; column-gap: 18px; align-content: start; }
   #tele .tl.wide { grid-column: 1 / -1; }
   .tl { display: flex; justify-content: space-between; padding: 3px 0;
-        border-bottom: 1px dashed #131e2c; }
+        border-bottom: 1px dashed var(--grid); }
   .tl .k { color: var(--dim); letter-spacing: 1px; font-size: 11px; }
   .tl .v { color: var(--accent); font-size: 13px; }
   .tl .v.cy { color: var(--cyan); }
@@ -227,7 +229,7 @@
   .badge.reached { color: #7ee07e; }
   .badge.aborted { color: var(--red); }
   .badge.cancelled { color: var(--amber); }
-  .tiltbar { flex: 1; height: 8px; margin: 4px 10px 0; background: #131e2c; border-radius: 4px;
+  .tiltbar { flex: 1; height: 8px; margin: 4px 10px 0; background: var(--grid); border-radius: 4px;
              position: relative; overflow: hidden; }
   #t-tiltfill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--accent);
                 transition: width .3s, background .3s; }
@@ -243,7 +245,7 @@
             border:1px solid var(--line);padding:6px 11px;border-radius:4px;white-space:nowrap">◀ MENU</a>
   <script>document.getElementById('menu-link').href =
     'http://' + (window.location.hostname || 'localhost') + ':5000/';</script>
-  <div class="brand">GNC MOON SIMULATOR<small>MISSION CONTROL // LUNAR SURFACE OPS</small></div>
+  <div class="brand">GNC MOON SIMULATOR<small>MISSION CONTROL · LUNAR SURFACE OPERATIONS</small></div>
   <div class="clock"><div class="lbl">MET</div><div class="val" id="met">T+ 00:00:00</div></div>
   <div class="clock"><div class="lbl">UTC</div><div class="val" id="utc">--:--:--</div></div>
   <div class="viewtabs">
@@ -261,7 +263,7 @@
     <div class="light"><div class="dot" id="li-depth"></div>DEPTH</div>
     <div class="light"><div class="dot" id="li-lidar"></div>LIDAR</div>
   </div>
-  <button class="hbtn" id="btn-snap" title="Download the latest frames, local DEM, lidar and state as a zip">⤓ SNAPSHOT</button>
+  <button class="hbtn" id="btn-snap" title="Download the latest camera frames, local elevation map, lidar scan and rover state (zip)">⤓ SNAPSHOT</button>
   <button class="hbtn" id="btn-rec" title="Record a rosbag — presets, names, notes and the recorded bags are in the BAGS window (menu, port 5007)">● REC</button>
   <button class="hbtn" id="btn-sys" title="Open the system window: feed rates, lifecycle nodes, ROS 2 topics">SYSTEM ↗</button>
 </header>
@@ -271,8 +273,8 @@
   <!-- ============ LEFT: CAMERAS ============ -->
   <div class="col" id="col-cams">
     <div class="panel" style="flex:1">
-      <div class="panel-title"><span class="tag">▣</span>NAVCAM ARRAY
-        <span class="age"><button id="btn-feeds" title="Choose which camera views are shown" style="background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);font-size:9px;padding:1px 7px;cursor:pointer;margin-right:4px">VIEWS ▾</button><button id="btn-camrst"style="background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);font-size:9px;padding:1px 7px;cursor:pointer">⟳ RESTART NODE</button></span>
+      <div class="panel-title"><span class="tag">▣</span>CAMERAS
+        <span class="age"><button id="btn-feeds" title="Select the camera views to display" style="background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);font-size:9px;padding:1px 7px;cursor:pointer;margin-right:4px">VIEWS ▾</button><button id="btn-camrst"style="background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);font-size:9px;padding:1px 7px;cursor:pointer">⟳ RESTART NODE</button></span>
       </div>
       <div id="cams">
         <div class="cam-row" style="grid-template-columns:1fr">
@@ -300,7 +302,7 @@
   <!-- ============ CENTER: MAP ============ -->
   <div class="col" id="col-map">
     <div class="panel" id="map-panel">
-      <div class="panel-title"><span class="tag">◈</span>TOPOGRAPHIC MAP — CLICK DISPATCH · WHEEL ZOOM · DRAG PAN
+      <div class="panel-title"><span class="tag">◈</span><span title="Click: send the rover a goal · Wheel: zoom · Drag: pan">GLOBAL MAP</span>
         <span class="age" style="display:flex;gap:6px">
           <button id="btn-follow" style="background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);font-size:9px;padding:1px 7px;cursor:pointer">FOLLOW ROVER</button>
           <button id="btn-zoomreset" style="background:none;border:1px solid var(--line);color:var(--dim);font-family:var(--mono);font-size:9px;padding:1px 7px;cursor:pointer">RESET VIEW</button>
@@ -335,15 +337,15 @@
   <!-- ============ RIGHT: LIDAR 3D + LOCAL DEM + TELEMETRY ============ -->
   <div class="col" id="col-right">
     <div class="panel" id="lidar-panel">
-      <div class="panel-title"><span class="tag">◎</span>LIDAR — 3D · ROVER FRAME<span class="age" id="lidar-info"></span></div>
+      <div class="panel-title"><span class="tag">◎</span>LIDAR · ROVER FRAME<span class="age" id="lidar-info"></span></div>
       <div id="lidarView"></div>
     </div>
     <div class="panel" id="dem-panel">
-      <div class="panel-title"><span class="tag">▦</span>LOCAL DEM — TERRAIN RELIEF · DRAG · WHEEL<span class="age" id="dem-info"></span></div>
+      <div class="panel-title"><span class="tag">▦</span><span title="Drag: orbit · Wheel: zoom">LOCAL ELEVATION MAP</span><span class="age" id="dem-info"></span></div>
       <div class="feed" style="flex:1;position:relative" id="demView"><div class="nosig" id="dem-nosig">AWAITING LOCAL MAPPING</div></div>
     </div>
     <div class="panel" id="tele-panel">
-      <div class="panel-title"><span class="tag">▤</span>ROVER TELEMETRY &amp; COMMAND</div>
+      <div class="panel-title"><span class="tag">▤</span>TELEMETRY &amp; COMMANDS</div>
       <div id="cmd-bar">
         <button id="btn-lon">☀ LIGHTS ON</button>
         <button id="btn-loff">● LIGHTS OFF</button>
@@ -370,14 +372,14 @@
 <!-- ============ CONSOLE ============ -->
 <footer class="panel">
   <div class="panel-title" id="console-bar">
-    <span class="tag">≡</span>SYSTEM CONSOLE — /rosout
+    <span class="tag">≡</span>SYSTEM LOG · /rosout
     <span style="flex:1"></span>
-    <input id="log-text" placeholder="filter text…" spellcheck="false">
+    <input id="log-text" placeholder="Filter text…" spellcheck="false">
     <select id="log-node" title="Only one node's messages"><option value="">all nodes</option></select>
     <button data-f="ALL" class="on">ALL</button>
     <button data-f="WARN" id="lf-warn" title="Warnings and errors">WARN+</button>
     <button data-f="ERROR" id="lf-err" title="Errors only">ERR</button>
-    <button id="btn-pause" title="Hold new messages (they are kept, not dropped)">PAUSE</button>
+    <button id="btn-pause" title="Hold new messages; they are kept and shown on resume">PAUSE</button>
     <button id="btn-clear">CLEAR</button>
   </div>
   <div id="log"></div>

@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GNC MOON SIM — Bags</title>
+<title>GNC Moon Simulator — Bags</title>
+<script src="/theme.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 <script src="/dash_common.js"></script>
 <style>
@@ -18,6 +19,7 @@
     --cyan:    #59b0ff;
     --amber:   #ffbe5c;
     --red:     #ff6b7d;
+    --grid:    #131e2c;
     --mono:    'Consolas','Menlo','DejaVu Sans Mono',monospace;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -76,7 +78,7 @@
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }
   th { position: sticky; top: 0; background: var(--panel2); color: var(--dim); font-weight: normal;
        font-size: 9px; letter-spacing: 1px; text-align: left; padding: 4px 8px; }
-  td { padding: 5px 8px; border-bottom: 1px dashed #131e2c; white-space: nowrap; overflow: hidden;
+  td { padding: 5px 8px; border-bottom: 1px dashed var(--grid); white-space: nowrap; overflow: hidden;
        text-overflow: ellipsis; }
   td.num, th.num { text-align: right; }
   #bag-body tr { cursor: pointer; }
@@ -160,7 +162,7 @@
   <header>
     <a class="back" href="#" id="hublink">◀ MENU</a>
     <div class="brand">BAGS<small>RECORD · REPLAY · MANAGE ROSBAGS</small></div>
-    <a class="open" href="#" id="overview-link" target="gnc_overview" title="Watch the replay in the overview">OVERVIEW ↗</a>
+    <a class="open" href="#" id="overview-link" target="gnc_overview" title="Open the Overview to view the playback">OVERVIEW ↗</a>
     <div class="spacer"></div>
     <div class="conn"><span class="dot" id="cdot"></span><span id="cstate">OFFLINE</span></div>
   </header>
@@ -175,8 +177,8 @@
         <div id="preset-about"></div>
         <div id="custom"></div>
         <div class="fields">
-          <label>NAME</label><input type="text" id="rec-label" maxlength="40" placeholder="optional, e.g. crater_traverse (added to the date)">
-          <label>NOTES</label><textarea id="rec-notes" rows="2" placeholder="optional: what this run is about"></textarea>
+          <label>NAME</label><input type="text" id="rec-label" maxlength="40" placeholder="Optional label, e.g. crater_traverse">
+          <label>NOTES</label><textarea id="rec-notes" rows="2" placeholder="Optional description of the run"></textarea>
         </div>
         <div class="recrow">
           <button class="btn rec" id="rec">● RECORD</button>
@@ -204,7 +206,7 @@
     <div class="panel" style="flex: 0 0 auto">
       <div class="panel-title"><span class="tag">▸</span>SELECTED BAG<span class="n" id="sel-name"></span></div>
       <div id="selected">
-        <div class="hint" id="manage-hint">Select a bag in the list to rename it, edit its notes or delete it.</div>
+        <div class="hint" id="manage-hint">Select a recording to rename, annotate or delete it.</div>
         <div id="manage">
           <label>NAME</label><input type="text" id="m-name" maxlength="80">
           <button class="small" id="m-rename" title="Rename the bag folder">RENAME</button>
@@ -222,7 +224,7 @@
       <div class="panel" style="flex: 0 0 auto">
         <div class="panel-title"><span class="tag">▸</span>PLAYER<span class="n" id="state">idle</span></div>
         <div id="player">
-          <div id="now">no bag selected<small>pick one on the left</small></div>
+          <div id="now">No recording selected<small>Select one in the list.</small></div>
           <div id="bar" class="off" title="Click to seek"><div id="fill"></div></div>
           <div id="times"><span><b id="t-pos">0:00</b> / <span id="t-dur">0:00</span></span><span id="t-left"></span></div>
           <div class="transport">
@@ -234,8 +236,8 @@
             <span class="grp"><label for="offset">START</label><input type="number" id="offset" min="0" step="1" value="0"
               title="Seconds into the bag to start from"><span class="unit">s</span></span>
           </div>
-          <div id="msg" class="ok">Replayed topics reach every node as if live: open the
-            OVERVIEW to watch. Stop Play in Unreal first.</div>
+          <div id="msg" class="ok">Playback publishes the recorded topics to the live system; view them in
+            the Overview. The simulation must be stopped.</div>
         </div>
       </div>
 
@@ -243,9 +245,9 @@
       <div class="panel" style="flex: 1">
         <div class="panel-title"><span class="tag">▸</span>TOPICS IN THE BAG
           <span class="n" id="topic-n"></span>
-          <button class="small" id="sensor-topics" title="The default: sensors and pose; live nodes recompute the rest">SENSORS</button>
-          <button class="small" id="all-topics" title="Every recorded topic, as recorded (the live nodes' outputs too)">ALL</button>
-          <button class="small" id="no-topics" title="Clear the selection (then tick the ones to replay)">NONE</button>
+          <button class="small" id="sensor-topics" title="Default selection: sensor and pose data only">SENSORS</button>
+          <button class="small" id="all-topics" title="All recorded topics, including those regenerated by live nodes">ALL</button>
+          <button class="small" id="no-topics" title="Clear the selection">NONE</button>
         </div>
         <div class="scroll"><table>
           <colgroup><col style="width:52%"><col style="width:34%"><col style="width:14%"></colgroup>
@@ -253,7 +255,7 @@
           <tbody id="topic-body"></tbody></table>
         </div>
         <div class="note" title="A running node recomputes these from the replayed sensors (local DEM, IMU, planner), or they are commands. Replaying them too would put two publishers on one topic; tick them to see the recorded versions instead.">
-          <span style="color:var(--amber)">live</span> = recomputed by a running node, or a command: left out by default (hover for why).</div>
+          <span style="color:var(--amber)">live</span> — regenerated by a running node, or a command; excluded by default.</div>
       </div>
     </div>
   </main>
@@ -284,7 +286,7 @@
     liveOutputs = m.live_outputs || {};
     $('bag-n').textContent = `${bags.length} in ${m.directory}`;
     $('bag-hint').textContent = bags.length ? '' :
-      'No bags yet. Record one with ● REC on the overview (it lands in mission_control_dashboard/bags).';
+      'No recordings yet. Use the recorder above or ● REC in the Overview.';
     if (sel && !bags.find(b => b.name === sel)) sel = null;
     renderBags(); renderSelection();
   });
@@ -321,15 +323,15 @@
     $('manage').classList.toggle('open', !!b && !busy && !b.recording);
     $('sel-name').textContent = b ? b.name : '';
     $('manage-hint').style.display = (!b || busy) ? '' : 'none';
-    $('manage-hint').textContent = !b ? 'Select a bag in the list to rename it, edit its notes or delete it.'
-                                      : 'Stop the replay to rename, edit or delete this bag.';
+    $('manage-hint').textContent = !b ? 'Select a recording to rename, annotate or delete it.'
+                                      : 'Stop playback to modify this recording.';
     if (b && document.activeElement !== $('m-name') && document.activeElement !== $('m-notes')) {
       $('m-name').value = b.name; $('m-notes').value = b.notes || '';
     }
     if (st.state !== 'playing' && st.state !== 'paused') {
       $('now').innerHTML = b ? `${escHtml(b.name)}<small>${clock(b.duration)} · ${topics.length} topics · ` +
-                               `${b.messages ?? '?'} messages · press PLAY</small>`
-                             : 'no bag selected<small>pick one on the left</small>';
+                               `${b.messages ?? '?'} messages</small>`
+                             : 'No recording selected<small>Select one in the list.</small>';
       $('t-dur').textContent = b ? clock(b.duration) : '0:00';
     }
     updateButtons();
@@ -385,8 +387,8 @@
     $('state').textContent = m.state + (live ? ` · ${(+m.rate).toFixed(2).replace(/\.?0+$/, '')}×${m.loop ? ' · loop' : ''}` : '');
     if (live) {
       sel = m.bag; renderBags();
-      $('now').innerHTML = `${escHtml(m.bag)}<small>${m.state === 'paused' ? 'paused' : 'playing'} · ` +
-                           `watch it in the OVERVIEW</small>`;
+      $('now').innerHTML = `${escHtml(m.bag)}<small>${m.state === 'paused' ? 'Paused' : 'Playing'} · ` +
+                           `view it in the Overview</small>`;
       if (Math.abs(rate - m.rate) > 1e-6) { rate = +m.rate; showRate(); }
     } else if (was !== m.state) {
       renderSelection();
@@ -401,10 +403,10 @@
     $('t-left').textContent = live && dur ? `${clock(dur - pos)} left` : '';
     const msg = $('msg');
     if (m.error) { msg.className = 'err'; msg.textContent = m.error; }
-    else if (!live && m.unreal_playing) { msg.className = 'warn'; msg.textContent = 'Unreal is playing: stop Play before replaying, so live data and the bag do not mix.'; }
-    else if (m.state === 'finished') { msg.className = 'ok'; msg.textContent = 'Replay finished.'; }
-    else if (live) { msg.className = 'ok'; msg.textContent = 'Replayed topics reach every node as if live. Click the bar to seek.'; }
-    else { msg.className = 'ok'; msg.textContent = 'Replayed topics reach every node as if live: open the OVERVIEW to watch. Stop Play in Unreal first.'; }
+    else if (!live && m.unreal_playing) { msg.className = 'warn'; msg.textContent = 'Simulation running: stop Play in Unreal before playback, to keep live and recorded data apart.'; }
+    else if (m.state === 'finished') { msg.className = 'ok'; msg.textContent = 'Playback finished.'; }
+    else if (live) { msg.className = 'ok'; msg.textContent = 'Playing back. Click the progress bar to seek.'; }
+    else { msg.className = 'ok'; msg.textContent = 'Playback publishes the recorded topics to the live system; view them in the Overview. The simulation must be stopped.'; }
     updateButtons();
   });
 
@@ -444,7 +446,7 @@
       `${k === 'custom' ? 'CUSTOM' : escHtml(presets[k].label)}</button>`).join('');
     const p = presets[choice.preset];
     $('preset-about').textContent = p ? `${p.topics.length} topics: ${p.about}` :
-      'Tick the topics to record (pre-filled from the last preset).';
+      'Select the topics to record.';
     const custom = $('custom');
     custom.classList.toggle('open', choice.preset === 'custom');
     if (choice.preset === 'custom') {
@@ -486,10 +488,10 @@
     $('rec-state').textContent = rec.recording ? 'recording' : 'idle';
     $('rec-status').innerHTML = rec.recording
       ? `<b>${clock(rec.elapsed)}</b> · <b>${mb(rec.size)}</b> · ${mb(rec.rate)}/s · ${rec.topic_count} topics · ${mb(rec.free)} free`
-      : `${mb(rec.free)} free · ${rec.live ? 'Unreal is playing' : 'Unreal is not playing'}`;
+      : `${mb(rec.free)} free · simulation ${rec.live ? 'running' : 'stopped'}`;
     const warn = [...(rec.warnings || [])];
-    if (!rec.recording && rec.replaying) warn.push('a replay is running: stop it before recording.');
-    if (!rec.recording && !rec.live && !rec.replaying) warn.push('Unreal is not playing: start Play first, or the bag stays nearly empty.');
+    if (!rec.recording && rec.replaying) warn.push('Playback in progress: stop it before recording.');
+    if (!rec.recording && !rec.live && !rec.replaying) warn.push('Simulation not running: start Play in Unreal to record data.');
     $('rec-warn').textContent = warn.join(' · ');
     ['rec-label', 'rec-notes'].forEach(id => $(id).disabled = !!rec.recording);
     if (was && !rec.recording) { $('rec-label').value = ''; $('rec-notes').value = ''; refresh(); }

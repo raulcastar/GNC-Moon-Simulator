@@ -43,9 +43,9 @@ class RecordingMixin:
         live = self._live_simulation()
         warnings = []
         if running and not live:
-            warnings.append('no live simulation: Unreal is not playing, so little or nothing is being recorded')
+            warnings.append('Simulation not running: little or no data is being recorded.')
         if free is not None and free < BAG_LOW_DISK_BYTES:
-            warnings.append(f'low disk space: {free / 1e9:.1f} GB free')
+            warnings.append(f'Low disk space: {free / 1e9:.1f} GB free.')
         choice = self._bag_choice
         return {'recording': running,
                 'name': os.path.basename(self._bag_path) if self._bag_path else None,
@@ -77,14 +77,13 @@ class RecordingMixin:
         if self._recording():
             return None
         if self._replaying():
-            return self._bag_error('a replay is running: stop it first, or the recording '
-                                   'would capture the replayed data')
+            return self._bag_error('Playback in progress: stop it before recording.')
         if preset is not None:
             self._bag_choice = {'preset': preset if preset in BAG_PRESETS or preset == 'custom'
                                 else DEFAULT_BAG_PRESET, 'topics': list(topics or [])}
         chosen = self._bag_topics(self._bag_choice)
         if not chosen:
-            return self._bag_error('no topics chosen to record')
+            return self._bag_error('No topics selected.')
         directory = self.get_parameter('bag_directory').value
         os.makedirs(directory, exist_ok=True)
         tag = re.sub(r'[^A-Za-z0-9_-]+', '_', (label or '').strip()).strip('_')[:40]
@@ -98,7 +97,7 @@ class RecordingMixin:
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         self._bag_t0 = time.time()
         self._bag_size = (0, 0.0)
-        live = '' if self._live_simulation() else ' (Unreal is not playing: little will be recorded)'
+        live = '' if self._live_simulation() else ' (simulation not running)'
         self._console('INFO', f'Recording rosbag {name}: {self._bag_choice["preset"]}, '
                               f'{len(chosen)} topics{live}.')
         return None
@@ -158,14 +157,14 @@ class RecordingMixin:
         path = self._bag_dir(name)
         new = re.sub(r'[^A-Za-z0-9_-]+', '_', str(new_name).strip()).strip('_')[:80]
         if path is None:
-            return 'no such bag'
+            return 'Recording not found.'
         if not new:
-            return 'the new name is empty'
+            return 'The new name is empty.'
         if self._bag_in_use(path):
-            return 'the bag is being recorded or replayed'
+            return 'The recording is in use (recording or playback).'
         target = os.path.join(os.path.dirname(path), new)
         if os.path.exists(target):
-            return f'a bag named {new} already exists'
+            return f'A recording named {new} already exists.'
         os.rename(path, target)
         self._console('INFO', f'Bag renamed: {os.path.basename(path)} -> {new}')
         return None
@@ -173,7 +172,7 @@ class RecordingMixin:
     def set_bag_notes(self, name: str, notes: str):
         path = self._bag_dir(name)
         if path is None:
-            return 'no such bag'
+            return 'Recording not found.'
         meta = self.read_notes(path)
         meta['notes'] = str(notes).strip()
         self._write_notes(path, meta)
@@ -182,9 +181,9 @@ class RecordingMixin:
     def delete_bag(self, name: str):
         path = self._bag_dir(name)
         if path is None:
-            return 'no such bag'
+            return 'Recording not found.'
         if self._bag_in_use(path):
-            return 'the bag is being recorded or replayed'
+            return 'The recording is in use (recording or playback).'
         shutil.rmtree(path)
         self._console('INFO', f'Bag deleted: {os.path.basename(path)}')
         return None

@@ -78,17 +78,17 @@
 
   const STYLE = `
     .dem-overlay { position:absolute; z-index:5; font:10px/1.5 Consolas,Menlo,monospace;
-      color:#8aa0b8; background:rgba(16,21,28,.78); border:1px solid #2c3a4e;
+      color:var(--dim); background:color-mix(in srgb, var(--panel) 85%, transparent); border:1px solid var(--line);
       border-radius:6px; padding:6px 8px; letter-spacing:.5px; }
     .dem-legend { left:8px; top:40px; pointer-events:none; }
     .dem-legend .bar { width:150px; height:9px; border-radius:2px; margin:3px 0 2px; }
-    .dem-legend .ticks { display:flex; justify-content:space-between; width:150px; color:#cfe0ee; }
+    .dem-legend .ticks { display:flex; justify-content:space-between; width:150px; color:var(--text); }
     .dem-views { right:8px; top:8px; padding:3px; display:flex; gap:3px; }
-    .dem-views button { font:10px Consolas,monospace; letter-spacing:1px; color:#8aa0b8;
-      background:#202b3a; border:1px solid #2c3a4e; border-radius:4px; padding:3px 7px; cursor:pointer; }
-    .dem-views button.on { color:#33d6a6; border-color:#33d6a6; }
-    .dem-stats { left:8px; top:8px; pointer-events:none; color:#cfe0ee; }
-    .dem-stats b { color:#ff6b7d; font-weight:normal; }
+    .dem-views button { font:10px Consolas,monospace; letter-spacing:1px; color:var(--dim);
+      background:var(--panel2); border:1px solid var(--line); border-radius:4px; padding:3px 7px; cursor:pointer; }
+    .dem-views button.on { color:var(--accent); border-color:var(--accent); }
+    .dem-stats { left:8px; top:8px; pointer-events:none; color:var(--text); }
+    .dem-stats b { color:var(--red); font-weight:normal; }
     .dem-compact .dem-legend { display:none; }
     .dem-compact .dem-overlay { padding:2px 5px; font-size:9px; }
     .dem-compact .dem-views button { padding:1px 5px; font-size:9px; }`;
@@ -163,7 +163,7 @@
 
     function init() {
       scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x10151c);
+      scene.background = new THREE.Color(viewColor());
       cam = new THREE.PerspectiveCamera(50, 1, 0.05, 200);
       cam.up.set(0, 0, 1);
       renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -287,6 +287,16 @@
       buildGround(w * res, h * res);
       layout = { w, h, res };
     }
+
+    /* The empty-viewport colour of the dashboard theme (theme.js). */
+    function viewColor() {
+      return getComputedStyle(document.documentElement).getPropertyValue('--view').trim() || '#10151c';
+    }
+    window.addEventListener('gnc-theme', () => {
+      if (!scene) return;
+      scene.background = new THREE.Color(viewColor());
+      if (!document.hidden) draw();
+    });
 
     function draw() {
       if (!renderer) return;

@@ -25,7 +25,9 @@
   /* Perceptual blue -> cyan -> green -> yellow -> red ramp (turbo-like). */
   const RAMP = [[48, 18, 59], [65, 105, 225], [40, 180, 230], [60, 220, 140],
                 [190, 230, 60], [250, 180, 40], [235, 80, 40], [180, 20, 20]];
-  const BG = '#10151c';
+  /* Viewport colours come from the dashboard theme (theme.js). */
+  const themeColor = (name, fallback) =>
+    getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
 
   const CSS = `
     .lv-root { position: absolute; inset: 0; }
@@ -33,15 +35,15 @@
     .lv-bar { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; z-index: 3; flex-wrap: wrap;
               justify-content: flex-end; max-width: 70%; }
     .lv-bar button { font: 9px/1 Consolas, Menlo, monospace; letter-spacing: 1px; padding: 4px 7px; cursor: pointer;
-                     color: #8aa0b8; background: rgba(16,21,28,.8); border: 1px solid #2c3a4e; border-radius: 3px; }
-    .lv-bar button:hover { color: #59b0ff; border-color: #59b0ff; }
-    .lv-bar button.on { color: #10151c; background: #33d6a6; border-color: #33d6a6; font-weight: bold; }
+                     color: var(--dim); background: color-mix(in srgb, var(--panel) 85%, transparent); border: 1px solid var(--line); border-radius: 3px; }
+    .lv-bar button:hover { color: var(--cyan); border-color: var(--cyan); }
+    .lv-bar button.on { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: bold; }
     .lv-bar .sep { width: 6px; }
     .lv-legend { position: absolute; left: 8px; bottom: 8px; z-index: 3; pointer-events: none;
-                 font: 10px/1.4 Consolas, Menlo, monospace; color: #8aa0b8; background: rgba(16,21,28,.78);
-                 border: 1px solid #2c3a4e; border-radius: 4px; padding: 5px 7px; }
+                 font: 10px/1.4 Consolas, Menlo, monospace; color: var(--dim); background: color-mix(in srgb, var(--panel) 85%, transparent);
+                 border: 1px solid var(--line); border-radius: 4px; padding: 5px 7px; }
     .lv-legend .bar { width: 120px; height: 7px; border-radius: 2px; margin: 3px 0 2px; }
-    .lv-legend .ends { display: flex; justify-content: space-between; color: #e6edf5; }
+    .lv-legend .ends { display: flex; justify-content: space-between; color: var(--text); }
     .lv-compact .lv-legend { font-size: 9px; padding: 3px 5px; }
     .lv-compact .lv-legend .bar { width: 70px; height: 5px; }
     .lv-compact .lv-bar { max-width: 98%; flex-wrap: nowrap; gap: 3px; }
@@ -182,7 +184,9 @@
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       root.classList.toggle('lv-compact', H < 300 || W < 520);
-      ctx.fillStyle = BG; ctx.fillRect(0, 0, W, H);
+      const C = { bg: themeColor('--view', '#10151c'), ring: themeColor('--view-line', '#1b2a3c'),
+                  label: themeColor('--view-text', '#4d6580'), rover: themeColor('--text', '#e6edf5') };
+      ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
 
       const { f, r, u, c } = basis();
       const F = (H / 2) / Math.tan(FOV / 2);
@@ -211,7 +215,7 @@
       const rmax = stats ? stats.rmax : 40;
       const step = RING_STEPS.find(s => rmax / s <= 5) || 200;
       for (let R = step; R <= rmax * 1.05 + 1e-6; R += step) {
-        ctx.strokeStyle = '#1b2a3c'; ctx.lineWidth = 1; ctx.beginPath();
+        ctx.strokeStyle = C.ring; ctx.lineWidth = 1; ctx.beginPath();
         let started = false;
         for (let k = 0; k <= 96; k++) {
           const a = (k / 96) * 2 * Math.PI, p = proj(R * Math.cos(a), R * Math.sin(a), g);
@@ -219,10 +223,10 @@
           if (!started) { ctx.moveTo(p[0], p[1]); started = true; } else ctx.lineTo(p[0], p[1]);
         }
         ctx.stroke();
-        text(R * Math.cos(-0.35), R * Math.sin(-0.35), g, `${R} m`, '#4d6580');
+        text(R * Math.cos(-0.35), R * Math.sin(-0.35), g, `${R} m`, C.label);
       }
       if (stats && stats.az1 - stats.az0 < 1.9 * Math.PI) {
-        for (const a of [stats.az0, stats.az1]) line([0, 0, g], [rmax * Math.cos(a), rmax * Math.sin(a), g], '#2b4560', 1);
+        for (const a of [stats.az0, stats.az1]) line([0, 0, g], [rmax * Math.cos(a), rmax * Math.sin(a), g], C.ring, 1);
       }
 
       if (pts && stats) {
@@ -250,8 +254,8 @@
         legend.querySelector('.hi').textContent = `${hi.toFixed(1)} m`;
       }
       /* Rover marker (footprint triangle) and body axes, over the points. */
-      line([0.6, 0, g], [-0.3, 0.3, g], '#e6edf5', 1.5); line([-0.3, 0.3, g], [-0.3, -0.3, g], '#e6edf5', 1.5);
-      line([-0.3, -0.3, g], [0.6, 0, g], '#e6edf5', 1.5);
+      line([0.6, 0, g], [-0.3, 0.3, g], C.rover, 1.5); line([-0.3, 0.3, g], [-0.3, -0.3, g], C.rover, 1.5);
+      line([-0.3, -0.3, g], [0.6, 0, g], C.rover, 1.5);
       const A = Math.max(1, rmax / 15);
       line([0, 0, 0], [A, 0, 0], '#33d6a6', 2); line([0, 0, 0], [0, A, 0], '#59b0ff', 2); line([0, 0, 0], [0, 0, A * 0.7], '#ffbe5c', 2);
       text(A * 1.15, 0, 0, 'x', '#33d6a6'); text(0, A * 1.15, 0, 'y', '#59b0ff'); text(0, 0, A * 0.8, 'z', '#ffbe5c');
@@ -308,6 +312,7 @@
 
     /* Scans arriving while the page is hidden are not drawn: catch up on return. */
     document.addEventListener('visibilitychange', () => { if (!document.hidden) { if (auto) fit(); draw(); } });
+    window.addEventListener('gnc-theme', () => { if (!document.hidden) draw(); });
 
     fit(); setButtons(); draw();
     return { update, redraw: () => { if (auto) fit(); draw(); }, fit: () => { auto = true; fit(); setButtons(); draw(); } };

@@ -1,11 +1,12 @@
 """Web side of the dashboard: one Flask app + SocketIO server per screen, the
 helpers that fan events out to them, and the static files they share."""
 
+import json
 import os
 from datetime import datetime
 
 from ament_index_python.packages import get_package_share_directory
-from flask import Flask, Response, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_socketio import SocketIO
 
 
@@ -132,3 +133,55 @@ for _app in (app, app_map):
 for _app in (app, app_teleop, app_sys, app_replay):
     _app.add_url_rule('/dash_common.js', 'dash_common_js', _dash_common_js)
 
+
+# ---- colour theme, shared by every window (chosen in the hub) ----
+THEMES = ('mission', 'midnight', 'night', 'daylight')
+# Kept next to the package sources (mounted from the repository), so it survives
+# container rebuilds; git-ignored.
+UI_SETTINGS = os.environ.get('GNC_UI_SETTINGS',
+                             '/opt/ros/jazzy/src/mission_control_dashboard/ui_settings.json')
+
+
+def _load_theme() -> str:
+    try:
+        with open(UI_SETTINGS, encoding='utf-8') as f:
+            theme = json.load(f).get('theme')
+        return theme if theme in THEMES else THEMES[0]
+    except (OSError, ValueError):
+        return THEMES[0]
+
+
+theme = _load_theme()
+
+
+def _theme_js():
+    """theme.js with the current theme filled in, so it applies before the page paints."""
+    with open(os.path.join(template_dir, 'theme.js'), encoding='utf-8') as f:
+        body = f.read().replace('__THEME__', theme)
+    return Response(body, mimetype='application/javascript', headers={'Cache-Control': 'no-store'})
+
+
+def _theme_json():
+    return Response(json.dumps({'theme': theme, 'themes': THEMES}), mimetype='application/json',
+                    headers={'Cache-Control': 'no-store'})
+
+
+def _set_theme():
+    """POST {theme}: the hub's theme selector. Saved, and picked up by every window."""
+    global theme
+    choice = (request.get_json(silent=True) or {}).get('theme')
+    if choice not in THEMES:
+        return jsonify(error=f'unknown theme {choice!r}'), 400
+    theme = choice
+    try:
+        with open(UI_SETTINGS, 'w', encoding='utf-8') as f:
+            json.dump({'theme': theme}, f)
+    except OSError as exc:
+        return jsonify(theme=theme, warning=f'not saved: {exc}')
+    return jsonify(theme=theme)
+
+
+for _app in (app, app_hub, app_teleop, app_cams, app_map, app_sys, app_replay):
+    _app.add_url_rule('/theme.js', 'theme_js', _theme_js)
+    _app.add_url_rule('/theme.json', 'theme_json', _theme_json)
+app_hub.add_url_rule('/theme', 'set_theme', _set_theme, methods=['POST'])

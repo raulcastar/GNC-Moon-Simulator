@@ -119,14 +119,13 @@ class ReplayMixin:
         self.stop_replay()
         path = os.path.join(self._bag_directory(), os.path.basename(name))
         if not os.path.isfile(os.path.join(path, 'metadata.yaml')):
-            self._replay_error(f'no bag named {name}')
+            self._replay_error(f'Recording {name} not found.')
             return
         if self._unreal_playing():
-            self._replay_error('Unreal is playing: stop Play first, so live data and the replay '
-                               'do not mix on the same topics.')
+            self._replay_error('Simulation running: stop Play in Unreal before playback.')
             return
         if self._recording():
-            self._replay_error('a recording is running: stop it first, or it would capture the replay.')
+            self._replay_error('Recording in progress: stop it before playback.')
             return
         meta = rosbag2_py.Info().read_metadata(path, '')
         in_bag = {t.topic_metadata.name for t in meta.topics_with_message_count}
@@ -172,7 +171,7 @@ class ReplayMixin:
     def _call(self, name: str, request) -> None:
         client = self._replay_clients.get(name)
         if client is None or not client.service_is_ready():
-            self._replay_error(f'the player is not ready yet ({name}); try again in a moment')
+            self._replay_error(f'Player not ready ({name}); try again in a moment.')
             return
         client.call_async(request)
 

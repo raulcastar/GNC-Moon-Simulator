@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GNC MOON SIM — Cameras</title>
+<title>GNC Moon Simulator — Cameras</title>
+<script src="/theme.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 <script src="/feed_legends.js"></script>
 <script src="/nav_overlay.js"></script>
@@ -18,6 +19,8 @@
     --accent:  #33d6a6;
     --cyan:    #59b0ff;
     --amber:   #ffbe5c;
+    --red:     #ff6b7d;
+    --grid:    #131e2c;
     --mono:    'Consolas','Menlo','DejaVu Sans Mono',monospace;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -80,13 +83,13 @@
   .tile .title .stat { margin-left: auto; letter-spacing: 1px; }
   .tile .title .stat.stale { color: var(--amber); }
   .tile .title .stat.dead { color: #ff6b7d; }
-  .tile .feed { position: relative; background: #000; aspect-ratio: 4 / 3; overflow: hidden; cursor: zoom-in; }
+  .tile .feed { position: relative; background: var(--view, #10151c); aspect-ratio: 4 / 3; overflow: hidden; cursor: zoom-in; }
   .tile.focus .feed { cursor: zoom-out; }
   .tile .feed img { width: 100%; height: 100%; object-fit: contain; display: block; }
   .tile .nosig {
     position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-    color: #24344a; font-size: 12px; letter-spacing: 4px;
-    background: repeating-linear-gradient(0deg, #10151c 0 2px, #161d28 2px 4px);
+    color: var(--view-text, #4d6580); font-size: 12px; letter-spacing: 4px;
+    background: repeating-linear-gradient(0deg, var(--view, #10151c) 0 2px, var(--view2, #161d28) 2px 4px);
   }
   #empty {
     grid-column: 1 / -1; text-align: center; color: var(--dim);
@@ -97,7 +100,7 @@
 <body>
   <header>
     <a class="back" href="#" id="hublink">◀ MENU</a>
-    <div class="brand">CAMERAS<small>SELECT FEEDS</small></div>
+    <div class="brand">CAMERAS<small>CAMERA WALL</small></div>
     <div class="spacer"></div>
     <div class="chips" id="chips"></div>
     <div class="conn"><span class="dot" id="cdot"></span><span id="cstate">OFFLINE</span></div>
@@ -136,7 +139,7 @@
   const chips = $('chips'), wall = $('wall');
   const empty = document.createElement('div');
   empty.id = 'empty';
-  empty.textContent = 'NO FEEDS SELECTED — pick one above';
+  empty.textContent = 'No feeds selected — choose one above.';
 
   FEEDS.forEach(([id, label]) => {
     const chip = document.createElement('div');

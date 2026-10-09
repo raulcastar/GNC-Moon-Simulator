@@ -7,3 +7,5 @@ __pycache__
 component_path_planner/maps
 # Rosbags recorded from the dashboard
 mission_control_dashboard/bags/
+# Dashboard UI preferences (theme)
+mission_control_dashboard/ui_settings.json

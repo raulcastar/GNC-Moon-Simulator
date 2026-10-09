@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GNC MOON SIM — System</title>
+<title>GNC Moon Simulator — System</title>
+<script src="/theme.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 <script src="/dash_common.js"></script>
 <style>
@@ -18,6 +19,7 @@
     --cyan:    #59b0ff;
     --amber:   #ffbe5c;
     --red:     #ff6b7d;
+    --grid:    #131e2c;
     --mono:    'Consolas','Menlo','DejaVu Sans Mono',monospace;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -67,7 +69,7 @@
   table { width: 100%; border-collapse: collapse; }
   th { position: sticky; top: 0; background: var(--panel2); color: var(--dim); font-weight: normal;
        font-size: 9px; letter-spacing: 1px; text-align: left; padding: 4px 8px; }
-  td { padding: 4px 8px; border-bottom: 1px dashed #131e2c; white-space: nowrap; }
+  td { padding: 4px 8px; border-bottom: 1px dashed var(--grid); white-space: nowrap; }
   td.num, th.num { text-align: right; }
   td.num { color: var(--text); }
   .st { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; }
@@ -110,7 +112,7 @@
   #topic-detail h5 { color: var(--dim); font-weight: normal; font-size: 9px; letter-spacing: 2px; margin: 10px 0 4px; }
   #topic-detail .nodes { line-height: 1.5; }
   #topic-detail pre { background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 8px;
-                      white-space: pre-wrap; word-break: break-all; color: #c8d6e5; font-size: 11px; }
+                      white-space: pre-wrap; word-break: break-all; color: var(--text); font-size: 11px; }
 </style>
 </head>
 <body>
@@ -151,9 +153,8 @@
         <thead><tr><th>TOPIC</th><th>TYPE</th><th class="num" title="publishers">PUB</th>
           <th class="num" title="subscribers, not counting this dashboard">SUB</th></tr></thead>
         <tbody id="topics-body"></tbody></table></div>
-      <div class="scroll" id="topic-detail"><div class="hint">Click a topic to see its rate, bandwidth,
-        publishers, subscribers and latest message. The dashboard subscribes to it only while it is
-        selected here.</div></div>
+      <div class="scroll" id="topic-detail"><div class="hint">Select a topic to inspect its rate, bandwidth,
+        publishers, subscribers and latest message. The dashboard subscribes only while a topic is selected.</div></div>
     </div>
   </main>
 
@@ -192,7 +193,7 @@
     $('rec').innerHTML = bag.recording
       ? `rosbag: <b>recording ${String(Math.floor(bag.elapsed / 60)).padStart(2, '0')}:${String(bag.elapsed % 60).padStart(2, '0')}</b>` +
         (bag.path ? ` → ${esc(bag.path)}` : '')
-      : 'rosbag: <b>idle</b> (record with ● REC on the overview or in the BAGS window)';
+      : 'rosbag: <b>idle</b> (record from the Overview or the Bags window)';
   });
   $('nodes').addEventListener('click', e => {
     const n = e.target.dataset.node;

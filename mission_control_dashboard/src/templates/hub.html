@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GNC MOON SIM — Mission Hub</title>
+<title>GNC Moon Simulator — Mission Control</title>
+<script src="/theme.js"></script>
 <style>
   :root {
     --bg:      #10151c;
@@ -15,6 +16,8 @@
     --accent:  #33d6a6;
     --cyan:    #59b0ff;
     --amber:   #ffbe5c;
+    --red:     #ff6b7d;
+    --grid:    #131e2c;
     --mono:    'Consolas','Menlo','DejaVu Sans Mono',monospace;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -49,7 +52,10 @@
   }
   a.card:hover { transform: translateY(-4px); border-color: var(--accent);
                  box-shadow: 0 10px 30px rgba(0,0,0,.5), 0 0 0 1px rgba(53,224,181,.25); }
-  a.card .ico { font-size: 34px; line-height: 1; }
+  a.card .ico { width: 34px; height: 34px; color: var(--accent); }
+  a.card .ico svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.6;
+                    stroke-linecap: round; stroke-linejoin: round; }
+  a.card.teleop .ico { color: var(--amber); }
   a.card h2 { font-size: 17px; letter-spacing: 3px; color: var(--cyan); }
   a.card.teleop h2 { color: var(--amber); }
   a.card p { font-size: 12px; color: var(--dim); line-height: 1.6; }
@@ -59,73 +65,83 @@
                         box-shadow: 0 10px 30px rgba(0,0,0,.5), 0 0 0 1px rgba(255,180,84,.25); }
   a.card.teleop .port b { color: var(--amber); }
 
-  footer { color: var(--dim); font-size: 11px; letter-spacing: 1px; text-align: center; }
+  footer { color: var(--dim); font-size: 11px; letter-spacing: 1px; text-align: center;
+           display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .themes { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  .themes .lbl { margin-right: 4px; font-size: 10px; letter-spacing: 2px; }
+  .themes button { display: inline-flex; align-items: center; gap: 3px; cursor: pointer;
+                   font-family: var(--mono); font-size: 10px; letter-spacing: 1px; color: var(--dim);
+                   background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 5px 9px; }
+  .themes button:hover { color: var(--text); border-color: var(--dim); }
+  .themes button.on { color: var(--accent); border-color: var(--accent); }
+  .themes .sw { width: 9px; height: 9px; border-radius: 2px; border: 1px solid rgba(127,127,127,.4); }
+  .themes .sw:last-of-type { margin-right: 5px; }
   footer .clock { color: var(--cyan); }
 </style>
 </head>
 <body>
   <header>
-    <div class="brand">GNC&nbsp;MOON&nbsp;SIMULATOR<small>MISSION CONTROL HUB</small></div>
+    <div class="brand">GNC&nbsp;MOON&nbsp;SIMULATOR<small>MISSION CONTROL</small></div>
   </header>
 
   <div class="cards">
     <a class="card" id="link-overview">
-      <div class="ico">🛰️</div>
+      <div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11M15 14h6"/></svg></div>
       <h2>OVERVIEW</h2>
-      <p>Full GNC mission control: navcam feeds, stereo depth &amp; object masks,
-         live LiDAR, the elevation map with click-to-goal, mission status, the 3D
-         DEM, snapshots / rosbag and the ROS console.</p>
+      <p>Integrated mission view: navigation cameras, stereo depth and segmentation,
+         lidar, the global map with goal dispatch, the local elevation map, rover
+         telemetry and the system log.</p>
       <div class="port">PORT <b>:5001</b></div>
     </a>
 
     <a class="card teleop" id="link-teleop">
-      <div class="ico">🎮</div>
-      <h2>TELEOP</h2>
-      <p>Manual drive-by-wire. Steer the rover directly with the keyboard or the
-         on-screen pad; driving cancels any active GNC goal. Front camera, speed /
-         heading readout, headlights and an emergency stop.</p>
+      <div class="ico"><svg viewBox="0 0 24 24"><path d="M7 8h10a4 4 0 0 1 4 4v2a3 3 0 0 1-5.4 1.8L14.5 14h-5l-1.1 1.8A3 3 0 0 1 3 14v-2a4 4 0 0 1 4-4z"/><path d="M8 10.5v3M6.5 12h3"/><circle cx="16" cy="11" r=".6"/><circle cx="17.5" cy="12.8" r=".6"/></svg></div>
+      <h2>TELEOPERATION</h2>
+      <p>Manual driving from the keyboard, the on-screen pad or a gamepad. Manual
+         commands cancel any active autonomous goal. Camera views, speed and
+         heading, headlights and emergency stop.</p>
       <div class="port">PORT <b>:5002</b></div>
     </a>
 
     <a class="card" id="link-cameras">
-      <div class="ico">📷</div>
+      <div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7l1.5-3h5L16 7"/><circle cx="12" cy="13.5" r="3.5"/></svg></div>
       <h2>CAMERAS</h2>
-      <p>A camera wall you build yourself: toggle the navcam, stereo depth,
-         segmentation, event and SPAD feeds, laid out to fill the screen, with
-         rate per feed and depth / class legends. Click a feed to enlarge it.</p>
+      <p>Configurable camera wall: navigation and rear cameras, stereo depth,
+         segmentation, event and SPAD feeds, with frame rates and legends. Select a
+         feed to enlarge it.</p>
       <div class="port">PORT <b>:5003</b></div>
     </a>
 
     <a class="card" id="link-map">
-      <div class="ico">🗺️</div>
-      <h2>MAP 3D</h2>
-      <p>LiDAR point cloud (rover frame) and the local elevation map side by side:
-         terrain relief with obstacles in red, metric rulers, and the LiDAR
-         returns overlaid on the DEM.</p>
+      <div class="ico"><svg viewBox="0 0 24 24"><path d="M3 18l5-7 4 5 3-4 6 6z"/><path d="M3 21h18"/><circle cx="16.5" cy="6.5" r="1.5"/></svg></div>
+      <h2>3D MAP</h2>
+      <p>Lidar point cloud and local elevation map side by side in the rover frame,
+         with obstacle highlighting, metric scales and the lidar returns overlaid on
+         the terrain.</p>
       <div class="port">PORT <b>:5005</b></div>
     </a>
 
     <a class="card" id="link-system">
-      <div class="ico">🛠️</div>
+      <div class="ico"><svg viewBox="0 0 24 24"><path d="M3 12h4l2-5 4 10 2-5h6"/></svg></div>
       <h2>SYSTEM</h2>
-      <p>Health of the whole stack: rate and age of every feed, the lifecycle
-         nodes with a restart button each, recording status, and a ROS 2 topic
-         browser (types, publishers / subscribers, live rate, latest message).</p>
+      <p>System health: rate and latency of every feed, lifecycle node states with
+         restart control, recording status and a ROS 2 topic inspector.</p>
       <div class="port">PORT <b>:5006</b></div>
     </a>
 
     <a class="card" id="link-replay">
-      <div class="ico">⏯️</div>
+      <div class="ico"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="2.5"/><path d="M5 6v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6"/><path d="M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5"/></svg></div>
       <h2>BAGS</h2>
-      <p>Record rosbags with a preset (navigation, full perception or your own
-         topics), a name and notes, with live size and disk space; then replay one
-         into the overview as if it were live (pause, seek, loop), rename or delete.</p>
+      <p>Rosbag recording with presets, names and notes, and live size and disk
+         monitoring; playback into the live system with pause, seek and loop; bag
+         management.</p>
       <div class="port">PORT <b>:5007</b></div>
     </a>
   </div>
 
   <footer>
-    HOST <span id="host">—</span> · <span class="clock" id="clock">--:--:--</span> UTC
+    <div class="themes" id="themes" title="Colour theme of every dashboard window"><span class="lbl">THEME</span></div>
+    <div>HOST <span id="host">—</span> · <span class="clock" id="clock">--:--:--</span> UTC</div>
   </footer>
 
 <script>
@@ -139,6 +155,28 @@
   document.getElementById('link-map').href      = `http://${host}:5005/`;
   document.getElementById('link-system').href   = `http://${host}:5006/`;
   document.getElementById('link-replay').href   = `http://${host}:5007/`;
+
+  // Theme selector: saved on the dashboard server, so every window follows it.
+  const themesEl = document.getElementById('themes');
+  function renderThemes() {
+    themesEl.querySelectorAll('button').forEach(b => b.remove());
+    for (const [key, t] of Object.entries(GNCTheme.THEMES)) {
+      const b = document.createElement('button');
+      b.className = 'theme' + (key === GNCTheme.current() ? ' on' : '');
+      b.innerHTML = `<span class="sw" style="background:${t.vars['--bg']}"></span>` +
+                    `<span class="sw" style="background:${t.vars['--panel2']}"></span>` +
+                    `<span class="sw" style="background:${t.vars['--accent']}"></span>${t.label}`;
+      b.onclick = () => {
+        GNCTheme.apply(key); renderThemes();
+        fetch('/theme', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ theme: key }) }).catch(() => {});
+      };
+      themesEl.appendChild(b);
+    }
+  }
+  renderThemes();
+  setInterval(() => { if (!themesEl.querySelector(`.on`) ||
+      !themesEl.querySelector('.on').textContent.endsWith(GNCTheme.THEMES[GNCTheme.current()].label)) renderThemes(); }, 4000);
 
   const clk = document.getElementById('clock');
   setInterval(() => { clk.textContent = new Date().toISOString().substr(11, 8); }, 1000);
