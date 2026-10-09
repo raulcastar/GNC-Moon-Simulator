@@ -354,8 +354,8 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
             return None, None, None, None, None, None
 
         # ── 2. projectCameraCoord (vectorised) ───────────────────────────────
-        # The depth topic carries planar Z depth: component_stereo_depth already
-        # converted UnrealCV's radial buffer. Do not reintroduce a
+        # The depth topic carries planar Z depth (component_stereo_depth). Do not
+        # reintroduce a
         # `/ sqrt(1 + px² + py²)` divide — on already-planar depth it pulls
         # off-centre points toward the camera by 60% in the corners at 90° HFOV.
         z_cam = d               # planar Z-depth  (forward along optical axis)

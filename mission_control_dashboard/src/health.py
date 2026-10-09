@@ -47,7 +47,7 @@ class HealthMixin:
         deactivate -> cleanup -> configure -> activate on `name`.
 
         Equivalent to restarting its container (for the stereo node, cleanup
-        releases the UnrealCV socket and configure reconnects). The first two
+        closes the frame-stream server and configure opens it again). The first two
         steps may legitimately fail if the node is already inactive, so only
         configure and activate are load-bearing.
         """

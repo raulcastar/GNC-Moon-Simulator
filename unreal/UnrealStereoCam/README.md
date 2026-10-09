@@ -1,17 +1,13 @@
 # UnrealStereoCam — camera frames without game-thread stalls
 
-UnrealCV renders on demand: each `vget` blocks the game thread for a full
-render + synchronous GPU readback (~300 ms per camera, measured — the sim was
-frozen ~40% of wall time at five captures per second). This component streams
-the navcams instead: SceneCaptures render **with the frame** on the render
-thread, readback is **asynchronous** (polled, never flushed mid-render), and a
-worker thread ships completed frames over TCP. The game thread only enqueues
-copies.
+This component streams the navcams to ROS without stalling the game:
+SceneCaptures render **with the frame** on the render thread, readback is
+**asynchronous** (polled, never flushed mid-render), and a worker thread ships
+completed frames over TCP. The game thread only enqueues copies.
 
-The ROS side is already merged: `component_stereo_depth` with
-`image_source: stream` listens on port 3004 and pairs left/right frames by
-frame id — every capture enqueued in one tick carries the same `GFrameCounter`,
-preserving the same-tick guarantee the batched UnrealCV request used to give.
+On the ROS side, `component_stereo_depth` listens on port 3004 and pairs
+left/right frames by frame id: every capture enqueued in one tick carries the
+same `GFrameCounter`, so a pair always shows the same world state.
 
 ## Installing as a plugin
 
@@ -44,7 +40,7 @@ This folder **is** the plugin — copy it whole.
    Unreal Stereo Cam** (enabled by default).
 5. Add three **SceneCaptureComponent2D** components named exactly
    **NavcamLeft**, **NavcamRight**, **NavcamCenter**, posed like the three
-   navcams (same transforms UnrealCV camera ids 1, 2, 0 have). Give each a
+   navcams (left, right and centre of the stereo rig). Give each a
    **TextureRenderTarget2D** (640×480, RTF RGBA8). They can live on any actor
    — the rover pawn is the natural home so they move with it.
 6. Add the **UnrealStereoCam** component to any actor (the rover pawn is fine;
@@ -68,27 +64,18 @@ This folder **is** the plugin — copy it whole.
    connects at BeginPlay (re-Play after restarting the node, as with the rover
    link).
 
-In stream mode the ROS node needs **no** UnrealCV: the rig geometry comes from
-`baseline_m` / `hfov_deg` params, colour and the object mask come from the
-captures below. The legacy UnrealCV plugin can be disabled outright — and
-should be, because its `AnnotationComponent` fights the Custom Depth-Stencil
-buffer the object mask uses (see the crash note below).
+The rig geometry comes from the node's `baseline_m` / `hfov_deg` params;
+colour and the object mask come from the captures below.
 
 ## Object segmentation mask (optional)
 
-Reproduces UnrealCV's `object_mask` — each object a flat colour — **without**
-UnrealCV, by reading Unreal's **Custom Depth-Stencil** buffer and colouring it
-in a post-process material. It streams as a fourth capture on the same path as
+An object mask, each object a flat colour, made by reading Unreal's
+**Custom Depth-Stencil** buffer and colouring it in a post-process material. It streams as a fourth capture on the same path as
 the RGB cameras.
 
 1. **Enable the buffer.** Project Settings → Rendering → Postprocessing →
    **Custom Depth-Stencil Pass = `Enabled with Stencil`**, then restart the
    editor.
-   > Do **not** enable it with the `r.CustomDepth 3` *console* command while the
-   > old UnrealCV plugin is still in the project — its `AnnotationComponent`
-   > asserts on the forced proxy rebuild and the editor crashes
-   > (`PrimitiveSceneProxy.cpp:438`). Set it in Project Settings, or just
-   > disable/remove the UnrealCV plugin (it is unused in stream mode).
 
 2. **Tag every actor you want segmented — this is the required per-object step.**
    On each mesh: *Details → Rendering →* set **Render CustomDepth Pass = true**

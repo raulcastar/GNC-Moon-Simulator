@@ -3,7 +3,7 @@
 	"Version": 1,
 	"VersionName": "1.0",
 	"FriendlyName": "Unreal Stereo Cam",
-	"Description": "Streams stereo/navcam frames to the ROS stereo node over TCP with asynchronous GPU readback - no game-thread stalls, unlike UnrealCV's render-on-demand.",
+	"Description": "Streams stereo/navcam frames to the ROS stereo node over TCP with asynchronous GPU readback, without game-thread stalls.",
 	"Category": "Other",
 	"CreatedBy": "GNC Moon Simulator",
 	"CanContainContent": false,

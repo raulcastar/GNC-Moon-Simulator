@@ -20,8 +20,8 @@ lc_component_stereo_depth:
     # central camera's pixel grid, so its depth, disparity, object mask and RGB
     # all overlay one another.
     #
-    # These are the UnrealStereoCam cam ids (its Left/Right/Center CamId),
-    # not UnrealCV camera indices. On startup this node logs where the central
+    # These are the UnrealStereoCam cam ids (its Left/Right/Center CamId).
+    # On startup this node logs where the central
     # camera sits along the baseline: expect ~50%, ~0 cm off the eye-to-eye line.
     left_camera_id:                          1
     right_camera_id:                         2
@@ -29,8 +29,8 @@ lc_component_stereo_depth:
 
     # Object-segmentation capture. Must equal the UnrealStereoCam
     # MaskCamId. Its SceneCapture uses a post-process material that colours the
-    # Custom Depth-Stencil buffer — the UnrealCV object_mask, reproduced without
-    # UnrealCV. Set < 0 to stream no mask (and set enable_object_mask: false).
+    # Custom Depth-Stencil buffer, each object a flat colour. Set < 0 to stream
+    # no mask (and set enable_object_mask: false).
     mask_camera_id:                          3
 
     # Extra mono cameras streamed as they are, no stereo: "<cam_id>:<topic>[:<hfov_deg>]".

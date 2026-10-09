@@ -71,8 +71,8 @@ lc_component_local_mapping:
     # pixel filter and the world-frame distance gate.
     min_valid_depth: 0.1
 
-    # The depth topic carries planar Z depth in metres; component_stereo_depth
-    # converts UnrealCV's radial buffer exactly once, so do not convert again.
+    # The depth topic carries planar Z depth in metres (component_stereo_depth),
+    # so do not convert it again.
     #
     # depth_scale: multiply the incoming depth by this to obtain true metres.
     # Check the log line "[DEM diag] depth range" — if objects 1 m away show as

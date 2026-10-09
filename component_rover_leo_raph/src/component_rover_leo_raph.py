@@ -269,8 +269,8 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         A wildcard address is a valid bind target but not a valid destination:
         the kernel rewrites a datagram addressed to 0.0.0.0 into one addressed to
         127.0.0.1, so it stops on this container's own loopback and never reaches
-        Unreal on the Windows host. WSL2 masks this for UnrealCV, whose localhost
-        relay forwards TCP to Windows listeners but does not carry UDP.
+        Unreal on the Windows host. WSL2's localhost relay hides this for TCP
+        (it forwards TCP to Windows listeners) but does not carry UDP.
 
         So a wildcard means autodetect: Unreal's address is taken from the source
         of the telemetry it sends us, which is by definition reachable. An

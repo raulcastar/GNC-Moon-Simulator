@@ -1,15 +1,11 @@
 // UnrealStereoCam: pushes stereo/navcam frames to ROS without stalling the game.
 //
-// UnrealCV renders on demand: every vget blocks the game thread for a full
-// render + GPU readback (~300 ms per camera, measured). This component
-// replaces that path for RGB. Each SceneCapture renders as part of the normal
-// frame on the render thread, the readback is asynchronous (FRHIGPUTextureReadback,
+// Each SceneCapture renders as part of the normal frame on the render thread, the readback is asynchronous (FRHIGPUTextureReadback,
 // polled until ready, never flushed), and completed frames go out over TCP
 // from a worker thread. The game thread only enqueues copies and memcpys.
 //
 // All captures enqueued in one tick share a frame id (GFrameCounter), which is
-// what lets the ROS side pair left/right images from the same world state —
-// the same guarantee the batched UnrealCV request used to provide.
+// what lets the ROS side pair left/right images from the same world state.
 //
 // Wire format, little-endian, one packet per frame:
 //   offset size  field
@@ -119,8 +115,7 @@ public:
 	//
 	// Direct object pointers cannot work here: the details panel cannot point
 	// a plain component property at a per-instance component, which is why a
-	// pointer field only ever offered loaded templates (UnrealCV's internal
-	// "lit"/"normal" sensors).
+	// pointer field only ever offered loaded templates.
 	UPROPERTY(EditAnywhere, Category = "StereoCam|Cameras",
 	          meta = (GetOptions = "GetSceneCaptureNames"))
 	FName LeftCaptureName = TEXT("NavcamLeft");
@@ -135,7 +130,7 @@ public:
 
 	// Optional object-segmentation capture. Point this at a SceneCapture whose
 	// post-process material colours each object from the Custom Depth-Stencil
-	// buffer (the UnrealCV object_mask, reproduced without UnrealCV). Leave
+	// buffer. Leave
 	// blank to stream no mask. It rides the same path as the RGB cameras: same
 	// frame id, so the ROS side overlays it on the central image. Nothing about
 	// the segmentation lives in this plugin — the colours come entirely from the
@@ -159,8 +154,8 @@ public:
 	TArray<FString> GetSceneCaptureNames() const;
 
 	// Captures with no TextureRenderTarget2D assigned get one created at this
-	// size automatically (RGBA8). Match the UnrealCV camera resolution: the
-	// ROS node solved the rig at that size and refuses mismatched frames.
+	// size automatically (RGBA8). All stereo captures must share one size: the
+	// ROS node solves the rig at the first size and refuses mismatched frames.
 	UPROPERTY(EditAnywhere, Category = "StereoCam|Cameras")
 	int32 CaptureWidth = 640;
 

@@ -88,8 +88,8 @@ class FrameStreamReceiver:
     TCP server for the UnrealStereoCam plugin (unreal/UnrealStereoCam/).
 
     Unreal renders the navcams with each frame and pushes them here over one
-    connection, so no UnrealCV render-on-demand — and no game-thread stall —
-    is needed for RGB. Packets are 24-byte-header BGRA frames tagged with
+    connection, so nothing is rendered on demand and the game thread never
+    stalls. Packets are 24-byte-header BGRA frames tagged with
     Unreal's frame counter; captures enqueued in one tick share a tag, which
     is what lets left/right be paired as a rigid stereo view.
 
@@ -482,7 +482,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         """
         Rig geometry from parameters and the first streamed frames.
 
-        Stream mode has no UnrealCV to measure, so the geometry is declared:
+        The stream carries no camera poses, so the geometry is declared:
         baseline_m and hfov_deg from parameters, image size from the frames,
         the eyes co-rotated (SGBM requires it anyway — the UnrealStereoCam
         captures must share a rotation), and the centre camera on the baseline
@@ -517,8 +517,8 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         """
         Take the newest same-tick pair from the UnrealStereoCam plugin.
 
-        Frames were rendered with the game frame and pushed here — no UnrealCV,
-        no game-thread stall. Returns None when there is nothing new to
+        Frames were rendered with the game frame and pushed here, with no
+        game-thread stall. Returns None when there is nothing new to
         process; the cycle simply skips. Geometry is solved from parameters on
         the first frame, when the image size becomes known.
         """
