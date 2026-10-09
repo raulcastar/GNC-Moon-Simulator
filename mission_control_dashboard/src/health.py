@@ -7,7 +7,7 @@ from lifecycle_msgs.srv import ChangeState, GetState
 from rcl_interfaces.srv import GetParameters
 
 from .settings import HEALTH_WINDOW, NODE_POLL_TICKS, REMOTE_PARAMS
-from .web import sio_cams, sio_map, sio_sys, sio_teleop, socketio
+from .web import sio_cams, sio_map, sio_replay, sio_sys, sio_teleop, socketio
 
 
 class HealthMixin:
@@ -29,8 +29,15 @@ class HealthMixin:
 
     def _console(self, level: str, text: str) -> None:
         """Log to ROS and mirror onto the operator console."""
-        {'INFO': self.get_logger().info, 'WARN': self.get_logger().warn,
-         'ERROR': self.get_logger().error}.get(level, self.get_logger().info)(text)
+        # One call site per severity: rclpy refuses a call site whose severity changes
+        # between calls ("Logger severity cannot be changed between calls").
+        logger = self.get_logger()
+        if level == 'ERROR':
+            logger.error(text)
+        elif level == 'WARN':
+            logger.warn(text)
+        else:
+            logger.info(text)
         socketio.emit('log', {'level': level, 'node': 'dashboard',
                               'text': text, 'stamp': time.time()})
 
@@ -86,7 +93,7 @@ class HealthMixin:
             feeds[name] = {'hz': round(recent / HEALTH_WINDOW, 1),
                            'age': round(now - times[-1], 1) if times else None}
         payload = {'feeds': feeds, 'nodes': dict(self._node_states), 'bag': self._bag_status()}
-        for server in (socketio, sio_cams, sio_teleop, sio_map, sio_sys):
+        for server in (socketio, sio_cams, sio_teleop, sio_map, sio_sys, sio_replay):
             server.emit('health', payload)
 
         self._health_ticks += 1

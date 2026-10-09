@@ -256,7 +256,7 @@
     <div class="light"><div class="dot" id="li-lidar"></div>LIDAR</div>
   </div>
   <button class="hbtn" id="btn-snap" title="Download the latest frames, local DEM, lidar and state as a zip">⤓ SNAPSHOT</button>
-  <button class="hbtn" id="btn-rec" title="Record a rosbag (mcap) into mission_control_dashboard/bags">● REC</button>
+  <button class="hbtn" id="btn-rec" title="Record a rosbag — presets, names, notes and the recorded bags are in the BAGS window (menu, port 5007)">● REC</button>
   <button class="hbtn" id="btn-sys" title="Open the system window: feed rates, lifecycle nodes, ROS 2 topics">SYSTEM ↗</button>
 </header>
 
@@ -499,9 +499,14 @@ socket.on('health', h => {
   bag = h.bag || bag;
   const rec = $('btn-rec');
   rec.classList.toggle('rec', !!bag.recording);
+  const mbytes = b => b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : Math.round((b || 0) / 1e6) + ' MB';
   rec.textContent = bag.recording
-    ? `■ STOP ${String(Math.floor(bag.elapsed / 60)).padStart(2, '0')}:${String(bag.elapsed % 60).padStart(2, '0')}`
+    ? `■ STOP ${String(Math.floor(bag.elapsed / 60)).padStart(2, '0')}:${String(bag.elapsed % 60).padStart(2, '0')} · ${mbytes(bag.size)}`
     : '● REC';
+  rec.title = (bag.recording ? `Recording ${bag.name}: ${bag.topic_count} topics, ${mbytes(bag.rate)}/s` +
+               (bag.warnings && bag.warnings.length ? ` · ${bag.warnings.join(' · ')}` : '')
+             : `Record a rosbag with the ${(bag.preset || 'navigation').toUpperCase()} preset`) +
+              ' — presets, names, notes and the recorded bags are in the BAGS window (menu, port 5007)';
 });
 /* SYSTEM: feed rates, lifecycle nodes and the ROS 2 topics live in their own window (5006). */
 $('btn-sys').onclick = () => window.open(`http://${window.location.hostname || 'localhost'}:5006/`, 'gnc_system');

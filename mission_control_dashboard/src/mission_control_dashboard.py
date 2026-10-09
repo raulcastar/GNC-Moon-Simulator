@@ -18,8 +18,8 @@ Layout of this package:
   telemetry                  odometry, paths, mission state, /rosout console
   topics                     System window: ROS 2 graph, topic inspection
   health                     feed rates, lifecycle nodes and restarts, remote params
-  recording                  rosbag and snapshot
-  replay                     Replay window: recorded rosbags played back
+  recording                  rosbag recording (presets, notes, rename / delete) and snapshot
+  replay                     BAGS window: replaying the recorded rosbags
   commands                   headlights, stop, teleop drive, goals
   geometry, settings         pure helpers and tuning constants
 """
@@ -48,7 +48,8 @@ from .imagery import ImageryMixin
 from .mapping import MappingMixin
 from .recording import RecordingMixin
 from .replay import ReplayMixin
-from .settings import CAM_PRODUCT_MIN_PERIOD, HEALTH_PERIOD, INSPECT_PERIOD, LIFECYCLE_NODES, REMOTE_PARAMS
+from .settings import (CAM_PRODUCT_MIN_PERIOD, DEFAULT_BAG_PRESET, HEALTH_PERIOD, INSPECT_PERIOD,
+                       LIFECYCLE_NODES, REMOTE_PARAMS)
 from .telemetry import TelemetryMixin
 from .topics import TopicsMixin
 from .web import (app, app_cams, app_hub, app_map, app_replay, app_sys, app_teleop, sio_cams, sio_hub,
@@ -109,6 +110,9 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
         self._bag_proc = None
         self._bag_path = None
         self._bag_t0 = 0.0
+        self._bag_size = (0, 0.0)            # (bytes, time) of the last size reading, for the rate
+        self._bag_meta = {}
+        self._bag_choice = {'preset': DEFAULT_BAG_PRESET, 'topics': []}   # REC uses the last choice
 
         self._last_lidar = 0.0
         self._last_odom_emit = 0.0

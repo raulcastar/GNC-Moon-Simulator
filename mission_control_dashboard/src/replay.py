@@ -76,7 +76,10 @@ class ReplayMixin:
     def _bag_directory(self) -> str:
         return self.get_parameter('bag_directory').value
 
-    def list_bags(self, sid) -> None:
+    def _replaying(self) -> bool:
+        return self._replay_proc is not None and self._replay_proc.poll() is None
+
+    def list_bags(self, sid=None) -> None:
         """Every bag in the bag directory, newest first, with its metadata."""
         import rosbag2_py                    # heavy import, only when the window asks
         bags, directory = [], self._bag_directory()
@@ -85,7 +88,10 @@ class ReplayMixin:
             path = os.path.join(directory, name)
             if not os.path.isfile(os.path.join(path, 'metadata.yaml')):
                 continue
-            entry = {'name': name, 'size': sum(os.path.getsize(os.path.join(path, f)) for f in os.listdir(path))}
+            notes = self.read_notes(path)
+            entry = {'name': name, 'size': sum(os.path.getsize(os.path.join(path, f)) for f in os.listdir(path)),
+                     'notes': notes.get('notes', ''), 'preset': notes.get('preset'),
+                     'recording': self._recording() and os.path.realpath(path) == os.path.realpath(self._bag_path or '')}
             try:
                 meta = rosbag2_py.Info().read_metadata(path, '')
                 entry.update(
@@ -118,6 +124,9 @@ class ReplayMixin:
         if self._unreal_playing():
             self._replay_error('Unreal is playing: stop Play first, so live data and the replay '
                                'do not mix on the same topics.')
+            return
+        if self._recording():
+            self._replay_error('a recording is running: stop it first, or it would capture the replay.')
             return
         meta = rosbag2_py.Info().read_metadata(path, '')
         in_bag = {t.topic_metadata.name for t in meta.topics_with_message_count}
@@ -200,6 +209,7 @@ class ReplayMixin:
     def _replay_error(self, text: str) -> None:
         with self._replay_lock:
             self._replay['error'] = text
+            self._replay['error_t'] = time.monotonic()
         self._console('WARN', f'Replay: {text}')
         self._replay_tick()
 
@@ -207,6 +217,9 @@ class ReplayMixin:
         """Pushes the player state (and the position, from /clock) to the replay window."""
         proc = self._replay_proc
         with self._replay_lock:
+            if (self._replay.get('error') and self._replay['state'] not in ('playing', 'paused')
+                    and time.monotonic() - self._replay.get('error_t', 0.0) > 8.0):
+                self._replay['error'] = None          # an old refusal: no longer news
             r = dict(self._replay)
             if proc is not None and proc.poll() is not None:     # the player exited
                 err = []
@@ -217,7 +230,7 @@ class ReplayMixin:
                         pass
                 self._replay_proc = None
                 self._replay.update(state='finished' if proc.returncode in (0, -2) else 'failed',
-                                    error=err[-1][:300] if err else None)
+                                    error=err[-1][:300] if err else None, error_t=time.monotonic())
                 r = dict(self._replay)
         position = None
         if self._seek_pos is not None and self._seek_pos[1] == self._clock_ns and r['state'] in ('playing', 'paused'):

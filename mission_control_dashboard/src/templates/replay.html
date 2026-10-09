@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GNC MOON SIM — Replay</title>
+<title>GNC MOON SIM — Bags</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 <script src="/dash_common.js"></script>
 <style>
@@ -116,20 +116,75 @@
   #topic-body input { margin-right: 6px; vertical-align: middle; }
   #topic-body .live { color: var(--amber); font-size: 10px; cursor: help; }
   .note { color: var(--dim); font-size: 10px; line-height: 1.5; padding: 6px 10px; border-top: 1px solid var(--line); }
+
+  /* ---- recorder ---- */
+  #recorder { padding: 10px 12px; display: flex; flex-direction: column; gap: 9px; }
+  .presets { display: flex; gap: 5px; flex-wrap: wrap; }
+  .presets button { font-size: 10px; padding: 5px 10px; }
+  .presets button.on { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: bold; }
+  #preset-about { color: var(--dim); font-size: 10px; line-height: 1.5; }
+  #custom { display: none; max-height: 150px; overflow: auto; border: 1px solid var(--line); border-radius: 3px;
+            padding: 4px 8px; columns: 2; column-gap: 14px; font-size: 10.5px; }
+  #custom.open { display: block; }
+  #custom label { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 1px 0; }
+  #custom input { margin-right: 5px; vertical-align: middle; }
+  .fields { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; }
+  .fields label { color: var(--dim); font-size: 10px; letter-spacing: 1px; }
+  input[type=text], textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line);
+                               border-radius: 3px; padding: 4px 7px; font-family: var(--mono); font-size: 11px; }
+  textarea { resize: vertical; min-height: 34px; }
+  .recrow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  button.btn.rec { border-color: var(--red); color: var(--red); }
+  button.btn.rec.on { background: var(--red); color: #120305; animation: blink 1.2s infinite; }
+  @keyframes blink { 50% { opacity: .6; } }
+  #rec-status { color: var(--dim); font-size: 11px; }
+  #rec-status b { color: var(--text); font-weight: normal; }
+  #rec-warn { color: var(--amber); font-size: 10.5px; line-height: 1.5; min-height: 0; }
+  #bag-body .tagp { color: var(--cyan); font-size: 9px; letter-spacing: 1px; margin-left: 6px; }
+  #bag-body .recd { color: var(--red); font-size: 9px; letter-spacing: 1px; margin-left: 6px; }
+  #bag-body .nt { display: block; color: var(--dim); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* ---- selected bag: rename, notes, delete ---- */
+  #manage { display: none; grid-template-columns: auto 1fr auto; gap: 6px 8px; align-items: center;
+            border: 1px dashed var(--line); border-radius: 4px; padding: 8px; }
+  #manage.open { display: grid; }
+  #manage label { color: var(--dim); font-size: 10px; letter-spacing: 1px; }
+  #m-msg { font-size: 10.5px; color: var(--dim); } #m-msg.err { color: var(--red); }
+  button.small.danger:hover { color: var(--red); border-color: var(--red); }
 </style>
 </head>
 <body>
   <header>
     <a class="back" href="#" id="hublink">◀ MENU</a>
-    <div class="brand">REPLAY<small>RECORDED ROSBAGS</small></div>
+    <div class="brand">BAGS<small>RECORD · REPLAY · MANAGE ROSBAGS</small></div>
     <a class="open" href="#" id="overview-link" target="gnc_overview" title="Watch the replay in the overview">OVERVIEW ↗</a>
     <div class="spacer"></div>
     <div class="conn"><span class="dot" id="cdot"></span><span id="cstate">OFFLINE</span></div>
   </header>
 
   <main>
+    <div class="col">
+    <!-- ============ RECORDER ============ -->
+    <div class="panel" style="flex: 0 0 auto">
+      <div class="panel-title"><span class="tag">●</span>RECORDER<span class="n" id="rec-state">idle</span></div>
+      <div id="recorder">
+        <div class="presets" id="presets"></div>
+        <div id="preset-about"></div>
+        <div id="custom"></div>
+        <div class="fields">
+          <label>NAME</label><input type="text" id="rec-label" maxlength="40" placeholder="optional, e.g. crater_traverse (added to the date)">
+          <label>NOTES</label><textarea id="rec-notes" rows="2" placeholder="optional: what this run is about"></textarea>
+        </div>
+        <div class="recrow">
+          <button class="btn rec" id="rec">● RECORD</button>
+          <span id="rec-status"></span>
+        </div>
+        <div id="rec-warn"></div>
+      </div>
+    </div>
+
     <!-- ============ BAGS ============ -->
-    <div class="panel">
+    <div class="panel" style="flex: 1">
       <div class="panel-title"><span class="tag">▸</span>RECORDED BAGS
         <span class="n" id="bag-n"></span>
         <button class="small" id="refresh" title="Scan the bag folder again">⟳ REFRESH</button>
@@ -141,6 +196,7 @@
         <div class="hint" id="bag-hint"></div>
       </div>
     </div>
+    </div>
 
     <div class="col">
       <!-- ============ PLAYER ============ -->
@@ -148,6 +204,14 @@
         <div class="panel-title"><span class="tag">▸</span>PLAYER<span class="n" id="state">idle</span></div>
         <div id="player">
           <div id="now">no bag selected<small>pick one on the left</small></div>
+          <div id="manage">
+            <label>NAME</label><input type="text" id="m-name" maxlength="80">
+            <button class="small" id="m-rename" title="Rename the bag folder">RENAME</button>
+            <label>NOTES</label><textarea id="m-notes" rows="2"></textarea>
+            <button class="small" id="m-save" title="Save the notes with the bag (notes.json)">SAVE</button>
+            <span></span><span id="m-msg"></span>
+            <button class="small danger" id="m-delete" title="Delete this bag from disk">DELETE</button>
+          </div>
           <div id="bar" class="off" title="Click to seek"><div id="fill"></div></div>
           <div id="times"><span><b id="t-pos">0:00</b> / <span id="t-dur">0:00</span></span><span id="t-left"></span></div>
           <div class="controls">
@@ -220,14 +284,17 @@
   });
   function renderBags() {
     $('bag-body').innerHTML = bags.map(b =>
-      `<tr data-name="${escHtml(b.name)}" class="${b.name === sel ? 'sel' : ''}" title="${escHtml(b.error || b.name)}">` +
-      `<td>${escHtml(b.name)}</td><td class="when">${when(b.start)}</td>` +
+      `<tr data-name="${escHtml(b.name)}" class="${b.name === sel ? 'sel' : ''}" title="${escHtml(b.error || b.notes || b.name)}">` +
+      `<td>${escHtml(b.name)}${b.recording ? '<span class="recd">● REC</span>' : ''}` +
+      `${b.preset ? `<span class="tagp">${escHtml(b.preset.toUpperCase())}</span>` : ''}` +
+      `${b.notes ? `<span class="nt">${escHtml(b.notes)}</span>` : ''}</td><td class="when">${when(b.start)}</td>` +
       `<td class="num">${b.error ? '?' : clock(b.duration)}</td><td class="num">${size(b.size)}</td>` +
       `<td class="num">${b.messages ?? '?'}</td></tr>`).join('');
   }
   $('bag-body').addEventListener('click', e => {
     const tr = e.target.closest('tr');
     if (!tr || st.state === 'playing' || st.state === 'paused') return;
+    if ((bags.find(b => b.name === tr.dataset.name) || {}).recording) return;   /* still being written */
     sel = tr.dataset.name; ticked = {};
     renderBags(); renderSelection();
   });
@@ -244,6 +311,10 @@
       `${escHtml(t.name)}</label>${t.name in liveOutputs ? `<span class="live" title="Left out by default: ${escHtml(liveOutputs[t.name])}"> · live</span>` : ''}</td>` +
       `<td class="c" title="${escHtml(t.type)}">${escHtml(t.type.replace('/msg/', '/'))}</td>` +
       `<td class="num">${t.count}</td></tr>`).join('');
+    $('manage').classList.toggle('open', !!b && st.state !== 'playing' && st.state !== 'paused');
+    if (b && document.activeElement !== $('m-name') && document.activeElement !== $('m-notes')) {
+      $('m-name').value = b.name; $('m-notes').value = b.notes || '';
+    }
     if (st.state !== 'playing' && st.state !== 'paused') {
       $('now').innerHTML = b ? `${escHtml(b.name)}<small>${clock(b.duration)} · ${topics.length} topics · ` +
                                `${b.messages ?? '?'} messages · press PLAY</small>`
@@ -309,10 +380,13 @@
     } else if (was !== m.state) {
       renderSelection();
     }
-    const dur = m.duration || 0, pos = live ? (m.position ?? 0) : (m.state === 'finished' ? dur : 0);
+    /* Idle: the selected bag's length; playing: the bag being played. */
+    const selDur = (bags.find(b => b.name === sel) || {}).duration || 0;
+    const dur = live ? (m.duration || 0) : selDur;
+    const pos = live ? (m.position ?? 0) : (m.state === 'finished' && m.bag === sel ? dur : 0);
     $('fill').style.width = dur ? `${Math.min(100, 100 * pos / dur)}%` : '0';
     $('t-pos').textContent = clock(pos);
-    $('t-dur').textContent = clock(dur || (bags.find(b => b.name === sel) || {}).duration);
+    $('t-dur').textContent = clock(dur);
     $('t-left').textContent = live && dur ? `${clock(dur - pos)} left` : '';
     const msg = $('msg');
     if (m.error) { msg.className = 'err'; msg.textContent = m.error; }
@@ -321,6 +395,94 @@
     else if (live) { msg.className = 'ok'; msg.textContent = 'Replayed topics reach every node as if live. Click the bar to seek.'; }
     else { msg.className = 'ok'; msg.textContent = 'Replayed topics reach every node as if live: open the OVERVIEW to watch. Stop Play in Unreal first.'; }
     updateButtons();
+  });
+
+  // ---- selected bag: rename / notes / delete ----
+  $('m-rename').onclick = () => {
+    const name = $('m-name').value.trim();
+    if (name && name !== sel) { socket.emit('bag_rename', { bag: sel, name }); sel = name.replace(/[^A-Za-z0-9_-]+/g, '_'); }
+  };
+  $('m-save').onclick = () => socket.emit('bag_notes', { bag: sel, notes: $('m-notes').value });
+  $('m-delete').onclick = () => {
+    const b = bags.find(x => x.name === sel);
+    if (b && confirm(`Delete ${b.name} (${size(b.size)}) from disk? This cannot be undone.`)) {
+      socket.emit('bag_delete', { bag: sel }); sel = null;
+    }
+  };
+  socket.on('bag_result', m => {
+    if (m.action === 'record' || m.action === 'stopped') {
+      if (m.error) $('rec-warn').textContent = m.error;
+      return;
+    }
+    const msg = $('m-msg');
+    msg.className = m.error ? 'err' : '';
+    msg.textContent = m.error ? `${m.action}: ${m.error}` : { rename: 'renamed', notes: 'notes saved', delete: 'deleted' }[m.action];
+    clearTimeout(msg._t); msg._t = setTimeout(() => { msg.textContent = ''; }, 4000);
+  });
+
+  // ---- recorder ----
+  let presets = {}, choice = { preset: 'navigation', topics: [] }, liveTopics = [], rec = {};
+  const mb = b => b == null ? '—' : b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : (b / 1e6).toFixed(1) + ' MB';
+  socket.on('recorder', m => {
+    presets = m.presets || {}; choice = m.choice || choice; liveTopics = m.live_topics || [];
+    renderPresets();
+  });
+  function renderPresets() {
+    const keys = [...Object.keys(presets), 'custom'];
+    $('presets').innerHTML = keys.map(k => `<button class="small${k === choice.preset ? ' on' : ''}" data-p="${k}">` +
+      `${k === 'custom' ? 'CUSTOM' : escHtml(presets[k].label)}</button>`).join('');
+    const p = presets[choice.preset];
+    $('preset-about').textContent = p ? `${p.topics.length} topics: ${p.about}` :
+      'Tick the topics to record (pre-filled from the last preset).';
+    const custom = $('custom');
+    custom.classList.toggle('open', choice.preset === 'custom');
+    if (choice.preset === 'custom') {
+      const all = [...new Set([...Object.values(presets).flatMap(x => x.topics), ...liveTopics])].sort()
+        .filter(t => !/transition_event|parameter_events|rosout/.test(t));
+      const on = new Set(choice.topics);
+      custom.innerHTML = all.map(t => `<label title="${escHtml(t)}"><input type="checkbox" data-t="${escHtml(t)}"` +
+        `${on.has(t) ? ' checked' : ''}>${escHtml(t)}</label>`).join('');
+    }
+  }
+  $('presets').addEventListener('click', e => {
+    const k = e.target.dataset.p;
+    if (!k || rec.recording) return;
+    if (k === 'custom' && choice.preset !== 'custom') {
+      choice = { preset: 'custom', topics: (presets[choice.preset] || {}).topics || choice.topics };
+    } else if (k !== 'custom') {
+      choice = { preset: k, topics: [] };
+    }
+    renderPresets();
+  });
+  $('custom').addEventListener('change', e => {
+    const t = e.target.dataset.t;
+    if (!t) return;
+    choice.topics = e.target.checked ? [...new Set([...choice.topics, t])] : choice.topics.filter(x => x !== t);
+  });
+  $('rec').onclick = () => {
+    if (rec.recording) { socket.emit('record_stop'); $('rec').disabled = true; return; }
+    $('rec-warn').textContent = '';
+    socket.emit('record_start', { preset: choice.preset, topics: choice.topics,
+                                  label: $('rec-label').value, notes: $('rec-notes').value });
+  };
+  socket.on('health', h => {
+    const was = rec.recording;
+    rec = h.bag || {};
+    const r = $('rec');
+    r.disabled = !rec.recording && rec.replaying;
+    r.classList.toggle('on', !!rec.recording);
+    r.textContent = rec.recording ? '■ STOP' : '● RECORD';
+    $('rec-state').textContent = rec.recording ? 'recording' : 'idle';
+    $('rec-status').innerHTML = rec.recording
+      ? `<b>${clock(rec.elapsed)}</b> · <b>${mb(rec.size)}</b> · ${mb(rec.rate)}/s · ${rec.topic_count} topics · ${mb(rec.free)} free`
+      : `${mb(rec.free)} free · ${rec.live ? 'Unreal is playing' : 'Unreal is not playing'}`;
+    const warn = [...(rec.warnings || [])];
+    if (!rec.recording && rec.replaying) warn.push('a replay is running: stop it before recording.');
+    if (!rec.recording && !rec.live && !rec.replaying) warn.push('Unreal is not playing: start Play first, or the bag stays nearly empty.');
+    $('rec-warn').textContent = warn.join(' · ');
+    ['rec-label', 'rec-notes'].forEach(id => $(id).disabled = !!rec.recording);
+    if (was && !rec.recording) { $('rec-label').value = ''; $('rec-notes').value = ''; refresh(); }
+    if (!was && rec.recording) refresh();
   });
 
   // ---- connection ----

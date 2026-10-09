@@ -47,6 +47,7 @@ REPLAY_LIVE_OUTPUTS = {
     '/goal_pose': 'a command: would send the recorded goals again',
     '/cancel_goal': 'a command',
     '/cmd_vel': 'a command: would drive the rover',
+    '/headlights_cmd': 'a command',
 }
 NODE_POLL_TICKS = 3           # health ticks between lifecycle state polls
 DEM_LIDAR_MAX_POINTS = 4000   # lidar points overlaid on the local DEM
@@ -79,17 +80,40 @@ PATH_OVERLAY_AHEAD = 30.0     # m of planned path projected onto the navcam
 PATH_OVERLAY_STEP = 0.25      # m between projected path samples
 ROVER_HALF_WIDTH = 0.23       # m; half the ribbon width drawn along the path
 MIN_CAMERA_DEPTH = 0.3        # m; samples closer than this are not drawn
-# Topics recorded by the dashboard's rosbag button.
-BAG_TOPICS = [
-    '/clock',            # simulation time: replay with the recorded clock
-    '/odom', '/imu/data', '/cmd_vel', '/goal_pose', '/cancel_goal',
-    '/global_path', '/driven_trajectory', '/mission_status/state',
-    '/mission_status/goal_reached', '/lidar/points',
+# Rosbag recording presets (BAGS window and the overview's REC). Sizes measured
+# with the simulator at its default rates.
+_NAVIGATION = [
+    '/clock',                                   # simulation time: a replay runs on it
+    '/odom', '/imu/data', '/cmd_vel', '/goal_pose', '/cancel_goal', '/headlights_cmd',
+    '/global_path', '/driven_trajectory', '/mission_status/state', '/mission_status/goal_reached',
     '/local_mapping/elevation_map_raw', '/local_mapping/elevation_grid',
-    '/navcam/central/image_color/compressed', '/navcam/central/image_depth',
-    '/rear_cam/image_color/compressed',
-    '/navcam/central/depth_ground_truth',
-    '/navcam/central/camera_info', '/navcam/central/object_mask',
-    '/navcam/central/shadow_mask', '/navcam/central/shadow_label',
-    '/navcam/central/shadow_label_mapping', '/navcam/central/object_mask_mapping',
+    '/navcam/central/image_color/compressed', '/navcam/central/camera_info',
+    '/navcam/central/image_depth',              # lets local mapping re-run on a replay
+    '/rear_cam/image_color/compressed', '/rear_cam/camera_info',
 ]
+BAG_PRESETS = {
+    'navigation': {
+        'label': 'NAVIGATION',
+        'about': 'pose, IMU, commands, goals, mission, paths, local maps, navcam depth and the '
+                 'compressed navcam / rear images: replays a drive and re-runs local mapping '
+                 '(~2 MB/s, ~6 GB/h)',
+        'topics': _NAVIGATION,
+    },
+    'perception': {
+        'label': 'FULL PERCEPTION',
+        'about': 'navigation plus lidar, ground-truth depth, object and shadow masks, the left / '
+                 'right navcams, event and SPAD cameras: for perception work offline '
+                 '(~8 MB/s, ~30 GB/h)',
+        'topics': _NAVIGATION + [
+            '/lidar/points', '/navcam/central/depth_ground_truth',
+            '/navcam/central/object_mask', '/navcam/central/object_mask_mapping',
+            '/navcam/central/shadow_mask', '/navcam/central/shadow_label',
+            '/navcam/central/shadow_label_mapping',
+            '/navcam/left/image_color/compressed', '/navcam/left/camera_info',
+            '/navcam/right/image_color/compressed', '/navcam/right/camera_info',
+            '/event_camera/image_events', '/event_camera/event_rate', '/spad/image',
+        ],
+    },
+}
+DEFAULT_BAG_PRESET = 'navigation'
+BAG_LOW_DISK_BYTES = 5e9      # warn below this much free space where bags are written

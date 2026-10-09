@@ -57,7 +57,7 @@ docker compose exec component_local_mapping \
 | `component_path_planner` | Global path over the elevation grid. |
 | `component_rover_leo_raph` | Rover base: `/cmd_vel` in, `/odom` out. |
 | `component_sim_clock` | Publishes `/clock` (simulation time) from the UnrealSimClock plugin. |
-| `mission_control_dashboard` | Web mission control, menu on port 5000: overview (cameras, lidar, map with goal dispatch, telemetry, /rosout console), teleop, camera wall, 3D map, system (feeds, nodes, ROS 2 topics) and replay of the recorded rosbags (5007). |
+| `mission_control_dashboard` | Web mission control, menu on port 5000: overview (cameras, lidar, map with goal dispatch, telemetry, /rosout console), teleop, camera wall, 3D map, system (feeds, nodes, ROS 2 topics) and bags: record with presets, replay, manage (5007). |
 | `custom_map_interfaces` | Shared message definitions. |
 
 ## Simulation time
@@ -78,7 +78,7 @@ rover pose **at its capture time**, interpolated from odometry, rather than at
 the newest pose (0.5 s of processing at 0.5 m/s would otherwise misplace it by
 25 cm). When Unreal is not playing, simulation time stands still and the timers
 of those nodes pause with it. The dashboard stays on the wall clock (it is a UI),
-and its rosbags record `/clock`, so a replay runs on the recorded time: the **REPLAY** window
+and its rosbags record `/clock`, so a replay runs on the recorded time: the **BAGS** window
 (port 5007) plays a bag back into the live system — stop Play in Unreal first — with the
 sensors replayed and the GNC nodes recomputing their outputs from them.
 

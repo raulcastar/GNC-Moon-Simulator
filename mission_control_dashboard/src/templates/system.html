@@ -192,7 +192,7 @@
     $('rec').innerHTML = bag.recording
       ? `rosbag: <b>recording ${String(Math.floor(bag.elapsed / 60)).padStart(2, '0')}:${String(bag.elapsed % 60).padStart(2, '0')}</b>` +
         (bag.path ? ` → ${esc(bag.path)}` : '')
-      : 'rosbag: <b>idle</b> (start / stop with ● REC on the overview)';
+      : 'rosbag: <b>idle</b> (record with ● REC on the overview or in the BAGS window)';
   });
   $('nodes').addEventListener('click', e => {
     const n = e.target.dataset.node;

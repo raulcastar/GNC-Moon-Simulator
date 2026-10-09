@@ -116,6 +116,52 @@ def replay():
 def handle_bags(json_data=None):
     if web.node is not None:
         web.node.list_bags(request.sid)
+        sio_replay.emit('recorder', web.node.recorder_info(), to=request.sid)
+
+
+def _bag_result(error, action):
+    """Reports a recorder / management action to the BAGS window and refreshes the bag list."""
+    sio_replay.emit('bag_result', {'action': action, 'error': error}, to=request.sid)
+    web.node.list_bags()
+
+
+@sio_replay.on('record_start')
+def handle_record_start(json_data):
+    if web.node is not None:
+        err = web.node.start_bag(str(json_data.get('preset', 'navigation')),
+                                 [str(t) for t in json_data.get('topics') or []],
+                                 str(json_data.get('label', '')), str(json_data.get('notes', '')))
+        sio_replay.emit('bag_result', {'action': 'record', 'error': err}, to=request.sid)
+
+
+@sio_replay.on('record_stop')
+def handle_record_stop(json_data=None):
+    if web.node is not None:
+        sid = request.sid
+
+        def stop():
+            web.node.stop_bag()
+            web.node.list_bags()
+            sio_replay.emit('bag_result', {'action': 'stopped', 'error': None}, to=sid)
+        threading.Thread(target=stop, daemon=True).start()
+
+
+@sio_replay.on('bag_rename')
+def handle_bag_rename(json_data):
+    if web.node is not None:
+        _bag_result(web.node.rename_bag(json_data.get('bag', ''), json_data.get('name', '')), 'rename')
+
+
+@sio_replay.on('bag_notes')
+def handle_bag_notes(json_data):
+    if web.node is not None:
+        _bag_result(web.node.set_bag_notes(json_data.get('bag', ''), json_data.get('notes', '')), 'notes')
+
+
+@sio_replay.on('bag_delete')
+def handle_bag_delete(json_data):
+    if web.node is not None:
+        _bag_result(web.node.delete_bag(json_data.get('bag', '')), 'delete')
 
 
 @sio_replay.on('replay_start')
