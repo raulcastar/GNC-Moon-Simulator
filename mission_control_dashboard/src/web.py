@@ -99,6 +99,11 @@ def _dash_common_js():
     return send_from_directory(template_dir, 'dash_common.js', mimetype='application/javascript')
 
 
+def _lidar_view_js():
+    """Serves the lidar 3D view shared by the overview and 3D map pages."""
+    return send_from_directory(template_dir, 'lidar_view.js', mimetype='application/javascript')
+
+
 def _nav_overlay_js():
     """Serves the planned-path overlay drawn on the navcam feeds."""
     return send_from_directory(template_dir, 'nav_overlay.js', mimetype='application/javascript')
@@ -118,6 +123,7 @@ for _app in (app, app_cams, app_teleop):
 app.add_url_rule('/snapshot.zip', 'snapshot', _snapshot)
 for _app in (app, app_map):
     _app.add_url_rule('/local_dem.js', 'local_dem_js', _local_dem_js)
+    _app.add_url_rule('/lidar_view.js', 'lidar_view_js', _lidar_view_js)
 for _app in (app, app_teleop, app_sys):
     _app.add_url_rule('/dash_common.js', 'dash_common_js', _dash_common_js)
 

@@ -9,6 +9,7 @@
 <script src="/feed_legends.js"></script>
 <script src="/nav_overlay.js"></script>
 <script src="/dash_common.js"></script>
+<script src="/lidar_view.js"></script>
 <style>
   :root {
     --bg:      #10151c;
@@ -115,10 +116,13 @@
 
   /* ============ LIDAR + TELEMETRY ============ */
   #lidar-panel { flex: 1.4; }
-  #lidarCanvas { flex: 1; min-height: 0; width: 100%; }
+  #lidarView { flex: 1; min-height: 0; position: relative; }
   #dem-panel   { flex: 1.1; }
   #tele-panel  { flex: 0 0 auto; }
-  #tele { flex: 1; padding: 8px 12px; overflow-y: auto; }
+  /* two columns of readouts, so the lidar and DEM views above get the height */
+  #tele { flex: 1; padding: 6px 12px; overflow-y: auto; display: grid;
+          grid-template-columns: 1fr 1fr; column-gap: 18px; align-content: start; }
+  #tele .tl.wide { grid-column: 1 / -1; }
   .tl { display: flex; justify-content: space-between; padding: 3px 0;
         border-bottom: 1px dashed #131e2c; }
   .tl .k { color: var(--dim); letter-spacing: 1px; font-size: 11px; }
@@ -325,8 +329,8 @@
   <!-- ============ RIGHT: LIDAR 3D + LOCAL DEM + TELEMETRY ============ -->
   <div class="col" id="col-right">
     <div class="panel" id="lidar-panel">
-      <div class="panel-title"><span class="tag">◎</span>LIDAR — 3D · ROVER FRAME · DRAG · WHEEL<span class="age" id="lidar-info"></span></div>
-      <canvas id="lidarCanvas" style="cursor:grab"></canvas>
+      <div class="panel-title"><span class="tag">◎</span>LIDAR — 3D · ROVER FRAME<span class="age" id="lidar-info"></span></div>
+      <div id="lidarView"></div>
     </div>
     <div class="panel" id="dem-panel">
       <div class="panel-title"><span class="tag">▦</span>LOCAL DEM — TERRAIN RELIEF · DRAG · WHEEL<span class="age" id="dem-info"></span></div>
@@ -350,7 +354,7 @@
         <div class="tl"><span class="k">ODOM RATE</span><span class="v" id="t-hz">—</span></div>
         <div class="tl"><span class="k">LIDAR POINTS</span><span class="v" id="t-pts">—</span></div>
         <div class="tl"><span class="k">ROLL / PITCH</span><span class="v cy" id="t-att">—</span></div>
-        <div class="tl"><span class="k">TILT</span><span class="tiltbar"><span id="t-tiltfill"></span><span id="t-tiltlim"></span></span><span class="v" id="t-tilt">—</span></div>
+        <div class="tl wide"><span class="k">TILT</span><span class="tiltbar"><span id="t-tiltfill"></span><span id="t-tiltlim"></span></span><span class="v" id="t-tilt">—</span></div>
         <div class="tl"><span class="k">LAST GOAL</span><span class="v cy" id="t-goal">—</span></div>
       </div>
     </div>
@@ -534,90 +538,13 @@ document.querySelectorAll('#console-bar button[data-f]').forEach(b =>
 $('btn-pause').onclick = e => { paused = !paused; e.target.textContent = paused ? 'RESUME' : 'PAUSE'; e.target.classList.toggle('on', paused); };
 $('btn-clear').onclick = () => logDiv.innerHTML = '';
 
-/* ---------------- lidar: 3D orbit view ---------------- */
-const lc = $('lidarCanvas'), lctx = lc.getContext('2d');
-let cloud = null;                                   /* last flat xyz list */
-const cam = { yaw: -2.35, pitch: 0.45, dist: 45 };  /* orbit state (zoomed out) */
-
-function heightColor(z, zmin, zmax) {
-  const t = Math.max(0, Math.min(1, (z - zmin) / Math.max(0.01, zmax - zmin)));
-  const r = Math.round(30 + 225 * t);
-  const g = Math.round(120 + 100 * (1 - Math.abs(t - .5) * 2));
-  const b = Math.round(255 - 225 * t);
-  return `rgb(${r},${g},${b})`;
-}
-
-function project(x, y, z, W, H) {
-  /* orbit camera around the origin: yaw about +z, then pitch, then perspective */
-  const cy_ = Math.cos(cam.yaw), sy_ = Math.sin(cam.yaw);
-  const cp_ = Math.cos(cam.pitch), sp_ = Math.sin(cam.pitch);
-  const rx =  x * cy_ + y * sy_;
-  const ry = -x * sy_ + y * cy_;
-  const vy =  ry * cp_ - z * sp_;          /* depth into the screen */
-  const vz =  ry * sp_ + z * cp_;          /* up on the screen */
-  const d = vy + cam.dist;
-  if (d < 0.5) return null;
-  const f = 0.9 * Math.min(W, H) / (d / cam.dist * 1.2);
-  return [W/2 + rx * f / cam.dist * 10, H/2 - vz * f / cam.dist * 10, d];
-}
-
-function drawLidar() {
-  lc.width = lc.clientWidth; lc.height = lc.clientHeight;
-  const W = lc.width, H = lc.height;
-  lctx.fillStyle = '#10151c'; lctx.fillRect(0, 0, W, H);
-
-  /* ground grid: 5 m squares out to 40 m, plus body axes */
-  lctx.strokeStyle = '#12202f'; lctx.lineWidth = 1;
-  for (let g = -40; g <= 40; g += 5) {
-    let a = project(g, -40, 0, W, H), b = project(g, 40, 0, W, H);
-    if (a && b) { lctx.beginPath(); lctx.moveTo(a[0],a[1]); lctx.lineTo(b[0],b[1]); lctx.stroke(); }
-    a = project(-40, g, 0, W, H); b = project(40, g, 0, W, H);
-    if (a && b) { lctx.beginPath(); lctx.moveTo(a[0],a[1]); lctx.lineTo(b[0],b[1]); lctx.stroke(); }
-  }
-  const o = project(0,0,0,W,H), ax = project(4,0,0,W,H), ay = project(0,4,0,W,H), az = project(0,0,3,W,H);
-  const axis = (p, c) => { if (o && p) { lctx.strokeStyle = c; lctx.lineWidth = 2;
-    lctx.beginPath(); lctx.moveTo(o[0],o[1]); lctx.lineTo(p[0],p[1]); lctx.stroke(); } };
-  axis(ax, '#33d6a6'); axis(ay, '#59b0ff'); axis(az, '#ffbe5c');
-
-  if (!cloud) return;
-  let zmin = 1e9, zmax = -1e9;
-  for (let i = 2; i < cloud.length; i += 3) {
-    if (cloud[i] < zmin) zmin = cloud[i];
-    if (cloud[i] > zmax) zmax = cloud[i];
-  }
-  for (let i = 0; i < cloud.length; i += 3) {
-    const p = project(cloud[i], cloud[i+1], cloud[i+2], W, H);
-    if (!p || p[0] < 0 || p[0] > W || p[1] < 0 || p[1] > H) continue;
-    const s = p[2] < cam.dist ? 3 : 2;               /* nearer -> bigger */
-    lctx.fillStyle = heightColor(cloud[i+2], zmin, zmax);
-    lctx.fillRect(p[0], p[1], s, s);
-  }
-}
-
+/* ---------------- lidar: 3D view (shared, lidar_view.js) ---------------- */
+const lidarView = LidarView($('lidarView'), { info: $('lidar-info') });
 socket.on('lidar', m => {
   lastSeen.lidar = Date.now();
   $('t-pts').textContent = m.count;
-  $('lidar-info').textContent = `${m.count} pts · ${m.frame}`;
-  cloud = m.points;
-  if (!document.hidden) drawLidar();   /* skip the render while unseen */
+  lidarView.update(m);
 });
-
-/* orbit interaction */
-let dragging = false, lx = 0, ly = 0;
-lc.addEventListener('mousedown', e => { dragging = true; lx = e.clientX; ly = e.clientY; lc.style.cursor = 'grabbing'; });
-window.addEventListener('mouseup', () => { dragging = false; lc.style.cursor = 'grab'; });
-window.addEventListener('mousemove', e => {
-  if (!dragging) return;
-  cam.yaw   += (e.clientX - lx) * 0.008;
-  cam.pitch  = Math.max(0.05, Math.min(1.5, cam.pitch + (e.clientY - ly) * 0.008));
-  lx = e.clientX; ly = e.clientY;
-  drawLidar();
-});
-lc.addEventListener('wheel', e => {
-  e.preventDefault();
-  cam.dist = Math.max(6, Math.min(150, cam.dist * (e.deltaY > 0 ? 1.12 : 0.89)));
-  drawLidar();
-}, { passive: false });
 
 /* ---------------- local DEM (shared view, local_dem.js) ---------------- */
 const demView = LocalDemView($('demView'), { info: $('dem-info'), nosig: $('dem-nosig') });
@@ -979,7 +906,7 @@ function setView(v) {
   requestAnimationFrame(() => {
     if (mapW) { fitMapStack(); drawColorbar(mapW > 0); if (following) followRover(); }
     demView.redraw();
-    drawLidar();
+    lidarView.redraw();
     window.dispatchEvent(new Event('resize'));   /* feed legends follow the new tile size */
   });
 }
