@@ -15,11 +15,20 @@ import cv2
 # Gradient-descent steps without a drop in T before getPathGDM gives up on the
 # continuous path and descends cell by cell (getPathDiscrete).
 GDM_STALL_STEPS = 40
+# Loop iterations between checks of Global_Path_Planner.should_stop.
+STOP_CHECK_EVERY = 256
+
+
+class PlanningCancelled(Exception):
+    """Raised inside a search when should_stop() turns true (the plan is no longer wanted)."""
 
 class Global_Path_Planner:
     def __init__(self):
         # The owning node replaces this with its ROS logger (so warnings reach /rosout).
         self.log = logging.getLogger('global_path_planner')
+        # fn() -> bool, polled by the long loops: true stops the search with
+        # PlanningCancelled (the owning node sets it while a plan is computed).
+        self.should_stop = None
         self.rad2deg = 180/np.pi
         self.slopecostLUT = np.zeros((2,5))
         self.slopecostLUT[:][0] = [0, 5, 10, 15, 20]
@@ -136,12 +145,18 @@ class Global_Path_Planner:
         #iter = 1
         #size = np.size(costMap)
         if start == None:
+            steps = 0
             while nbT:
+                steps += 1
+                self._check_stop(steps)
                 nodeTarget, nbT, nbNodes = self.getMinNB(nbT, nbNodes)
                 closedMap[nodeTarget[1],nodeTarget[0]] = 1
                 Tmap, nbT, nbNodes = self.updateNode(nodeTarget, costMap, Tmap, nbT, nbNodes, closedMap)
         else:
+            steps = 0
             while nbT:
+                steps += 1
+                self._check_stop(steps)
                 nodeTarget, nbT, nbNodes = self.getMinNB(nbT, nbNodes)
                 closedMap[nodeTarget[1],nodeTarget[0]] = 1
                 Tmap, nbT, nbNodes = self.updateNode(nodeTarget, costMap, Tmap, nbT, nbNodes, closedMap)
@@ -170,6 +185,7 @@ class Global_Path_Planner:
         bestT, sinceBest = np.inf, 0
 
         for k in range(0,round(15000/tau)):
+            self._check_stop(k + 1)
             cx, cy = int(round(gamma[-1,0])), int(round(gamma[-1,1]))
             if 0 <= cy < totalCostMap.shape[0] and 0 <= cx < totalCostMap.shape[1] \
                     and totalCostMap[cy,cx] < bestT:
@@ -178,9 +194,7 @@ class Global_Path_Planner:
                 sinceBest += 1
                 if sinceBest > GDM_STALL_STEPS:
                     return self.getPathDiscrete(totalCostMap, initWaypoint, endWaypoint)
-            G1,G2 = self.computeGradient(totalCostMap,gamma[-1,:])
-            dx = self.interpolatePoint(gamma[-1,:],G1)
-            dy = self.interpolatePoint(gamma[-1,:],G2)
+            dx, dy = self.gradientAt(totalCostMap, gamma[-1,:])
             
             if (np.isnan(dx)) or (np.isnan(dy)):
                 try:
@@ -261,7 +275,8 @@ class Global_Path_Planner:
         x, y = int(round(initWaypoint[0])), int(round(initWaypoint[1]))
         gx, gy = int(round(endWaypoint[0])), int(round(endWaypoint[1]))
         path = [[x, y]]
-        for _ in range(rows * cols):
+        for step in range(rows * cols):
+            self._check_stop(step + 1)
             if (x, y) == (gx, gy):
                 return np.array(path, dtype=float)
             best = None
@@ -281,6 +296,64 @@ class Global_Path_Planner:
     #    Use this gradient computation instead of np.gradient, since this acknow-
     #    ledges cost discontinuities
     # =============================================================================
+    def _check_stop(self, step):
+        """Every STOP_CHECK_EVERY steps: PlanningCancelled if should_stop() says so."""
+        if step % STOP_CHECK_EVERY == 0 and self.should_stop is not None and self.should_stop():
+            raise PlanningCancelled()
+
+    def _cell_gradient(self, cost, j, i):
+        """
+        Normalised gradient (gnx, gny) of `cost` at cell (row j, column i): the
+        per-cell computation of computeGradient, on its own.
+        """
+        m, n = cost.shape
+        if j == 0:
+            gy = cost[1,i]-cost[0,i]
+        elif j == m-1:
+            gy = cost[j,i]-cost[j-1,i]
+        elif np.isinf(cost[j+1,i]):
+            gy = 0 if np.isinf(cost[j-1,i]) else cost[j,i]-cost[j-1,i]
+        elif np.isinf(cost[j-1,i]):
+            gy = cost[j+1,i]-cost[j,i]
+        else:
+            gy = (cost[j+1,i]-cost[j-1,i])/2
+        if i == 0:
+            gx = cost[j,1]-cost[j,0]
+        elif i == n-1:
+            gx = cost[j,i]-cost[j,i-1]
+        elif np.isinf(cost[j,i+1]):
+            gx = 0 if np.isinf(cost[j,i-1]) else cost[j,i]-cost[j,i-1]
+        elif np.isinf(cost[j,i-1]):
+            gx = cost[j,i+1]-cost[j,i]
+        else:
+            gx = (cost[j,i+1]-cost[j,i-1])/2
+        # Stored as float64 in computeGradient's arrays: the same values here.
+        gx, gy = np.float64(gx), np.float64(gy)
+        magnitude = math.sqrt(gx**2 + gy**2)
+        if magnitude == 0 or math.isinf(magnitude) or math.isnan(magnitude):
+            return np.float64(0.0), np.float64(0.0)
+        return gx / magnitude, gy / magnitude
+
+    def gradientAt(self, cost, point):
+        """
+        The normalised gradient of `cost` interpolated at `point` (x, y): what
+        interpolatePoint(point, computeGradient(cost, point)[k]) gives, computed
+        on the (at most) four cells the interpolation reads instead of two
+        full-size map arrays.
+        """
+        cache = {}
+
+        def cell(k):
+            def value(j, i):
+                key = (int(j), int(i))
+                if key not in cache:
+                    cache[key] = self._cell_gradient(cost, key[0], key[1])
+                return cache[key][k]
+            return value
+
+        return (self._interpolate(point, cost.shape, cell(0)),
+                self._interpolate(point, cost.shape, cell(1)))
+
     def computeGradient(self, cost, point=[]):
         
         m,n = cost.shape
@@ -359,27 +432,31 @@ class Global_Path_Planner:
     #    Interpolate the value of a XY point within the discrete map I
     # =============================================================================
     def interpolatePoint(self, point,mapI):
+        return self._interpolate(point, mapI.shape, lambda j, i: mapI[j, i])
+
+    def _interpolate(self, point, shape, at):
+        """Bilinear value at `point` (x, y) of a map given by at(row, col)."""
         i = np.uint32(np.fix(point[0]))
         j = np.uint32(np.fix(point[1]))
         a = point[0] - i
         b = point[1] - j
         
         
-        m,n = np.uint32(mapI.shape)
+        m,n = np.uint32(shape)
         
         if i == n:
             if j == m:
-                I = mapI[j,i]
+                I = at(j,i)
             else:
-                I = b*mapI[j+1,i] + (1-b)*mapI[j,i]
+                I = b*at(j+1,i) + (1-b)*at(j,i)
         else:
             if j == m:
-                I = a*mapI[j,i+1] + (1-a)*mapI[j,i]
+                I = a*at(j,i+1) + (1-a)*at(j,i)
             else:
-                a00 = mapI[j,i]
-                a10 = mapI[j,i+1] - mapI[j,i]
-                a01 = mapI[j+1,i] - mapI[j,i]
-                a11 = mapI[j+1,i+1] + mapI[j,i] - mapI[j,i+1] - mapI[j+1,i]
+                a00 = at(j,i)
+                a10 = at(j,i+1) - at(j,i)
+                a01 = at(j+1,i) - at(j,i)
+                a11 = at(j+1,i+1) + at(j,i) - at(j,i+1) - at(j+1,i)
                 if a == 0:
                     if b == 0:
                         I = a00

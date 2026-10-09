@@ -15,6 +15,7 @@ Key Capabilities:
 
 import os
 import math
+import threading
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Optional
@@ -91,6 +92,15 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         # --- Planner Instances ---
         self.path_planner  = global_path_planner.Global_Path_Planner()
         self.path_planner.log = self.get_logger()
+
+        # Global planning runs in a worker thread, so goals, cancels and odometry
+        # keep arriving while it searches. _plan_generation changes whenever the
+        # wanted plan does (new goal, cancel, new session, deactivation): a plan
+        # finished for an older generation is dropped, and a running search
+        # stops early (Global_Path_Planner.should_stop).
+        self._plan_lock = threading.Lock()
+        self._plan_generation = 0
+        self._plan_thread: Optional[threading.Thread] = None
         self.local_planner = local_trajectory_controller.Local_Trajectory_Controller()
         
         # Dynamic configuration namespace populated during the on_configure transition
@@ -201,10 +211,12 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 self.get_logger().info(
                     f"Odometry jumped {jump:.1f} m — treating as an Unreal "
                     f"Play/Stop. Clearing trajectory, goal and map overlays.")
-                self.trajectory_history = []
-                self.current_goal = None
-                self.global_path = None
-                self.goal_reached = False
+                with self._plan_lock:
+                    self._plan_generation += 1
+                    self.trajectory_history = []
+                    self.current_goal = None
+                    self.global_path = None
+                    self.goal_reached = False
                 self._stop_robot()
                 self._publish_clear()
                 self._set_state('idle', 'new session')
@@ -247,10 +259,12 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         self._stop_robot()
         
         # Reset tracking states to trigger the routing subroutines
-        self.current_goal = [new_x, new_y]
+        with self._plan_lock:
+            self._plan_generation += 1
+            self.current_goal = [new_x, new_y]
+            self.global_path = None
+            self.goal_reached = False
         self._set_state('planning')
-        self.global_path = None
-        self.goal_reached = False 
         
         # Invalidate the previous mission completion state across the ROS 2 network
         if self._pub_goal_reached and self._pub_goal_reached.is_activated:
@@ -263,11 +277,13 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         Aborts the active goal on an operator ALL STOP and halts the rover, so
         the control loop does not override the stop on its next cycle.
         """
-        if self.current_goal is not None:
-            self.get_logger().warn(f"Goal {self.current_goal} cancelled by the operator.")
-            self._set_state('cancelled', 'by the operator (ALL STOP or manual drive)')
-        self.current_goal = None
-        self.global_path = None
+        with self._plan_lock:
+            self._plan_generation += 1
+            if self.current_goal is not None:
+                self.get_logger().warn(f"Goal {self.current_goal} cancelled by the operator.")
+                self._set_state('cancelled', 'by the operator (ALL STOP or manual drive)')
+            self.current_goal = None
+            self.global_path = None
         self._stop_robot()
 
         # Clear the abandoned route from the UI; the driven trajectory is kept.
@@ -308,72 +324,101 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             return None
         return [int(xs[k] + x0), int(ys[k] + y0)]
 
-    def _compute_global_path(self, start_pos: list) -> None:
+    def _start_planning(self, start_pos: list) -> None:
         """
-        Generates the optimal global route bridging the starting coordinate 
-        to the target coordinate using the processed costmap matrices.
+        Plans the route to the current goal in a worker thread (one at a time).
+        The control loop keeps the rover stopped until the route is applied.
         """
-        if self.current_goal is None:
-            return
+        if self._plan_thread is not None and self._plan_thread.is_alive():
+            return                              # a search is running; its result decides
+        with self._plan_lock:
+            if self.current_goal is None:
+                return
+            goal, generation = list(self.current_goal), self._plan_generation
+        self._plan_thread = threading.Thread(
+            target=self._plan_worker, args=(list(start_pos), goal, generation),
+            name='global_planner', daemon=True)
+        self._plan_thread.start()
 
+    def _plan_worker(self, start_pos: list, goal: list, generation: int) -> None:
+        """Computes the route (worker thread), then applies it if still wanted."""
+        planner = self.path_planner
+        planner.should_stop = lambda: generation != self._plan_generation
+        try:
+            outcome = self._compute_global_path(start_pos, goal)
+        except global_path_planner.PlanningCancelled:
+            self.get_logger().info(f"Planning to {goal} stopped: the goal changed.")
+            return
+        except Exception as e:
+            outcome = ('aborted', None, None, 'path planning error',
+                       f"Global path generation fault: {e}")
+        finally:
+            planner.should_stop = None
+        state, path, new_goal, reason, message = outcome
+        with self._plan_lock:
+            if generation != self._plan_generation:
+                self.get_logger().info(f"Discarding the route to {goal}: the goal changed while planning.")
+                return
+            # One logging call per severity: rclpy refuses a call site whose
+            # severity changes between calls.
+            if state == 'driving':
+                self.get_logger().info(message)
+                self.current_goal = new_goal
+                self.global_path = path
+            else:
+                self.get_logger().warn(message)
+                self.current_goal = None
+                self.global_path = None
+            self._set_state(state, reason)
+        if state == 'driving':
+            try:
+                self._broadcast_paths()
+            except Exception as e:
+                self.get_logger().error(f"Publishing the new route failed: {e}")
+
+    def _compute_global_path(self, start_pos: list, goal: list):
+        """
+        The route from `start_pos` to `goal` (map cells), computed without
+        touching the node's state (it runs in the planning thread). Returns
+        (state, path, goal, reason, message): state 'driving' with the path and
+        the goal actually used (moved off impassable ground if need be), or
+        'aborted' with the reason.
+        """
         # Ensure target coordinates are integers to prevent NumPy matrix indexing faults
-        goal_x = int(round(self.current_goal[0]))
-        goal_y = int(round(self.current_goal[1]))
-        grid_goal = [goal_x, goal_y]
+        grid_goal = [int(round(goal[0])), int(round(goal[1]))]
 
         # A goal on impassable ground (too steep, or no-go soil) would leave the
         # whole search stuck at the goal: move it to the nearest drivable cell
         # the rover can reach, or refuse it.
         snapped = self._drivable_goal(grid_goal, start_pos)
         if snapped is None:
-            self.get_logger().warn(
-                f"Goal {grid_goal} is on impassable ground (slope over "
-                f"{self.get_parameter('slope_threshold').value:.0f} deg or no-go soil) with no "
-                f"reachable drivable cell within {GOAL_SNAP_RADIUS_CELLS} cells. Pick another point.")
-            self._set_state('aborted', 'goal on impassable ground')
-            self.current_goal = None
-            self.global_path = None
-            return
+            return ('aborted', None, None, 'goal on impassable ground',
+                    f"Goal {grid_goal} is on impassable ground (slope over "
+                    f"{self.get_parameter('slope_threshold').value:.0f} deg or no-go soil) with no "
+                    f"reachable drivable cell within {GOAL_SNAP_RADIUS_CELLS} cells. Pick another point.")
+        used_goal = list(goal)
         if snapped != grid_goal:
             self.get_logger().info(f"Goal {grid_goal} is on impassable ground; moved to the "
                                    f"nearest drivable cell {snapped}.")
             grid_goal = snapped
-            self.current_goal = [float(snapped[0]), float(snapped[1])]
+            used_goal = [float(snapped[0]), float(snapped[1])]
 
         self.get_logger().info(f"Computing global trajectory from {start_pos} to {grid_goal}...")
+        Tmap = self.path_planner.computeTmap(self.costMap, self.obstacleMap, grid_goal, start_pos)
+        if not np.isfinite(Tmap[start_pos[1], start_pos[0]]):
+            # The search from the goal never reached the rover: steep ground
+            # or no-go soil separates them.
+            return ('aborted', None, None, 'goal not reachable',
+                    f"Goal {grid_goal} is not reachable from the rover "
+                    "(cut off by steep ground or no-go soil).")
+        path = self.path_planner.getPathGDM(Tmap, np.asarray(start_pos), np.asarray(grid_goal), 0.4)
 
-        try:
-            Tmap = self.path_planner.computeTmap(self.costMap, self.obstacleMap, grid_goal, start_pos)
-            if not np.isfinite(Tmap[start_pos[1], start_pos[0]]):
-                # The search from the goal never reached the rover: steep ground
-                # or no-go soil separates them.
-                self.get_logger().warn(f"Goal {grid_goal} is not reachable from the rover "
-                                       "(cut off by steep ground or no-go soil).")
-                self._set_state('aborted', 'goal not reachable')
-                self.current_goal = None
-                self.global_path = None
-                return
-            self.global_path = self.path_planner.getPathGDM(Tmap, np.asarray(start_pos), np.asarray(grid_goal), 0.4)
-
-            # --- Path Validation Safety Check ---
-            if self.global_path is not None and np.isnan(self.global_path).any():
-                self.global_path = None
-            if self.global_path is None or len(self.global_path) < 2:
-                self.get_logger().warn(f"Pathfinding failed! Coordinates {grid_goal} are unreachable or inside an obstacle.")
-                self._set_state('aborted', 'no path to the goal')
-                self.current_goal = None
-                self.global_path = None
-                return
-                
-            self.get_logger().info(f"Global trajectory resolved with {len(self.global_path)} waypoints. Resuming kinematic control.")
-            self._set_state('driving')
-            self._broadcast_paths()
-            
-        except Exception as e:
-            self.get_logger().error(f"Global path generation fault: {e}")
-            self._set_state('aborted', 'path planning error')
-            self.current_goal = None
-            self.global_path = None
+        # --- Path Validation Safety Check ---
+        if path is None or np.isnan(path).any() or len(path) < 2:
+            return ('aborted', None, None, 'no path to the goal',
+                    f"Pathfinding failed! Coordinates {grid_goal} are unreachable or inside an obstacle.")
+        return ('driving', path, used_goal, '',
+                f"Global trajectory resolved with {len(path)} waypoints. Resuming kinematic control.")
 
     def control_loop_callback(self) -> None:
         """
@@ -391,18 +436,21 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             self.get_logger().error(
                 f"Tilt safety stop: body tilt {self._tilt_deg:.1f} deg exceeds "
                 f"{max_tilt:.1f} deg. Goal {self.current_goal} aborted.")
-            self._set_state('aborted', f'tilt {self._tilt_deg:.1f} deg > {max_tilt:.1f} deg')
+            with self._plan_lock:
+                self._plan_generation += 1      # a route being planned must not restart the drive
+                self._set_state('aborted', f'tilt {self._tilt_deg:.1f} deg > {max_tilt:.1f} deg')
+                self.current_goal = None
+                self.global_path = None
             self._stop_robot()
-            self.current_goal = None
-            self.global_path = None
             return
 
         # Halt kinematics and defer to the global planner if no valid route exists
+        # (planned in a worker thread: this callback returns at once).
         if self.global_path is None:
             self._stop_robot()
             start_x = int(round(self.robot_pose[0]))
             start_y = int(round(self.robot_pose[1]))
-            self._compute_global_path([start_x, start_y])
+            self._start_planning([start_x, start_y])
             return 
 
         # State Latch: Prevent odometry drift from re-triggering the controller post-arrival
@@ -782,6 +830,8 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         if self._control_timer:
             self.destroy_timer(self._control_timer)
             self._control_timer = None
+        with self._plan_lock:
+            self._plan_generation += 1          # a running search stops, its result is dropped
         self._stop_robot()
         return super().on_deactivate(state)
 
