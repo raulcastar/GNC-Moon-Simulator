@@ -13,7 +13,10 @@ docker compose logs -f component_stereo_depth
 ```
 
 `docker_build.sh` pulls `ros:jazzy`, so it needs network access. Each component
-mounts its source as a volume and builds it once, in its entrypoint. To keep a
+mounts its source as a volume and builds it once, in the entrypoint all
+components share (`docker/entrypoint.sh`, baked into the base image; a
+component's Dockerfile only adds its dependencies and sets `GNC_PACKAGE`, the
+package to launch). To keep a
 container restart (and a WSL/Docker reboot) from re-running `colcon build` — a
 storm of simultaneous builds that can destabilise the WSL VM — the entrypoint
 **skips the build when the workspace is already built**. So a plain restart is
@@ -39,13 +42,16 @@ object segmentation, a live top-down lidar sweep, rover telemetry (position,
 heading, speed), the elevation map with click-to-dispatch goals, and a system
 console streaming `/rosout`.
 
-Two services drop to an interactive shell instead of launching automatically:
-`component_local_mapping` and `debug_cli`. Bring them up by hand:
+`debug_cli` is an interactive shell with the ROS 2 tools (rviz2, rqt) on the
+host display, instead of a component:
 
 ```bash
-docker compose exec component_local_mapping \
-  ros2 launch component_local_mapping lc_component_local_mapping.launch.py
+docker compose exec debug_cli bash
 ```
+
+Only `component_path_planner` and `component_local_mapping` get the host display,
+for their optional matplotlib debug windows (`enable_path_visualization` and
+`debug_mode` in their `config/params.yaml`); the other nodes are headless.
 
 ## Components
 
