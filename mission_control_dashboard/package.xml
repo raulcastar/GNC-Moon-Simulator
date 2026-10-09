@@ -12,6 +12,10 @@
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>rosidl_runtime_py</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>ros2bag</exec_depend>
+  <exec_depend>rosbag2_py</exec_depend>
+  <exec_depend>rosbag2_interfaces</exec_depend>
+  <exec_depend>rosgraph_msgs</exec_depend>
   <depend>custom_map_interfaces</depend>
   <depend>sensor_msgs</depend>
   <depend>cv_bridge</depend>

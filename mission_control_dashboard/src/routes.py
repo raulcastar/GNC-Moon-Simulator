@@ -6,7 +6,8 @@ import threading
 from flask import render_template, request
 
 from . import web
-from .web import app, app_cams, app_hub, app_map, app_sys, app_teleop, sio_cams, sio_sys, sio_teleop, socketio
+from .web import (app, app_cams, app_hub, app_map, app_replay, app_sys, app_teleop, sio_cams, sio_replay,
+                  sio_sys, sio_teleop, socketio)
 
 
 # =========================================================================
@@ -100,6 +101,53 @@ def handle_topic_inspect_stop(json_data=None):
 def handle_sys_disconnect(*args):
     if web.node is not None:
         web.node.stop_inspect(request.sid)
+
+
+# =========================================================================
+# Flask routing — replay (5007): recorded rosbags
+# =========================================================================
+
+@app_replay.route('/')
+def replay():
+    return render_template('replay.html')
+
+
+@sio_replay.on('bags')
+def handle_bags(json_data=None):
+    if web.node is not None:
+        web.node.list_bags(request.sid)
+
+
+@sio_replay.on('replay_start')
+def handle_replay_start(json_data):
+    if web.node is not None:
+        web.node.start_replay(str(json_data.get('bag', '')), float(json_data.get('rate', 1.0)),
+                              bool(json_data.get('loop', False)), float(json_data.get('offset', 0.0)),
+                              [str(t) for t in json_data.get('topics') or []])
+
+
+@sio_replay.on('replay_stop')
+def handle_replay_stop(json_data=None):
+    if web.node is not None:
+        threading.Thread(target=web.node.stop_replay, daemon=True).start()
+
+
+@sio_replay.on('replay_pause')
+def handle_replay_pause(json_data):
+    if web.node is not None:
+        web.node.pause_replay(bool(json_data.get('paused', True)))
+
+
+@sio_replay.on('replay_rate')
+def handle_replay_rate(json_data):
+    if web.node is not None:
+        web.node.set_replay_rate(float(json_data.get('rate', 1.0)))
+
+
+@sio_replay.on('replay_seek')
+def handle_replay_seek(json_data):
+    if web.node is not None:
+        web.node.seek_replay(float(json_data.get('fraction', 0.0)))
 
 
 # =========================================================================

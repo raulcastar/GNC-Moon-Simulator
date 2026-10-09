@@ -19,6 +19,7 @@ template_dir = os.path.join(pkg_share, 'templates')
 #   5003  cameras  — a camera wall with per-feed show/hide toggles
 #   5005  map3d    — LiDAR 3D + local DEM side by side, with labelled axes
 #   5006  system   — feed rates, lifecycle nodes, recording and the ROS 2 topics
+#   5007  replay   — the recorded rosbags, played back into the live system
 # network_mode: host means each port is reachable on the host directly, so no
 # compose port mapping is needed. Each Flask app gets its own SocketIO server;
 # the ROS node fans shared feeds (cameras, telemetry) out to whichever servers
@@ -51,6 +52,10 @@ sio_map = SocketIO(app_map, async_mode='threading', cors_allowed_origins="*",
 app_sys = Flask('system', template_folder=template_dir)
 app_sys.config['SECRET_KEY'] = 'lunar_system'
 sio_sys = SocketIO(app_sys, async_mode='threading', cors_allowed_origins="*")
+
+app_replay = Flask('replay', template_folder=template_dir)
+app_replay.config['SECRET_KEY'] = 'lunar_replay'
+sio_replay = SocketIO(app_replay, async_mode='threading', cors_allowed_origins="*")
 
 
 def emit_over(event, data):
@@ -124,6 +129,6 @@ app.add_url_rule('/snapshot.zip', 'snapshot', _snapshot)
 for _app in (app, app_map):
     _app.add_url_rule('/local_dem.js', 'local_dem_js', _local_dem_js)
     _app.add_url_rule('/lidar_view.js', 'lidar_view_js', _lidar_view_js)
-for _app in (app, app_teleop, app_sys):
+for _app in (app, app_teleop, app_sys, app_replay):
     _app.add_url_rule('/dash_common.js', 'dash_common_js', _dash_common_js)
 

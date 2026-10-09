@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GNC MOON SIM — Replay</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+<script src="/dash_common.js"></script>
+<style>
+  :root {
+    --bg:      #10151c;
+    --panel:   #18212e;
+    --panel2:  #202b3a;
+    --line:    #2c3a4e;
+    --text:    #e6edf5;
+    --dim:     #8aa0b8;
+    --accent:  #33d6a6;
+    --cyan:    #59b0ff;
+    --amber:   #ffbe5c;
+    --red:     #ff6b7d;
+    --mono:    'Consolas','Menlo','DejaVu Sans Mono',monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--mono);
+    font-size: 12px; overflow: hidden;
+    display: grid; grid-template-rows: 46px 1fr; gap: 6px; padding: 6px;
+  }
+
+  /* ============ HEADER ============ */
+  header {
+    display: flex; align-items: center; gap: 12px; padding: 0 12px;
+    background: linear-gradient(180deg, var(--panel2), var(--panel));
+    border: 1px solid var(--line); border-radius: 4px;
+  }
+  a.back, a.open {
+    color: var(--dim); text-decoration: none; font-size: 11px; letter-spacing: 1px;
+    border: 1px solid var(--line); padding: 6px 11px; border-radius: 4px; white-space: nowrap;
+  }
+  a.back:hover, a.open:hover { color: var(--cyan); border-color: var(--cyan); }
+  .brand { color: var(--accent); font-weight: bold; letter-spacing: 3px; font-size: 15px;
+           text-shadow: 0 0 12px rgba(51,214,166,.3); white-space: nowrap; }
+  .brand small { color: var(--dim); letter-spacing: 1px; font-size: 10px; display: block; }
+  .spacer { flex: 1; }
+  .conn { display: flex; align-items: center; gap: 7px; font-size: 10px; letter-spacing: 1px;
+          color: var(--dim); white-space: nowrap; }
+  .conn .dot { width: 10px; height: 10px; border-radius: 50%; background: #402028; }
+  .conn .dot.ok { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+
+  /* ============ LAYOUT ============ */
+  main { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 6px; min-height: 0; }
+  .col { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+    display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  }
+  .panel-title {
+    padding: 5px 10px; font-size: 10px; letter-spacing: 2px; color: var(--dim);
+    border-bottom: 1px solid var(--line); background: var(--panel2);
+    display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
+  }
+  .panel-title .tag { color: var(--accent); }
+  .panel-title .n { margin-left: auto; font-size: 9px; letter-spacing: 1px; }
+  .scroll { overflow: auto; min-height: 0; flex: 1; }
+  .hint { color: var(--dim); line-height: 1.6; padding: 10px 12px; }
+
+  button.small, button.btn {
+    background: none; border: 1px solid var(--line); color: var(--dim); cursor: pointer;
+    font-family: var(--mono); border-radius: 3px; letter-spacing: 1px;
+  }
+  button.small { font-size: 9px; padding: 2px 8px; }
+  button.small:hover { color: var(--cyan); border-color: var(--cyan); }
+  button:disabled { opacity: .35; cursor: default; }
+
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  th { position: sticky; top: 0; background: var(--panel2); color: var(--dim); font-weight: normal;
+       font-size: 9px; letter-spacing: 1px; text-align: left; padding: 4px 8px; }
+  td { padding: 5px 8px; border-bottom: 1px dashed #131e2c; white-space: nowrap; overflow: hidden;
+       text-overflow: ellipsis; }
+  td.num, th.num { text-align: right; }
+  #bag-body tr { cursor: pointer; }
+  #bag-body tr:hover td { background: rgba(89,176,255,.07); }
+  #bag-body tr.sel td { background: rgba(53,224,181,.12); color: var(--accent); }
+  #bag-body td.when { color: var(--dim); }
+
+  /* ---- player ---- */
+  #player { padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; }
+  #now { font-size: 13px; color: var(--accent); word-break: break-all; min-height: 18px; }
+  #now small { display: block; color: var(--dim); font-size: 10px; margin-top: 2px; letter-spacing: 1px; }
+  #bar { position: relative; height: 16px; background: var(--bg); border: 1px solid var(--line); border-radius: 3px;
+         cursor: pointer; }
+  #bar.off { cursor: default; }
+  #fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: rgba(53,224,181,.35);
+          border-right: 2px solid var(--accent); }
+  #times { display: flex; justify-content: space-between; color: var(--dim); font-size: 10px; margin-top: -6px; }
+  #times b { color: var(--text); font-weight: normal; }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button.btn { font-size: 11px; padding: 7px 14px; color: var(--text); background: var(--panel2); }
+  button.btn:hover:not(:disabled) { border-color: var(--cyan); color: var(--cyan); }
+  button.btn.play { border-color: var(--accent); color: var(--accent); }
+  button.btn.stop:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
+  .opts { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; align-items: center; }
+  .opts label { color: var(--dim); font-size: 10px; letter-spacing: 1px; }
+  .rates { display: flex; gap: 4px; flex-wrap: wrap; }
+  .rates button { font-size: 10px; padding: 3px 8px; }
+  .rates button.on { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: bold; }
+  input[type=number] { width: 80px; background: var(--bg); color: var(--text); border: 1px solid var(--line);
+                       border-radius: 3px; padding: 3px 6px; font-family: var(--mono); font-size: 11px; }
+  input[type=checkbox] { accent-color: var(--accent); }
+  #msg { min-height: 16px; font-size: 11px; line-height: 1.5; }
+  #msg.warn { color: var(--amber); } #msg.err { color: var(--red); } #msg.ok { color: var(--dim); }
+
+  /* ---- topics ---- */
+  #topic-body td.c { color: var(--dim); }
+  #topic-body input { margin-right: 6px; vertical-align: middle; }
+  #topic-body .live { color: var(--amber); font-size: 10px; cursor: help; }
+  .note { color: var(--dim); font-size: 10px; line-height: 1.5; padding: 6px 10px; border-top: 1px solid var(--line); }
+</style>
+</head>
+<body>
+  <header>
+    <a class="back" href="#" id="hublink">◀ MENU</a>
+    <div class="brand">REPLAY<small>RECORDED ROSBAGS</small></div>
+    <a class="open" href="#" id="overview-link" target="gnc_overview" title="Watch the replay in the overview">OVERVIEW ↗</a>
+    <div class="spacer"></div>
+    <div class="conn"><span class="dot" id="cdot"></span><span id="cstate">OFFLINE</span></div>
+  </header>
+
+  <main>
+    <!-- ============ BAGS ============ -->
+    <div class="panel">
+      <div class="panel-title"><span class="tag">▸</span>RECORDED BAGS
+        <span class="n" id="bag-n"></span>
+        <button class="small" id="refresh" title="Scan the bag folder again">⟳ REFRESH</button>
+      </div>
+      <div class="scroll"><table>
+        <colgroup><col style="width:40%"><col style="width:24%"><col style="width:12%"><col style="width:12%"><col style="width:12%"></colgroup>
+        <thead><tr><th>BAG</th><th>RECORDED</th><th class="num">LENGTH</th><th class="num">SIZE</th><th class="num">MSGS</th></tr></thead>
+        <tbody id="bag-body"></tbody></table>
+        <div class="hint" id="bag-hint"></div>
+      </div>
+    </div>
+
+    <div class="col">
+      <!-- ============ PLAYER ============ -->
+      <div class="panel" style="flex: 0 0 auto">
+        <div class="panel-title"><span class="tag">▸</span>PLAYER<span class="n" id="state">idle</span></div>
+        <div id="player">
+          <div id="now">no bag selected<small>pick one on the left</small></div>
+          <div id="bar" class="off" title="Click to seek"><div id="fill"></div></div>
+          <div id="times"><span><b id="t-pos">0:00</b> / <span id="t-dur">0:00</span></span><span id="t-left"></span></div>
+          <div class="controls">
+            <button class="btn play" id="play" disabled>▶ PLAY</button>
+            <button class="btn" id="pause" disabled>❚❚ PAUSE</button>
+            <button class="btn stop" id="stop" disabled>■ STOP</button>
+          </div>
+          <div class="opts">
+            <label>SPEED</label>
+            <div class="rates" id="rates"></div>
+            <label>LOOP</label>
+            <div><input type="checkbox" id="loop"> <span class="hint" style="padding:0">start again at the end</span></div>
+            <label>START AT</label>
+            <div><input type="number" id="offset" min="0" step="1" value="0"> <span class="hint" style="padding:0">s into the bag</span></div>
+          </div>
+          <div id="msg" class="ok">Replayed topics reach every node as if live: open the
+            OVERVIEW to watch. Stop Play in Unreal first.</div>
+        </div>
+      </div>
+
+      <!-- ============ TOPICS ============ -->
+      <div class="panel" style="flex: 1">
+        <div class="panel-title"><span class="tag">▸</span>TOPICS IN THE BAG
+          <span class="n" id="topic-n"></span>
+          <button class="small" id="sensor-topics" title="The default: sensors and pose; live nodes recompute the rest">SENSORS</button>
+          <button class="small" id="all-topics" title="Every recorded topic, as recorded (the live nodes' outputs too)">ALL</button>
+          <button class="small" id="no-topics" title="Clear the selection (then tick the ones to replay)">NONE</button>
+        </div>
+        <div class="scroll"><table>
+          <colgroup><col style="width:52%"><col style="width:34%"><col style="width:14%"></colgroup>
+          <thead><tr><th>TOPIC (ticked = replayed)</th><th>TYPE</th><th class="num">MSGS</th></tr></thead>
+          <tbody id="topic-body"></tbody></table>
+        </div>
+        <div class="note">Topics marked <span style="color:var(--amber)">live</span> are recomputed by a running node
+          from the replayed sensors (local DEM, IMU, planner) or are commands, so they start unticked: replaying
+          them too would put two publishers on one topic. Tick them to see the recorded versions instead.</div>
+      </div>
+    </div>
+  </main>
+
+<script>
+  const host = window.location.hostname || 'localhost';
+  const $ = id => document.getElementById(id);
+  $('hublink').href = `http://${host}:5000/`;
+  $('overview-link').href = `http://${host}:5001/`;
+  const socket = io();
+
+  const RATES = [0.25, 0.5, 1, 2, 4];
+  let bags = [], sel = null, rate = 1, st = { state: 'idle' }, ticked = {}, liveOutputs = {};
+
+  const clock = s => {
+    if (s == null || !isFinite(s)) return '—';
+    s = Math.max(0, Math.round(s));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  };
+  const size = b => b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(0) + ' MB' : (b / 1e3).toFixed(0) + ' kB';
+  const when = t => t ? new Date(t * 1000).toISOString().replace('T', ' ').slice(0, 16) : '—';
+
+  // ---- bags ----
+  const refresh = () => socket.emit('bags');
+  $('refresh').onclick = refresh;
+  socket.on('bags', m => {
+    bags = m.bags || [];
+    liveOutputs = m.live_outputs || {};
+    $('bag-n').textContent = `${bags.length} in ${m.directory}`;
+    $('bag-hint').textContent = bags.length ? '' :
+      'No bags yet. Record one with ● REC on the overview (it lands in mission_control_dashboard/bags).';
+    if (sel && !bags.find(b => b.name === sel)) sel = null;
+    renderBags(); renderSelection();
+  });
+  function renderBags() {
+    $('bag-body').innerHTML = bags.map(b =>
+      `<tr data-name="${escHtml(b.name)}" class="${b.name === sel ? 'sel' : ''}" title="${escHtml(b.error || b.name)}">` +
+      `<td>${escHtml(b.name)}</td><td class="when">${when(b.start)}</td>` +
+      `<td class="num">${b.error ? '?' : clock(b.duration)}</td><td class="num">${size(b.size)}</td>` +
+      `<td class="num">${b.messages ?? '?'}</td></tr>`).join('');
+  }
+  $('bag-body').addEventListener('click', e => {
+    const tr = e.target.closest('tr');
+    if (!tr || st.state === 'playing' || st.state === 'paused') return;
+    sel = tr.dataset.name; ticked = {};
+    renderBags(); renderSelection();
+  });
+
+  // ---- selection: topics + what PLAY will do ----
+  function renderSelection() {
+    const b = bags.find(x => x.name === sel);
+    const topics = (b && b.topics) || [];
+    /* Default: the sensors only; what a live node recomputes (or commands) stays out. */
+    topics.forEach(t => { if (!(t.name in ticked)) ticked[t.name] = !(t.name in liveOutputs); });
+    $('topic-n').textContent = b ? `${topics.filter(t => ticked[t.name]).length} / ${topics.length}` : '';
+    $('topic-body').innerHTML = topics.map(t =>
+      `<tr><td title="${escHtml(t.name)}"><label><input type="checkbox" data-t="${escHtml(t.name)}" ${ticked[t.name] ? 'checked' : ''}>` +
+      `${escHtml(t.name)}</label>${t.name in liveOutputs ? `<span class="live" title="Left out by default: ${escHtml(liveOutputs[t.name])}"> · live</span>` : ''}</td>` +
+      `<td class="c" title="${escHtml(t.type)}">${escHtml(t.type.replace('/msg/', '/'))}</td>` +
+      `<td class="num">${t.count}</td></tr>`).join('');
+    if (st.state !== 'playing' && st.state !== 'paused') {
+      $('now').innerHTML = b ? `${escHtml(b.name)}<small>${clock(b.duration)} · ${topics.length} topics · ` +
+                               `${b.messages ?? '?'} messages · press PLAY</small>`
+                             : 'no bag selected<small>pick one on the left</small>';
+      $('t-dur').textContent = b ? clock(b.duration) : '0:00';
+    }
+    updateButtons();
+  }
+  $('topic-body').addEventListener('change', e => {
+    if (e.target.dataset.t) { ticked[e.target.dataset.t] = e.target.checked; renderSelection(); }
+  });
+  $('all-topics').onclick = () => { Object.keys(ticked).forEach(k => ticked[k] = true); renderSelection(); };
+  $('sensor-topics').onclick = () => { Object.keys(ticked).forEach(k => ticked[k] = !(k in liveOutputs)); renderSelection(); };
+  $('no-topics').onclick = () => { Object.keys(ticked).forEach(k => ticked[k] = false); renderSelection(); };
+
+  // ---- speed ----
+  $('rates').innerHTML = RATES.map(r => `<button class="small" data-r="${r}">${r}×</button>`).join('');
+  const showRate = () => $('rates').querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.r === rate));
+  $('rates').addEventListener('click', e => {
+    if (!e.target.dataset.r) return;
+    rate = +e.target.dataset.r; showRate();
+    if (st.state === 'playing' || st.state === 'paused') socket.emit('replay_rate', { rate });
+  });
+  showRate();
+
+  // ---- player ----
+  function updateButtons() {
+    const live = st.state === 'playing' || st.state === 'paused';
+    const anyTopic = Object.values(ticked).some(Boolean);
+    $('play').disabled = live ? st.state !== 'paused' : !(sel && anyTopic);
+    $('play').textContent = st.state === 'paused' ? '▶ RESUME' : '▶ PLAY';
+    $('pause').disabled = st.state !== 'playing';
+    $('stop').disabled = !live;
+    $('bar').classList.toggle('off', !live);
+    ['loop', 'offset'].forEach(id => $(id).disabled = live);
+  }
+  $('play').onclick = () => {
+    if (st.state === 'paused') { socket.emit('replay_pause', { paused: false }); return; }
+    const b = bags.find(x => x.name === sel);
+    const all = (b.topics || []).map(t => t.name), chosen = all.filter(t => ticked[t]);
+    socket.emit('replay_start', { bag: sel, rate, loop: $('loop').checked,
+                                  offset: Math.max(0, +$('offset').value || 0),
+                                  topics: chosen.length === all.length ? [] : chosen });
+  };
+  $('pause').onclick = () => socket.emit('replay_pause', { paused: true });
+  $('stop').onclick = () => socket.emit('replay_stop');
+  $('bar').onclick = e => {
+    if ($('bar').classList.contains('off')) return;
+    const r = $('bar').getBoundingClientRect();
+    socket.emit('replay_seek', { fraction: (e.clientX - r.left) / r.width });
+  };
+
+  socket.on('replay', m => {
+    const was = st.state;
+    st = m;
+    const live = m.state === 'playing' || m.state === 'paused';
+    $('state').textContent = m.state + (live ? ` · ${(+m.rate).toFixed(2).replace(/\.?0+$/, '')}×${m.loop ? ' · loop' : ''}` : '');
+    if (live) {
+      sel = m.bag; renderBags();
+      $('now').innerHTML = `${escHtml(m.bag)}<small>${m.state === 'paused' ? 'paused' : 'playing'} · ` +
+                           `watch it in the OVERVIEW</small>`;
+      if (Math.abs(rate - m.rate) > 1e-6) { rate = +m.rate; showRate(); }
+    } else if (was !== m.state) {
+      renderSelection();
+    }
+    const dur = m.duration || 0, pos = live ? (m.position ?? 0) : (m.state === 'finished' ? dur : 0);
+    $('fill').style.width = dur ? `${Math.min(100, 100 * pos / dur)}%` : '0';
+    $('t-pos').textContent = clock(pos);
+    $('t-dur').textContent = clock(dur || (bags.find(b => b.name === sel) || {}).duration);
+    $('t-left').textContent = live && dur ? `${clock(dur - pos)} left` : '';
+    const msg = $('msg');
+    if (m.error) { msg.className = 'err'; msg.textContent = m.error; }
+    else if (!live && m.unreal_playing) { msg.className = 'warn'; msg.textContent = 'Unreal is playing: stop Play before replaying, so live data and the bag do not mix.'; }
+    else if (m.state === 'finished') { msg.className = 'ok'; msg.textContent = 'Replay finished.'; }
+    else if (live) { msg.className = 'ok'; msg.textContent = 'Replayed topics reach every node as if live. Click the bar to seek.'; }
+    else { msg.className = 'ok'; msg.textContent = 'Replayed topics reach every node as if live: open the OVERVIEW to watch. Stop Play in Unreal first.'; }
+    updateButtons();
+  });
+
+  // ---- connection ----
+  socket.on('connect', () => { $('cdot').classList.add('ok'); $('cstate').textContent = 'ONLINE'; refresh(); });
+  socket.on('disconnect', () => { $('cdot').classList.remove('ok'); $('cstate').textContent = 'OFFLINE'; });
+</script>
+</body>
+</html>

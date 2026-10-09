@@ -113,6 +113,15 @@
          browser (types, publishers / subscribers, live rate, latest message).</p>
       <div class="port">PORT <b>:5006</b></div>
     </a>
+
+    <a class="card" id="link-replay">
+      <div class="ico">⏯️</div>
+      <h2>REPLAY</h2>
+      <p>Play back the rosbags recorded with ● REC: pick a bag, its speed, start and
+         topics, then watch it in the overview as if it were live (stereo, lidar,
+         map, local mapping on the recorded clock). Pause, seek and loop.</p>
+      <div class="port">PORT <b>:5007</b></div>
+    </a>
   </div>
 
   <footer>
@@ -129,6 +138,7 @@
   document.getElementById('link-cameras').href  = `http://${host}:5003/`;
   document.getElementById('link-map').href      = `http://${host}:5005/`;
   document.getElementById('link-system').href   = `http://${host}:5006/`;
+  document.getElementById('link-replay').href   = `http://${host}:5007/`;
 
   const clk = document.getElementById('clock');
   setInterval(() => { clk.textContent = new Date().toISOString().substr(11, 8); }, 1000);

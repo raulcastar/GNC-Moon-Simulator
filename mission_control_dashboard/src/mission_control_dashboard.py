@@ -19,6 +19,7 @@ Layout of this package:
   topics                     System window: ROS 2 graph, topic inspection
   health                     feed rates, lifecycle nodes and restarts, remote params
   recording                  rosbag and snapshot
+  replay                     Replay window: recorded rosbags played back
   commands                   headlights, stop, teleop drive, goals
   geometry, settings         pure helpers and tuning constants
 """
@@ -46,15 +47,17 @@ from .health import HealthMixin
 from .imagery import ImageryMixin
 from .mapping import MappingMixin
 from .recording import RecordingMixin
+from .replay import ReplayMixin
 from .settings import CAM_PRODUCT_MIN_PERIOD, HEALTH_PERIOD, INSPECT_PERIOD, LIFECYCLE_NODES, REMOTE_PARAMS
 from .telemetry import TelemetryMixin
 from .topics import TopicsMixin
-from .web import app, app_cams, app_hub, app_map, app_sys, app_teleop, sio_cams, sio_hub, sio_map, sio_sys, sio_teleop, socketio
+from .web import (app, app_cams, app_hub, app_map, app_replay, app_sys, app_teleop, sio_cams, sio_hub,
+                  sio_map, sio_replay, sio_sys, sio_teleop, socketio)
 from . import routes  # noqa: F401  (registers the page / socket handlers)
 
 
 class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, TopicsMixin,
-                                HealthMixin, RecordingMixin, CommandsMixin, rclpy.lifecycle.Node):
+                                HealthMixin, RecordingMixin, ReplayMixin, CommandsMixin, rclpy.lifecycle.Node):
     """Bridges the ROS graph to the browser over SocketIO. The work is split over
     the mixins (one module each); this class owns construction and the lifecycle."""
 
@@ -79,6 +82,7 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
         self._inspect = {}
         self._inspect_lock = threading.Lock()
         self._inspect_timer = None
+        self._init_replay()
 
         # Latest data, for the snapshot export and for browsers that join late.
         self._last_jpeg = {}            # feed id -> JPEG bytes
@@ -210,6 +214,7 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
         self._teleop_watchdog = self.create_timer(0.2, self._teleop_watchdog_cb)
         self._health_timer = self.create_timer(HEALTH_PERIOD, self._health_cb)
         self._inspect_timer = self.create_timer(INSPECT_PERIOD, self._inspect_cb)
+        self._configure_replay()
 
         return TransitionCallbackReturn.SUCCESS
 
@@ -225,6 +230,7 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
         self.stop_bag()
         for sid in list(self._inspect):
             self.stop_inspect(sid)
+        self._cleanup_replay()
         for attr in ('_teleop_watchdog', '_health_timer', '_inspect_timer'):
             if getattr(self, attr) is not None:
                 self.destroy_timer(getattr(self, attr))
@@ -279,9 +285,11 @@ def main(args=None):
                      daemon=True).start()
     threading.Thread(target=_serve, args=(sio_sys, app_sys, 5006),
                      daemon=True).start()
+    threading.Thread(target=_serve, args=(sio_replay, app_replay, 5007),
+                     daemon=True).start()
     web.node.get_logger().info(
         "Mission control up: hub :5000  overview :5001  teleop :5002  "
-        "cameras :5003  map3d :5005  system :5006")
+        "cameras :5003  map3d :5005  system :5006  replay :5007")
 
     try:
         socketio.run(app, host='0.0.0.0', port=5001, allow_unsafe_werkzeug=True)

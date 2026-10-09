@@ -31,6 +31,23 @@ INSPECT_WINDOW = 5.0          # seconds of arrivals for its rate and bandwidth
 INSPECT_TRUNCATE = 12         # array elements shown in its message preview
 INSPECT_MAX_CHARS = 6000      # preview length cap
 INSPECT_MAX_STRING = 2000     # characters of a string field shown in the preview
+REPLAY_PERIOD = 0.5           # seconds between replay-window updates (state, position)
+REPLAY_CLOCK_HZ = 100         # /clock generated for bags recorded without one
+# Recorded topics a live node recomputes from the replayed sensors (or commands
+# that would re-drive the system), left out of a replay by default: replaying
+# them too would put two publishers on one topic. topic -> who regenerates it.
+REPLAY_LIVE_OUTPUTS = {
+    '/imu/data': 'component_imu, from /odom',
+    '/local_mapping/elevation_map_raw': 'component_local_mapping, from the depth',
+    '/local_mapping/elevation_grid': 'component_local_mapping, from the depth',
+    '/global_path': 'component_path_planner',
+    '/driven_trajectory': 'component_path_planner',
+    '/mission_status/state': 'component_path_planner',
+    '/mission_status/goal_reached': 'component_path_planner',
+    '/goal_pose': 'a command: would send the recorded goals again',
+    '/cancel_goal': 'a command',
+    '/cmd_vel': 'a command: would drive the rover',
+}
 NODE_POLL_TICKS = 3           # health ticks between lifecycle state polls
 DEM_LIDAR_MAX_POINTS = 4000   # lidar points overlaid on the local DEM
 OBSTACLE_MAX_POINTS = 800     # local obstacle cells drawn on the global map
