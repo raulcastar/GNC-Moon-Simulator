@@ -1,4 +1,5 @@
 #include "UnrealSPADCam.h"
+#include "GncSimTime.h"
 
 #include "Sockets.h"
 #include "SocketSubsystem.h"
@@ -251,8 +252,6 @@ void UUnrealSPADCam::TickComponent(float DeltaTime, ELevelTick TickType,
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	AccumulatedSeconds += DeltaTime;
-
 	if (!bConnected || !Stream.IsValid() || !Capture || !Capture->TextureTarget)
 	{
 		return;
@@ -277,7 +276,7 @@ void UUnrealSPADCam::PumpCapture()
 	}
 	const int32 W = Capture->TextureTarget->SizeX;
 	const int32 H = Capture->TextureTarget->SizeY;
-	const int64 FrameTimeNs = static_cast<int64>(AccumulatedSeconds * 1e9);
+	const int64 FrameTimeNs = GncSimTime::NowNs(this);   // Simulation time (GncSimTime.h)
 
 	TSharedPtr<FSpadStreamState, ESPMode::ThreadSafe> S = Stream;
 

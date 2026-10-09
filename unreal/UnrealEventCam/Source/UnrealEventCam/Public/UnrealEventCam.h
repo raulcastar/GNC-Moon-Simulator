@@ -20,7 +20,7 @@
 //   5      1     cam_id
 //   6      2     width  (u16)
 //   8      2     height (u16)
-//   10     8     t0_ns  (u64)   base timestamp; each event t = t0 + t_rel
+//   10     8     t0_ns  (u64)   base timestamp (GncSimTime.h, ns since the Unix epoch); event t = t0 + t_rel
 //   18     4     count  (u32)   number of events in this packet
 //   22     2     reserved
 //   24     ...   count * 9 bytes, each: x u16 | y u16 | t_rel_ns u32 | pol u8
@@ -170,11 +170,4 @@ private:
 	TSharedPtr<FEventStreamState, ESPMode::ThreadSafe> Stream;
 
 	double LastSampleTime = 0.0;
-
-	// Monotonic, pause-aware simulated time in seconds (accumulated game
-	// DeltaTime). Kept as a double so event timestamps stay microsecond-precise
-	// however long the run — a float second count would quantise them after a
-	// few minutes. Freezes with the game, so a pause does not fabricate a huge
-	// inter-frame delta.
-	double AccumulatedSeconds = 0.0;
 };

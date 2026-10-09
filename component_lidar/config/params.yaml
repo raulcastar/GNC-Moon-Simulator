@@ -1,5 +1,9 @@
 lc_component_lidar:
   ros__parameters:
+    # Run on the simulation clock (/clock from component_sim_clock): stamps
+    # and timers follow Unreal's time, and pause when Play is not running.
+    use_sim_time: true
+
     # UnrealLidarCam Unreal plugin (unreal/UnrealLidarCam): a ray-traced lidar
     # with a configurable horizontal / vertical aperture, streamed over TCP.
     # Each scan is published as an organized PointCloud2 (rows = channels) on

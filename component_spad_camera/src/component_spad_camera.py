@@ -32,6 +32,7 @@ import rclpy.lifecycle
 from rclpy.lifecycle import Publisher, State, TransitionCallbackReturn
 from rclpy.qos import qos_profile_sensor_data
 
+from builtin_interfaces.msg import Time as RosTime
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 
@@ -286,7 +287,7 @@ class LifecycleSpadCamera(rclpy.lifecycle.Node):
         if not self._is_active or self._stream is None or self._model is None:
             return
 
-        frame, _t_ns, _seq = self._stream.latest()
+        frame, t_ns, _seq = self._stream.latest()
         if frame is None:
             return
 
@@ -309,7 +310,9 @@ class LifecycleSpadCamera(rclpy.lifecycle.Node):
             acc, bits = self._model.sample_sum(frame, self._digitize_frames)
             denom = self._digitize_frames
 
-        stamp = self.get_clock().now().to_msg()
+        # Frame time from Unreal (simulation clock, ns); 0 from an older plugin.
+        stamp = (RosTime(sec=int(t_ns // 1_000_000_000), nanosec=int(t_ns % 1_000_000_000))
+                 if t_ns else self.get_clock().now().to_msg())
 
         # Raw binary single-photon frame (0/255 for visibility).
         bin_msg = self.bridge.cv2_to_imgmsg((bits * 255).astype(np.uint8),

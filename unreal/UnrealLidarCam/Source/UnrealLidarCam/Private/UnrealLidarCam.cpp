@@ -1,4 +1,5 @@
 #include "UnrealLidarCam.h"
+#include "GncSimTime.h"
 
 #include "Async/ParallelFor.h"
 #include "Camera/CameraComponent.h"
@@ -464,13 +465,14 @@ void UUnrealLidarCam::TickComponent(float DeltaTime, ELevelTick TickType,
 	}
 	const double Period = 1.0 / FMath::Max(ScanRateHz, 0.1f);
 	NextScanTime = (Now - NextScanTime > Period) ? Now + Period : NextScanTime + Period;
+	const double Stamp = GncSimTime::Now(this);           // Simulation time (GncSimTime.h)
 	if (ActiveMode == EUnrealLidarCamMode::GPU)
 	{
-		ScanGpu(Now);
+		ScanGpu(Stamp);
 	}
 	else
 	{
-		ScanCpu(Now);
+		ScanCpu(Stamp);
 	}
 }
 

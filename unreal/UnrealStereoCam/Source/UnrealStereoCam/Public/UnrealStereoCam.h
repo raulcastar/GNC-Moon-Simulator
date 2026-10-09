@@ -14,7 +14,7 @@
 // Wire format, little-endian, one packet per frame:
 //   offset size  field
 //   0      4     magic 'NAVF'
-//   4      1     version = 1
+//   4      1     version = 2
 //   5      1     cam_id            (matches ids in component_stereo_depth params)
 //   6      1     format            1 = BGRA8 colour, 2 = R32F depth: centimetres along
 //                                  the camera axis (Unreal scene depth); payload =
@@ -24,7 +24,10 @@
 //   10     2     height (u16)
 //   12     8     frame_id (u64)    (GFrameCounter at capture)
 //   20     4     payload size (u32)
-//   24     ...   pixels
+//   24     8     stamp_ns (u64)    capture time: simulation time (GncSimTime.h),
+//                                  ns since the Unix epoch
+//   32     ...   pixels
+// (Version 1 had no stamp_ns; its pixels started at offset 24.)
 
 #pragma once
 
@@ -64,6 +67,7 @@ struct FPendingReadback
 	int32 Width = 0;
 	int32 Height = 0;
 	uint64 FrameId = 0;
+	int64 StampNs = 0;              // Capture time, simulation clock
 };
 
 // Shared between three threads through a ref-counted pointer, so it outlives

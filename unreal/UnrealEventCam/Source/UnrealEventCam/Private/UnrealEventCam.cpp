@@ -1,4 +1,5 @@
 #include "UnrealEventCam.h"
+#include "GncSimTime.h"
 
 #include "Sockets.h"
 #include "SocketSubsystem.h"
@@ -271,10 +272,6 @@ void UUnrealEventCam::TickComponent(float DeltaTime, ELevelTick TickType,
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	// Advance simulated time every tick so event timestamps are continuous even
-	// across frames that produce no events (and it freezes when the game pauses).
-	AccumulatedSeconds += DeltaTime;
-
 	if (!bConnected || !Stream.IsValid() || !Capture || !Capture->TextureTarget)
 	{
 		return;
@@ -300,8 +297,8 @@ void UUnrealEventCam::PumpCapture()
 	const int32 W = Capture->TextureTarget->SizeX;
 	const int32 H = Capture->TextureTarget->SizeY;
 
-	// Timestamp the frame on the game thread, in nanoseconds of simulated time.
-	const int64 FrameTimeNs = static_cast<int64>(AccumulatedSeconds * 1e9);
+	// Timestamp the frame on the game thread: simulation time (GncSimTime.h), ns.
+	const int64 FrameTimeNs = GncSimTime::NowNs(this);
 
 	TSharedPtr<FEventStreamState, ESPMode::ThreadSafe> S = Stream;
 

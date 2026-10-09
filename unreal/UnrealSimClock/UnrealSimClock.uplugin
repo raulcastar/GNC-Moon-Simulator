@@ -1,0 +1,20 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "UnrealSimClock",
+	"Description": "One simulation clock for every sensor plugin (pause- and dilation-aware, monotonic across Play sessions), streamed to ROS as /clock over TCP (component_sim_clock).",
+	"Category": "Sensors",
+	"CreatedBy": "GNC Moon Simulator",
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"Installed": false,
+	"EnabledByDefault": true,
+	"Modules": [
+		{
+			"Name": "UnrealSimClock",
+			"Type": "Runtime",
+			"LoadingPhase": "PreDefault"
+		}
+	]
+}

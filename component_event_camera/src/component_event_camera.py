@@ -34,6 +34,7 @@ import rclpy.lifecycle
 from rclpy.lifecycle import Publisher, State, TransitionCallbackReturn
 from rclpy.qos import qos_profile_sensor_data
 
+from builtin_interfaces.msg import Time as RosTime
 from sensor_msgs.msg import Image
 from std_msgs.msg import Float32
 from cv_bridge import CvBridge
@@ -74,6 +75,7 @@ class EventStreamReceiver:
         self._width = 0
         self._height = 0
         self._total_events = 0                # lifetime counter, for the rate
+        self.last_event_ns = 0                # newest event time (simulation clock, ns)
 
         self._stop = threading.Event()
         self._server: Optional[socket.socket] = None
@@ -161,7 +163,7 @@ class EventStreamReceiver:
     def _drain(self, buf: bytes) -> bytes:
         """Parse every complete packet in buf; return the unparsed tail."""
         while len(buf) >= _HEADER.size:
-            magic, ver, cam_id, w, h, _t0, count, _pad = _HEADER.unpack_from(buf)
+            magic, ver, cam_id, w, h, t0, count, _pad = _HEADER.unpack_from(buf)
             if magic != _MAGIC:
                 # Desynced: drop one byte and resynchronise on the next magic.
                 buf = buf[1:]
@@ -176,6 +178,7 @@ class EventStreamReceiver:
                     self._width, self._height = w, h
                     self._batches.append((time.monotonic(), events))
                     self._total_events += count
+                    self.last_event_ns = max(self.last_event_ns, t0 + int(events['t'].max()))
             buf = buf[total:]
         return buf
 
@@ -295,7 +298,11 @@ class LifecycleEventCamera(rclpy.lifecycle.Node):
             img[ys[on], xs[on]] = _COLOR_ON
             img[ys[~on], xs[~on]] = _COLOR_OFF
 
-        stamp = self.get_clock().now().to_msg()
+        # The window ends at the newest event: stamp it with that event's time
+        # (simulation clock, ns from Unreal); arrival time if none yet.
+        t_ns = self._stream.last_event_ns
+        stamp = (RosTime(sec=int(t_ns // 1_000_000_000), nanosec=int(t_ns % 1_000_000_000))
+                 if t_ns else self.get_clock().now().to_msg())
         msg = self.bridge.cv2_to_imgmsg(img, encoding='rgb8')
         msg.header.stamp = stamp
         msg.header.frame_id = self._frame_id

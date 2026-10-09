@@ -13,6 +13,8 @@ Published topics
   local_mapping/pointcloud         (sensor_msgs/PointCloud2)    — in odom frame
 """
 
+import bisect
+import collections
 import math
 import threading
 from typing import Optional, Tuple
@@ -32,6 +34,11 @@ from geometry_msgs.msg import Pose, Point, Quaternion
 from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSReliabilityPolicy
 
 from cv_bridge import CvBridge
+
+# Odometry kept for placing depth frames at their capture time (about 30 s at
+# the rover's ~13 Hz), and how far a frame stamp may fall outside it.
+_ODOM_HISTORY = 400
+_POSE_SLACK_S = 0.5
 
 # BEST_EFFORT + depth=1: a new depth frame replaces any queued one so the map
 # always uses the most recent data rather than playing catch-up.
@@ -135,6 +142,9 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         self._pixel_y: Optional[np.ndarray] = None   # (H, W): (v − cy) / fy
         self._odom_lock = threading.Lock()
         self._latest_pose: Tuple[float, ...] = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
+        # Recent odometry, (stamp s, pose), so each depth frame is placed where
+        # the rover was when it was captured, not where it is when it arrives.
+        self._odom_history: collections.deque = collections.deque(maxlen=_ODOM_HISTORY)
 
         self.cv_bridge = CvBridge()
 
@@ -190,8 +200,47 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
     def _odom_callback(self, msg: Odometry) -> None:
         p = msg.pose.pose.position
         q = msg.pose.pose.orientation
+        t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        pose = (p.x, p.y, p.z, q.x, q.y, q.z, q.w)
         with self._odom_lock:
-            self._latest_pose = (p.x, p.y, p.z, q.x, q.y, q.z, q.w)
+            self._latest_pose = pose
+            if self._odom_history and t < self._odom_history[-1][0]:
+                self._odom_history.clear()          # time went back: a new session
+            self._odom_history.append((t, pose))
+
+    def _pose_at(self, stamp) -> Tuple[float, ...]:
+        """
+        Rover pose at `stamp` (the depth frame's capture time): odometry
+        interpolated between the samples around it (position linearly,
+        orientation by normalised lerp). Falls back to the newest pose when the
+        stamp is outside the history by more than _POSE_SLACK_S (e.g. a sensor
+        still stamping on arrival with a different clock), and says so.
+        """
+        t = stamp.sec + stamp.nanosec * 1e-9
+        with self._odom_lock:
+            history = list(self._odom_history)
+            latest = self._latest_pose
+        if not history:
+            return latest
+        times = [h[0] for h in history]
+        if t < times[0] - _POSE_SLACK_S or t > times[-1] + _POSE_SLACK_S:
+            self.get_logger().warn(
+                f"Depth frame stamped {t - times[-1]:+.2f} s from the newest odometry: "
+                "placing it at the newest pose. Are all nodes on the simulation clock "
+                "(use_sim_time) and the Unreal plugins up to date?", throttle_duration_sec=30.0)
+            return latest
+        i = bisect.bisect_left(times, t)
+        if i <= 0:
+            return history[0][1]
+        if i >= len(history):
+            return history[-1][1]
+        (t0, a), (t1, b) = history[i - 1], history[i]
+        w = (t - t0) / (t1 - t0) if t1 > t0 else 1.0
+        if sum(x * y for x, y in zip(a[3:], b[3:])) < 0.0:    # shortest arc
+            b = b[:3] + tuple(-c for c in b[3:])
+        q = [a[k] + w * (b[k] - a[k]) for k in range(3, 7)]
+        n = math.sqrt(sum(c * c for c in q)) or 1.0
+        return tuple(a[k] + w * (b[k] - a[k]) for k in range(3)) + tuple(c / n for c in q)
 
     def _color_callback(self, msg: RosImage) -> None:
         try:
@@ -581,8 +630,7 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
             color_img = self._latest_color_img  # None until first colour message
 
         # ── Rover pose snapshot — used for tilt correction AND global frame ───
-        with self._odom_lock:
-            tx, ty, tz, qx, qy, qz, qw = self._latest_pose
+        tx, ty, tz, qx, qy, qz, qw = self._pose_at(msg.header.stamp)
 
         # Decompose quaternion into roll (around X) and pitch (around Y).
         # Standard ZYX Tait-Bryan convention, same as ROS REP-103.

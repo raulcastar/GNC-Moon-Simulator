@@ -18,7 +18,7 @@
 //   5      1     cam_id
 //   6      2     width  (u16)
 //   8      2     height (u16)
-//   10     8     t_ns   (u64)   frame timestamp (simulated time)
+//   10     8     t_ns   (u64)   frame timestamp (GncSimTime.h, ns since the Unix epoch)
 //   18     4     payload size (u32) = width*height (mono8)
 //   22     2     reserved
 //   24     ...   width*height bytes, 8-bit grayscale intensity, row-major
@@ -138,9 +138,4 @@ private:
 	TSharedPtr<FSpadStreamState, ESPMode::ThreadSafe> Stream;
 
 	double LastSampleTime = 0.0;
-
-	// Monotonic, pause-aware simulated time in seconds (accumulated game
-	// DeltaTime), kept as a double so frame timestamps stay precise however long
-	// the run and freeze when the game pauses.
-	double AccumulatedSeconds = 0.0;
 };

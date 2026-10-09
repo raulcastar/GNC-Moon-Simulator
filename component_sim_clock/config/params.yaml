@@ -1,0 +1,14 @@
+lc_component_sim_clock:
+  ros__parameters:
+    # ── /clock from the UnrealSimClock plugin ─────────────────────────────────
+    # The plugin sends Unreal's simulation time every world tick over TCP (it
+    # dials this node); this node publishes it on /clock. Must match
+    # simclock.Host / simclock.Port in Unreal (defaults 127.0.0.1:3008).
+    bind_ip:   0.0.0.0
+    port:      3008
+
+    # Seconds without a record before the log reports the simulation paused.
+    stall_s:   2.0
+
+    # The clock source itself runs on the wall clock.
+    use_sim_time: false

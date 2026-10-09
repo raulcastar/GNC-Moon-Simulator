@@ -163,6 +163,28 @@ services:
     volumes:
       - ./component_imu:/opt/ros/jazzy/src/component_imu
 
+  # Simulation clock: receives the UnrealSimClock plugin's TCP time stream
+  # (port 3008) and publishes /clock; the GNC nodes run on it (use_sim_time).
+  component_sim_clock:
+    build:
+      context: ./component_sim_clock
+      dockerfile: Dockerfile
+    image: gnc_moon_simulator/component_sim_clock:dev
+    network_mode: host
+    ipc: host
+    restart: unless-stopped
+    entrypoint: >
+      bash -lc "/entrypoint.sh"
+    privileged: true
+    environment:
+      ROS_DOMAIN_ID: 0
+      ROBOT_NAMESPACE: ""
+      LAUNCH_ARGS: ""
+      RMW_IMPLEMENTATION: rmw_zenoh_cpp
+      RCUTILS_COLORIZED_OUTPUT: 1
+    volumes:
+      - ./component_sim_clock:/opt/ros/jazzy/src/component_sim_clock
+
   # Simulated event (DVS) camera: receives the UnrealEventCam plugin's TCP event
   # stream (port 3005) and publishes an event-frame visualisation.
   component_event_camera:

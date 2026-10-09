@@ -1,5 +1,9 @@
 lc_component_imu:
   ros__parameters:
+    # Run on the simulation clock (/clock from component_sim_clock): stamps
+    # and timers follow Unreal's time, and pause when Play is not running.
+    use_sim_time: true
+
     # ── Simulated IMU derived from /odom (Unreal pose telemetry) ──────────────
     # The rover node publishes Unreal's pose as nav_msgs/Odometry; this node
     # differentiates it into a sensor_msgs/Imu. Orientation passes straight

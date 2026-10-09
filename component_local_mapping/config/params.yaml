@@ -1,5 +1,9 @@
 lc_component_local_mapping:
   ros__parameters:
+    # Run on the simulation clock (/clock from component_sim_clock): stamps
+    # and timers follow Unreal's time, and pause when Play is not running.
+    use_sim_time: true
+
     # Camera namespace served by component_stereo_depth. Subscribes to
     # <camera_topic>/image_depth, /image_color and /camera_info.
     #

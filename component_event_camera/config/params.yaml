@@ -1,5 +1,9 @@
 lc_component_event_camera:
   ros__parameters:
+    # Run on the simulation clock (/clock from component_sim_clock): stamps
+    # and timers follow Unreal's time, and pause when Play is not running.
+    use_sim_time: true
+
     # ── Event stream ──────────────────────────────────────────────────────────
     # TCP server the UnrealEventCam plugin (unreal/UnrealEventCam/) connects to.
     # Must match the plugin's ServerIp / ServerPort. Only 127.0.0.1 crosses into

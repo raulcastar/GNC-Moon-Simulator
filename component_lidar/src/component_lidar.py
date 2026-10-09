@@ -30,6 +30,7 @@ import rclpy
 import rclpy.lifecycle
 from rclpy.lifecycle import Publisher, State, TransitionCallbackReturn
 
+from builtin_interfaces.msg import Time as RosTime
 from sensor_msgs.msg import PointCloud2, PointField
 
 
@@ -156,9 +157,12 @@ class LifecycleUnrealLidarCam(rclpy.lifecycle.Node):
         """One scan -> PointCloud2 (organized when the plugin says so)."""
         if not self._pub_cloud or not self._pub_cloud.is_activated:
             return
-        (_, _, _, flags, _, _, _, _, cols, rows, count, step) = header
+        (_, _, _, flags, _, stamp, _, _, cols, rows, count, step) = header
         msg = PointCloud2()
-        msg.header.stamp = self.get_clock().now().to_msg()
+        # Scan time from Unreal (simulation clock, s since the Unix epoch); a
+        # zero stamp (older plugin) is stamped on arrival.
+        msg.header.stamp = (RosTime(sec=int(stamp), nanosec=int(round((stamp % 1.0) * 1e9)) % 1_000_000_000)
+                            if stamp > 0 else self.get_clock().now().to_msg())
         msg.header.frame_id = self.frame_id
         if flags & 1:
             msg.height, msg.width = rows, cols

@@ -1,4 +1,5 @@
 #include "UnrealStereoCam.h"
+#include "GncSimTime.h"
 
 #include "Sockets.h"
 #include "SocketSubsystem.h"
@@ -16,7 +17,7 @@ namespace
 	struct FNavFrameHeader
 	{
 		uint8  Magic[4];      // 'NAVF'
-		uint8  Version;       // 1
+		uint8  Version;       // 2
 		uint8  CamId;
 		uint8  Format;        // 1 = BGRA8, 2 = R32F depth (cm)
 		uint8  Reserved;
@@ -24,9 +25,10 @@ namespace
 		uint16 Height;
 		uint64 FrameId;
 		uint32 PayloadSize;
+		uint64 StampNs;       // Capture time, simulation clock (ns since the Unix epoch)
 	};
 #pragma pack(pop)
-	static_assert(sizeof(FNavFrameHeader) == 24, "header must be 24 bytes");
+	static_assert(sizeof(FNavFrameHeader) == 32, "header must be 32 bytes");
 }
 
 UUnrealStereoCam::UUnrealStereoCam()
@@ -440,12 +442,14 @@ void UUnrealStereoCam::PumpCaptures()
 		return;
 	}
 
-	// One tick, one frame id: this is what pairs left/right as a rig.
+	// One tick, one frame id: this is what pairs left/right as a rig. One capture
+	// time too, from the shared simulation clock.
 	const uint64 FrameId = GFrameCounter;
+	const int64 StampNs = GncSimTime::NowNs(this);
 	TSharedPtr<FStereoCamStreamState, ESPMode::ThreadSafe> S = Stream;
 
 	ENQUEUE_RENDER_COMMAND(StereoCamPump)(
-		[S, Caps, FrameId](FRHICommandListImmediate& RHICmdList)
+		[S, Caps, FrameId, StampNs](FRHICommandListImmediate& RHICmdList)
 		{
 			// 1. Drain the readbacks started on a previous pump. At any real
 			//    SendHz they finished on the GPU long ago; IsReady() gates it
@@ -465,7 +469,7 @@ void UUnrealStereoCam::PumpCaptures()
 				FNavFrameHeader* Hd = reinterpret_cast<FNavFrameHeader*>(Packet.GetData());
 				Hd->Magic[0] = 'N'; Hd->Magic[1] = 'A';
 				Hd->Magic[2] = 'V'; Hd->Magic[3] = 'F';
-				Hd->Version = 1;
+				Hd->Version = 2;
 				Hd->CamId = static_cast<uint8>(Job.CamId);
 				Hd->Format = Job.Format;        // 1 BGRA8, 2 R32F: 4 bytes per pixel either way
 				Hd->Reserved = 0;
@@ -473,6 +477,7 @@ void UUnrealStereoCam::PumpCaptures()
 				Hd->Height = static_cast<uint16>(H);
 				Hd->FrameId = Job.FrameId;
 				Hd->PayloadSize = static_cast<uint32>(W * H * 4);
+				Hd->StampNs = static_cast<uint64>(Job.StampNs);
 
 				int32 RowPitchPixels = 0;
 				void* Src = Job.Readback->Lock(RowPitchPixels);
@@ -507,6 +512,7 @@ void UUnrealStereoCam::PumpCaptures()
 				Job.Width = C.W;
 				Job.Height = C.H;
 				Job.FrameId = FrameId;
+				Job.StampNs = StampNs;
 				Job.Readback = MakeUnique<FRHIGPUTextureReadback>(TEXT("StereoCamReadback"));
 				Job.Readback->EnqueueCopy(RHICmdList, C.Resource->GetRenderTargetTexture());
 				S->Pending.Add(MoveTemp(Job));

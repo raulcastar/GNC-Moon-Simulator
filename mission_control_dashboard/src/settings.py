@@ -42,6 +42,7 @@ LIFECYCLE_NODES = (
     'lc_component_path_planner', 'lc_component_rover_leo_raph',
     'lc_component_lidar', 'lc_component_imu',
     'lc_component_event_camera', 'lc_component_spad_camera',
+    'lc_component_sim_clock',
 )
 # Parameters read from other nodes: name -> (node, parameter).
 REMOTE_PARAMS = {
@@ -63,6 +64,7 @@ ROVER_HALF_WIDTH = 0.23       # m; half the ribbon width drawn along the path
 MIN_CAMERA_DEPTH = 0.3        # m; samples closer than this are not drawn
 # Topics recorded by the dashboard's rosbag button.
 BAG_TOPICS = [
+    '/clock',            # simulation time: replay with the recorded clock
     '/odom', '/imu/data', '/cmd_vel', '/goal_pose', '/cancel_goal',
     '/global_path', '/driven_trajectory', '/mission_status/state',
     '/mission_status/goal_reached', '/lidar/points',

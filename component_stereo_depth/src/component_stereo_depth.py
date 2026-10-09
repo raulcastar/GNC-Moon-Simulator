@@ -59,10 +59,16 @@ import rclpy.lifecycle
 from rclpy.lifecycle import Publisher, State, TransitionCallbackReturn
 from rclpy.timer import Timer
 
+from builtin_interfaces.msg import Time as RosTime
 from sensor_msgs.msg import Image as RosImage, CompressedImage, CameraInfo, RegionOfInterest
 from std_msgs.msg import String
 from stereo_msgs.msg import DisparityImage
 from cv_bridge import CvBridge
+
+
+def _ros_time(ns: int) -> RosTime:
+    """Simulation time in ns (UnrealSimClock) -> builtin_interfaces/Time."""
+    return RosTime(sec=int(ns // 1_000_000_000), nanosec=int(ns % 1_000_000_000))
 
 
 def _frame_id(topic: str) -> str:
@@ -133,8 +139,8 @@ class FrameStreamReceiver:
         a small offset: it is not matched against anything, only overlaid.
         """
         with self._lock:
-            eyes_l = {fid: f for fid, f, _ in self._frames.get(left_id, ())}
-            eyes_r = {fid: f for fid, f, _ in self._frames.get(right_id, ())}
+            eyes_l = {e[0]: e for e in self._frames.get(left_id, ())}
+            eyes_r = {e[0]: e[1] for e in self._frames.get(right_id, ())}
             common = sorted(set(eyes_l) & set(eyes_r))
             if not common:
                 return None
@@ -142,11 +148,12 @@ class FrameStreamReceiver:
             centers = list(self._frames.get(center_id, ()))
             if not centers:
                 return None
-            c_fid, center, t = min(centers, key=lambda e: abs(e[0] - fid))
+            c_fid, center, _, _ = min(centers, key=lambda e: abs(e[0] - fid))
             if abs(c_fid - fid) > 60:        # a second of frames apart: stale
                 return None
+            _, left, t, stamp_ns = eyes_l[fid]
             age = time.monotonic() - t
-            return eyes_l[fid], eyes_r[fid], center, fid, age
+            return left, eyes_r[fid], center, fid, age, stamp_ns
 
     def frame_near(self, cam_id: int, fid: int, max_gap: int = 60):
         """
@@ -161,19 +168,19 @@ class FrameStreamReceiver:
             frames = list(self._frames.get(cam_id, ()))
         if not frames:
             return None
-        f_fid, img, _ = min(frames, key=lambda e: abs(e[0] - fid))
+        f_fid, img, _, _ = min(frames, key=lambda e: abs(e[0] - fid))
         if abs(f_fid - fid) > max_gap:
             return None
         return img
 
     def latest(self, cam_id: int):
-        """(frame_id, image) of the newest frame for cam_id, or None."""
+        """(frame_id, image, stamp_ns) of the newest frame for cam_id, or None."""
         with self._lock:
             frames = self._frames.get(cam_id)
             if not frames:
                 return None
-            fid, img, _ = frames[-1]
-            return fid, img
+            fid, img, _, stamp_ns = frames[-1]
+            return fid, img, stamp_ns
 
     # ------------------------------------------------------------------ #
 
@@ -228,26 +235,30 @@ class FrameStreamReceiver:
                 return buf
             (_, version, cam_id, fmt, _, w, h, fid,
              size) = self._HEADER.unpack_from(buf)
-            if version != 1 or fmt not in (1, 2) or size != w * h * 4 or w == 0:
+            if version not in (1, 2) or fmt not in (1, 2) or size != w * h * 4 or w == 0:
                 self._log.warn(f'Frame stream: bad header (v{version} fmt{fmt} '
                                f'{w}x{h} size {size}); resyncing.',
                                throttle_duration_sec=10.0)
                 buf = buf[4:]                # skip this magic, scan again
                 continue
-            end = self._HEADER.size + size
+            # Version 2 adds the capture time (simulation clock, ns) after the
+            # 24-byte header; version 1 frames get stamped on arrival (0 here).
+            start = self._HEADER.size + (8 if version == 2 else 0)
+            end = start + size
             if len(buf) < end:
                 return buf                   # payload still in flight
+            stamp_ns = struct.unpack_from('<Q', buf, self._HEADER.size)[0] if version == 2 else 0
             if fmt == 2:                     # R32F depth, centimetres
-                image = np.frombuffer(buf[self._HEADER.size:end],
+                image = np.frombuffer(buf[start:end],
                                       dtype='<f4').reshape(h, w).copy()
             else:                            # BGRA8 colour
-                bgra = np.frombuffer(buf[self._HEADER.size:end],
+                bgra = np.frombuffer(buf[start:end],
                                      dtype=np.uint8).reshape(h, w, 4)
                 image = np.ascontiguousarray(bgra[:, :, [2, 1, 0]])
             with self._lock:
                 ring = self._frames.setdefault(
                     cam_id, collections.deque(maxlen=self._RING))
-                ring.append((fid, image, time.monotonic()))
+                ring.append((fid, image, time.monotonic(), stamp_ns))
             buf = buf[end:]
 
 
@@ -506,7 +517,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                 'No streamed frames yet. Is the UnrealStereoCam component in '
                 'the level, and the game playing?', throttle_duration_sec=15.0)
             return None
-        left, right, center, fid, age = got
+        left, right, center, fid, age, stamp_ns = got
 
         if fid == self._last_stream_fid:
             return None                      # nothing new this cycle
@@ -539,7 +550,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         depth_gt = None
         if self.depth_gt_camera_id >= 0:
             depth_gt = self._stream.frame_near(self.depth_gt_camera_id, fid)
-        return left, right, center, mask, depth_gt
+        return left, right, center, mask, depth_gt, stamp_ns
 
     # =========================================================================
     # Stereo matching
@@ -822,7 +833,9 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
             captured = self._capture_from_stream()
             if captured is None:
                 return
-            left, right, center, center_mask, depth_gt_cm = captured
+            left, right, center, center_mask, depth_gt_cm, stamp_ns = captured
+            if stamp_ns:                     # capture time from Unreal (simulation clock)
+                stamp = _ros_time(stamp_ns)
             disp = self._compute_disparity(left, right)
             depth_left = self._depth_from_disparity(disp)
 
@@ -914,16 +927,17 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                 got = self._stream.latest(cam_id)
                 if got is None or got[0] == self._extra_last_fid.get(cam_id):
                     continue
-                fid, rgb = got
+                fid, rgb, stamp_ns = got
                 if rgb.ndim != 3:                   # a depth (R32F) stream: not a colour camera
                     continue
                 self._extra_last_fid[cam_id] = fid
-                self._publish_color(f'{key}_color', rgb, stamp, frame)
+                shot = _ros_time(stamp_ns) if stamp_ns else stamp      # capture time when known
+                self._publish_color(f'{key}_color', rgb, shot, frame)
                 if hfov:
                     h, w = rgb.shape[:2]
                     fx = (w / 2.0) / math.tan(math.radians(hfov) / 2.0)
                     self._pubs[f'{key}_info'].publish(self._camera_info(
-                        stamp, frame, False, intrinsics=(fx, w / 2.0, h / 2.0, w, h)))
+                        shot, frame, False, intrinsics=(fx, w / 2.0, h / 2.0, w, h)))
             except Exception as exc:
                 self.get_logger().error(f'Extra camera {cam_id} publish failed: {exc}',
                                         throttle_duration_sec=10.0)

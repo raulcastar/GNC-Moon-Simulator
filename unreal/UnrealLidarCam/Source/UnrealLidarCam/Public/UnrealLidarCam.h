@@ -28,7 +28,7 @@
 //   5      1     sensor_id
 //   6      2     flags            bit 0: organized (rows x columns, NaN where no return)
 //   8      8     frame_id (u64)   GFrameCounter at the scan
-//   16     8     stamp (f64)      world time, seconds
+//   16     8     stamp (f64)      simulation time (GncSimTime.h), s since the Unix epoch
 //   24     4     horizontal_fov (f32, degrees)
 //   28     4     vertical_fov   (f32, degrees)
 //   32     4     columns (u32)

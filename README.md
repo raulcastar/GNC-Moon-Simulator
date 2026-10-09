@@ -56,18 +56,40 @@ docker compose exec component_local_mapping \
 | `component_local_mapping` | Builds a local DEM and occupancy grid from the central navcam's depth. |
 | `component_path_planner` | Global path over the elevation grid. |
 | `component_rover_leo_raph` | Rover base: `/cmd_vel` in, `/odom` out. |
+| `component_sim_clock` | Publishes `/clock` (simulation time) from the UnrealSimClock plugin. |
 | `mission_control_dashboard` | Web mission control on port 5000: camera wall, lidar, telemetry, map with goal dispatch, /rosout console. |
 | `custom_map_interfaces` | Shared message definitions. |
 
+## Simulation time
+
+Everything runs on Unreal's clock: one simulation time for the whole run —
+Unreal's game time, so it stops when Play is paused and follows time dilation —
+in nanoseconds since the Unix epoch, never running backwards across Play
+sessions. Every sensor plugin (stereo cameras, lidar, event and SPAD cameras)
+stamps its data with it at capture through its own copy of `GncSimTime.h`, so
+the plugins stay independent of each other. The **UnrealSimClock** plugin
+(`unreal/UnrealSimClock/`, no Blueprint setup: a world subsystem) streams that
+time to `component_sim_clock`, which publishes `/clock`.
+
+The GNC nodes run with `use_sim_time: true` (in each `config/params.yaml`), so a
+message's stamp is when the sensor captured it in the simulation, and topics can
+be matched by stamp: `component_local_mapping` places each depth frame at the
+rover pose **at its capture time**, interpolated from odometry, rather than at
+the newest pose (0.5 s of processing at 0.5 m/s would otherwise misplace it by
+25 cm). When Unreal is not playing, simulation time stands still and the timers
+of those nodes pause with it. The dashboard stays on the wall clock (it is a UI),
+and its rosbags record `/clock`, so `ros2 bag play` replays on the recorded time.
+
 ## Talking to Unreal
 
-Three independent links, and they fail differently:
+Independent links, and they fail differently:
 
 | Link | Transport | Carries |
 |---|---|---|
 | UnrealStereoCam | TCP 3004 | navcam frames + object mask, rear camera (Unreal → ROS) |
 | UnrealLidarCam | TCP 3007 | lidar scans, configurable aperture (Unreal → ROS) |
 | Rover plugin | TCP 3003 | wheel commands out, odometry in |
+| UnrealSimClock | TCP 3008 | simulation time → `/clock` (Unreal → ROS) |
 
 The containers run `network_mode: host`, so they sit on WSL2's network stack
 while Unreal runs on Windows. Crossing that boundary is where this link goes
