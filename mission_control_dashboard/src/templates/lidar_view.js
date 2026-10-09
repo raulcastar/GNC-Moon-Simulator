@@ -34,20 +34,20 @@
     .lv-root canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
     .lv-bar { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; z-index: 3; flex-wrap: wrap;
               justify-content: flex-end; max-width: 70%; }
-    .lv-bar button { font: 9px/1 Consolas, Menlo, monospace; letter-spacing: 1px; padding: 4px 7px; cursor: pointer;
+    .lv-bar button { font: calc(9px * var(--fs, 1))/1 Consolas, Menlo, monospace; letter-spacing: 1px; padding: 4px 7px; cursor: pointer;
                      color: var(--dim); background: color-mix(in srgb, var(--panel) 85%, transparent); border: 1px solid var(--line); border-radius: 3px; }
     .lv-bar button:hover { color: var(--cyan); border-color: var(--cyan); }
     .lv-bar button.on { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: bold; }
     .lv-bar .sep { width: 6px; }
     .lv-legend { position: absolute; left: 8px; bottom: 8px; z-index: 3; pointer-events: none;
-                 font: 10px/1.4 Consolas, Menlo, monospace; color: var(--dim); background: color-mix(in srgb, var(--panel) 85%, transparent);
+                 font: calc(10px * var(--fs, 1))/1.4 Consolas, Menlo, monospace; color: var(--dim); background: color-mix(in srgb, var(--panel) 85%, transparent);
                  border: 1px solid var(--line); border-radius: 4px; padding: 5px 7px; }
     .lv-legend .bar { width: 120px; height: 7px; border-radius: 2px; margin: 3px 0 2px; }
     .lv-legend .ends { display: flex; justify-content: space-between; color: var(--text); }
-    .lv-compact .lv-legend { font-size: 9px; padding: 3px 5px; }
+    .lv-compact .lv-legend { font-size: calc(9px * var(--fs, 1)); padding: 3px 5px; }
     .lv-compact .lv-legend .bar { width: 70px; height: 5px; }
     .lv-compact .lv-bar { max-width: 98%; flex-wrap: nowrap; gap: 3px; }
-    .lv-compact .lv-bar button { padding: 3px 4px; font-size: 8px; letter-spacing: .5px; }
+    .lv-compact .lv-bar button { padding: 3px 4px; font-size: calc(8px * var(--fs, 1)); letter-spacing: .5px; }
     .lv-compact .lv-bar .sep { width: 2px; }`;
   let styled = false;
 

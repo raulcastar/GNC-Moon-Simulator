@@ -1,4 +1,4 @@
-/* Dashboard colour themes, chosen in the hub (menu) and shared by every window.
+/* Dashboard colour themes and text size, chosen in the hub (menu) and shared by every window.
  *
  * Each window serves this file as /theme.js with the current theme filled in
  * and loads it first, in <head>, so a page never paints in the wrong colours.
@@ -33,6 +33,17 @@
       '--view-text': '#7a8a9e' } },
   };
 
+  /* Text size: every CSS font size in the dashboard is a multiple of --fs. */
+  const FONTS = { small: { label: 'S', scale: 0.9 }, normal: { label: 'M', scale: 1 },
+                  large: { label: 'L', scale: 1.15 }, xlarge: { label: 'XL', scale: 1.3 } };
+
+  function applyFont(key) {
+    const font = FONTS[key] ? key : 'normal';
+    document.documentElement.style.setProperty('--fs', String(FONTS[font].scale));
+    window.GNC_FONT = font;
+    window.dispatchEvent(new Event('resize'));       /* views that measure text re-layout */
+  }
+
   function apply(name) {
     const theme = THEMES[name] || THEMES.mission;
     const root = document.documentElement;
@@ -44,11 +55,16 @@
   }
 
   apply('__THEME__');
-  window.GNCTheme = { THEMES, apply, current: () => window.GNC_THEME };
+  applyFont('__FONT__');
+  window.GNCTheme = { THEMES, FONTS, apply, applyFont, current: () => window.GNC_THEME,
+                      currentFont: () => window.GNC_FONT };
 
   /* Follow a change made in the hub while this window is open. */
   setInterval(() => {
     fetch('/theme.json', { cache: 'no-store' }).then(r => r.json())
-      .then(j => { if (j.theme && j.theme !== window.GNC_THEME) apply(j.theme); }).catch(() => {});
+      .then(j => {
+        if (j.theme && j.theme !== window.GNC_THEME) apply(j.theme);
+        if (j.font && j.font !== window.GNC_FONT) applyFont(j.font);
+      }).catch(() => {});
   }, 4000);
 })();

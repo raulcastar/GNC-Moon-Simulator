@@ -31,9 +31,9 @@
     justify-content: center; min-height: 100%; padding: 32px; gap: 34px;
   }
   header { text-align: center; }
-  .brand { color: var(--accent); font-weight: bold; letter-spacing: 6px; font-size: 30px;
+  .brand { color: var(--accent); font-weight: bold; letter-spacing: 6px; font-size: calc(30px * var(--fs, 1));
            text-shadow: 0 0 22px rgba(53,224,181,.35); }
-  .brand small { display: block; color: var(--dim); letter-spacing: 3px; font-size: 12px;
+  .brand small { display: block; color: var(--dim); letter-spacing: 3px; font-size: calc(12px * var(--fs, 1));
                  margin-top: 8px; font-weight: normal; }
 
   /* Rows of up to three equal cards; a shorter last row stays centred (a grid
@@ -56,26 +56,27 @@
   a.card .ico svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.6;
                     stroke-linecap: round; stroke-linejoin: round; }
   a.card.teleop .ico { color: var(--amber); }
-  a.card h2 { font-size: 17px; letter-spacing: 3px; color: var(--cyan); }
+  a.card h2 { font-size: calc(17px * var(--fs, 1)); letter-spacing: 3px; color: var(--cyan); }
   a.card.teleop h2 { color: var(--amber); }
-  a.card p { font-size: 12px; color: var(--dim); line-height: 1.6; }
-  a.card .port { margin-top: auto; font-size: 11px; letter-spacing: 2px; color: var(--dim); }
+  a.card p { font-size: calc(12px * var(--fs, 1)); color: var(--dim); line-height: 1.6; }
+  a.card .port { margin-top: auto; font-size: calc(11px * var(--fs, 1)); letter-spacing: 2px; color: var(--dim); }
   a.card .port b { color: var(--accent); font-weight: normal; }
   a.card.teleop:hover { border-color: var(--amber);
                         box-shadow: 0 10px 30px rgba(0,0,0,.5), 0 0 0 1px rgba(255,180,84,.25); }
   a.card.teleop .port b { color: var(--amber); }
 
-  footer { color: var(--dim); font-size: 11px; letter-spacing: 1px; text-align: center;
+  footer { color: var(--dim); font-size: calc(11px * var(--fs, 1)); letter-spacing: 1px; text-align: center;
            display: flex; flex-direction: column; align-items: center; gap: 12px; }
   .themes { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: center; }
-  .themes .lbl { margin-right: 4px; font-size: 10px; letter-spacing: 2px; }
+  .themes .lbl { margin-right: 4px; font-size: calc(10px * var(--fs, 1)); letter-spacing: 2px; }
   .themes button { display: inline-flex; align-items: center; gap: 3px; cursor: pointer;
-                   font-family: var(--mono); font-size: 10px; letter-spacing: 1px; color: var(--dim);
+                   font-family: var(--mono); font-size: calc(10px * var(--fs, 1)); letter-spacing: 1px; color: var(--dim);
                    background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 5px 9px; }
   .themes button:hover { color: var(--text); border-color: var(--dim); }
   .themes button.on { color: var(--accent); border-color: var(--accent); }
   .themes .sw { width: 9px; height: 9px; border-radius: 2px; border: 1px solid rgba(127,127,127,.4); }
   .themes .sw:last-of-type { margin-right: 5px; }
+  #fonts button { min-width: 34px; justify-content: center; }
   footer .clock { color: var(--cyan); }
 </style>
 </head>
@@ -141,6 +142,7 @@
 
   <footer>
     <div class="themes" id="themes" title="Colour theme of every dashboard window"><span class="lbl">THEME</span></div>
+    <div class="themes" id="fonts" title="Text size of every dashboard window"><span class="lbl">TEXT SIZE</span></div>
     <div>HOST <span id="host">—</span> · <span class="clock" id="clock">--:--:--</span> UTC</div>
   </footer>
 
@@ -175,8 +177,31 @@
     }
   }
   renderThemes();
-  setInterval(() => { if (!themesEl.querySelector(`.on`) ||
-      !themesEl.querySelector('.on').textContent.endsWith(GNCTheme.THEMES[GNCTheme.current()].label)) renderThemes(); }, 4000);
+
+  const fontsEl = document.getElementById('fonts');
+  function renderFonts() {
+    fontsEl.querySelectorAll('button').forEach(b => b.remove());
+    for (const [key, f] of Object.entries(GNCTheme.FONTS)) {
+      const b = document.createElement('button');
+      b.className = key === GNCTheme.currentFont() ? 'on' : '';
+      b.textContent = f.label;
+      b.title = `${Math.round(f.scale * 100)} %`;
+      b.onclick = () => {
+        GNCTheme.applyFont(key); renderFonts();
+        fetch('/theme', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ font: key }) }).catch(() => {});
+      };
+      fontsEl.appendChild(b);
+    }
+  }
+  renderFonts();
+
+  /* Follow a change made in another hub window. */
+  let shown = '';
+  setInterval(() => {
+    const now = GNCTheme.current() + '/' + GNCTheme.currentFont();
+    if (now !== shown) { shown = now; renderThemes(); renderFonts(); }
+  }, 1000);
 
   const clk = document.getElementById('clock');
   setInterval(() => { clk.textContent = new Date().toISOString().substr(11, 8); }, 1000);

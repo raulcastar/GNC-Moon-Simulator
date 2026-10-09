@@ -26,7 +26,7 @@
   html, body { height: 100%; }
   body {
     background: var(--bg); color: var(--text); font-family: var(--mono);
-    font-size: 12px; overflow: hidden;
+    font-size: calc(12px * var(--fs, 1)); overflow: hidden;
     display: grid; grid-template-rows: 46px 1fr; gap: 6px; padding: 6px;
   }
 
@@ -37,15 +37,15 @@
     border: 1px solid var(--line); border-radius: 4px;
   }
   a.back {
-    color: var(--dim); text-decoration: none; font-size: 11px; letter-spacing: 1px;
+    color: var(--dim); text-decoration: none; font-size: calc(11px * var(--fs, 1)); letter-spacing: 1px;
     border: 1px solid var(--line); padding: 6px 11px; border-radius: 4px; white-space: nowrap;
   }
   a.back:hover { color: var(--cyan); border-color: var(--cyan); }
-  .brand { color: var(--accent); font-weight: bold; letter-spacing: 3px; font-size: 15px;
+  .brand { color: var(--accent); font-weight: bold; letter-spacing: 3px; font-size: calc(15px * var(--fs, 1));
            text-shadow: 0 0 12px rgba(51,214,166,.3); white-space: nowrap; }
-  .brand small { color: var(--dim); letter-spacing: 1px; font-size: 10px; display: block; }
+  .brand small { color: var(--dim); letter-spacing: 1px; font-size: calc(10px * var(--fs, 1)); display: block; }
   .spacer { flex: 1; }
-  .conn { display: flex; align-items: center; gap: 7px; font-size: 10px; letter-spacing: 1px;
+  .conn { display: flex; align-items: center; gap: 7px; font-size: calc(10px * var(--fs, 1)); letter-spacing: 1px;
           color: var(--dim); white-space: nowrap; }
   .conn .dot { width: 10px; height: 10px; border-radius: 50%; background: #402028; }
   .conn .dot.ok { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
@@ -58,17 +58,17 @@
     display: flex; flex-direction: column; min-height: 0; overflow: hidden;
   }
   .panel-title {
-    padding: 5px 10px; font-size: 10px; letter-spacing: 2px; color: var(--dim);
+    padding: 5px 10px; font-size: calc(10px * var(--fs, 1)); letter-spacing: 2px; color: var(--dim);
     border-bottom: 1px solid var(--line); background: var(--panel2);
     display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
   }
   .panel-title .tag { color: var(--accent); }
-  .panel-title .n { margin-left: auto; font-size: 9px; letter-spacing: 1px; }
+  .panel-title .n { margin-left: auto; font-size: calc(9px * var(--fs, 1)); letter-spacing: 1px; }
   .scroll { overflow: auto; min-height: 0; }
 
   table { width: 100%; border-collapse: collapse; }
   th { position: sticky; top: 0; background: var(--panel2); color: var(--dim); font-weight: normal;
-       font-size: 9px; letter-spacing: 1px; text-align: left; padding: 4px 8px; }
+       font-size: calc(9px * var(--fs, 1)); letter-spacing: 1px; text-align: left; padding: 4px 8px; }
   td { padding: 4px 8px; border-bottom: 1px dashed var(--grid); white-space: nowrap; }
   td.num, th.num { text-align: right; }
   td.num { color: var(--text); }
@@ -76,7 +76,7 @@
   .st.ok { background: var(--accent); } .st.stale { background: var(--amber); }
   .st.dead { background: #5a2230; } .st.none { background: #333; }
   button.small { background: none; border: 1px solid var(--line); color: var(--dim); cursor: pointer;
-                 font-family: var(--mono); font-size: 9px; padding: 2px 8px; border-radius: 3px; }
+                 font-family: var(--mono); font-size: calc(9px * var(--fs, 1)); padding: 2px 8px; border-radius: 3px; }
   button.small:hover { color: var(--amber); border-color: var(--amber); }
   #rec { padding: 8px 10px; color: var(--dim); }
   #rec b { color: var(--text); font-weight: normal; }
@@ -87,7 +87,7 @@
             grid-template-rows: auto minmax(0, 1fr); }
   #topics .panel-title { grid-column: 1 / -1; }
   #topics-filter { flex: 0 1 360px; background: var(--bg); color: var(--text); border: 1px solid var(--line);
-                   border-radius: 3px; padding: 4px 8px; font-family: var(--mono); font-size: 11px;
+                   border-radius: 3px; padding: 4px 8px; font-family: var(--mono); font-size: calc(11px * var(--fs, 1));
                    letter-spacing: 0; margin-left: 8px; }
   #topics-refresh:hover { color: var(--cyan); border-color: var(--cyan); }
   #topics-list { border-right: 1px solid var(--line); }
@@ -103,16 +103,16 @@
   #topics-list tr.sel td { background: rgba(53,224,181,.12); color: var(--accent); }
   #topic-detail { padding: 10px 12px; }
   .hint { color: var(--dim); line-height: 1.5; }
-  #topic-detail .name { color: var(--accent); font-size: 14px; word-break: break-all; }
+  #topic-detail .name { color: var(--accent); font-size: calc(14px * var(--fs, 1)); word-break: break-all; }
   #topic-detail .type { color: var(--dim); margin: 2px 0 10px; }
   #topic-detail .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 8px; }
   #topic-detail .stat { background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 6px 8px; }
-  #topic-detail .stat b { display: block; color: var(--text); font-size: 14px; font-weight: normal; }
-  #topic-detail .stat span { color: var(--dim); font-size: 9px; letter-spacing: 1px; }
-  #topic-detail h5 { color: var(--dim); font-weight: normal; font-size: 9px; letter-spacing: 2px; margin: 10px 0 4px; }
+  #topic-detail .stat b { display: block; color: var(--text); font-size: calc(14px * var(--fs, 1)); font-weight: normal; }
+  #topic-detail .stat span { color: var(--dim); font-size: calc(9px * var(--fs, 1)); letter-spacing: 1px; }
+  #topic-detail h5 { color: var(--dim); font-weight: normal; font-size: calc(9px * var(--fs, 1)); letter-spacing: 2px; margin: 10px 0 4px; }
   #topic-detail .nodes { line-height: 1.5; }
   #topic-detail pre { background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 8px;
-                      white-space: pre-wrap; word-break: break-all; color: var(--text); font-size: 11px; }
+                      white-space: pre-wrap; word-break: break-all; color: var(--text); font-size: calc(11px * var(--fs, 1)); }
 </style>
 </head>
 <body>

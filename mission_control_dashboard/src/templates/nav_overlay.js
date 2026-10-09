@@ -14,7 +14,7 @@
   const STYLE = `
     .po-canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:3; }
     .po-toggle { position:absolute; right:5px; top:5px; z-index:5; cursor:pointer;
-      font:8px Consolas,Menlo,monospace; letter-spacing:1px; color:#8aa0b8;
+      font:calc(8px * var(--fs, 1)) Consolas,Menlo,monospace; letter-spacing:1px; color:#8aa0b8;
       background:rgba(16,21,28,.75); border:1px solid #2c3a4e; border-radius:3px; padding:1px 5px; }
     .po-toggle:hover { color:#e6edf5; border-color:#8aa0b8; }
     .po-toggle.on { color:#ffbe5c; border-color:#ffbe5c; }`;

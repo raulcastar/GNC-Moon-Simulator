@@ -54,7 +54,7 @@
 
   const STYLE = `
     .fl-box { position:absolute; left:6px; bottom:6px; z-index:4; pointer-events:none;
-      font:9px/1.4 Consolas,Menlo,monospace; color:#cfe0ee; letter-spacing:.4px;
+      font:calc(9px * var(--fs, 1))/1.4 Consolas,Menlo,monospace; color:#cfe0ee; letter-spacing:.4px;
       background:rgba(16,21,28,.82); border:1px solid #2c3a4e; border-radius:4px;
       padding:4px 6px; }
     .fl-bar { width:120px; height:7px; border-radius:2px; margin:2px 0 1px; }
@@ -62,18 +62,18 @@
     .fl-row { display:flex; align-items:center; gap:5px; white-space:nowrap; }
     .fl-sw { width:9px; height:9px; border-radius:2px; border:1px solid rgba(255,255,255,.25); }
     .fl-id { color:#33d6a6; min-width:14px; text-align:right; }
-    .fl-grp { color:#8aa0b8; font-size:8px; letter-spacing:1px; text-transform:uppercase; margin-top:2px; }
+    .fl-grp { color:#8aa0b8; font-size:calc(8px * var(--fs, 1)); letter-spacing:1px; text-transform:uppercase; margin-top:2px; }
     .fl-grp:first-child { margin-top:0; }
     /* compact form for small tiles: one wrapped line, smaller text */
-    .fl-mini { left:3px; right:3px; bottom:3px; padding:2px 4px; font-size:8px; line-height:1.3;
+    .fl-mini { left:3px; right:3px; bottom:3px; padding:2px 4px; font-size:calc(8px * var(--fs, 1)); line-height:1.3;
                display:flex; flex-wrap:wrap; gap:1px 7px; align-items:center; }
     .fl-mini .fl-bar, .fl-mini .fl-ticks { width:70px; }
     .fl-mini .fl-bar { height:5px; }
     .fl-mini .fl-sw { width:7px; height:7px; }
     .fl-mini .fl-id { min-width:0; }
-    .fl-mini .fl-grp { margin-top:0; font-size:7px; }
+    .fl-mini .fl-grp { margin-top:0; font-size:calc(7px * var(--fs, 1)); }
     .fl-toggle { position:absolute; right:5px; top:5px; z-index:5; cursor:pointer;
-      font:8px Consolas,Menlo,monospace; letter-spacing:1px; color:#8aa0b8;
+      font:calc(8px * var(--fs, 1)) Consolas,Menlo,monospace; letter-spacing:1px; color:#8aa0b8;
       background:rgba(16,21,28,.75); border:1px solid #2c3a4e; border-radius:3px; padding:1px 5px; }
     .fl-toggle:hover { color:#e6edf5; border-color:#8aa0b8; }
     .fl-toggle.on { color:#33d6a6; border-color:#33d6a6; }

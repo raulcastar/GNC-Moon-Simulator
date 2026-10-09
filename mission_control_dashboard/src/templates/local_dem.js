@@ -77,21 +77,21 @@
   }
 
   const STYLE = `
-    .dem-overlay { position:absolute; z-index:5; font:10px/1.5 Consolas,Menlo,monospace;
+    .dem-overlay { position:absolute; z-index:5; font:calc(10px * var(--fs, 1))/1.5 Consolas,Menlo,monospace;
       color:var(--dim); background:color-mix(in srgb, var(--panel) 85%, transparent); border:1px solid var(--line);
       border-radius:6px; padding:6px 8px; letter-spacing:.5px; }
     .dem-legend { left:8px; top:40px; pointer-events:none; }
     .dem-legend .bar { width:150px; height:9px; border-radius:2px; margin:3px 0 2px; }
     .dem-legend .ticks { display:flex; justify-content:space-between; width:150px; color:var(--text); }
     .dem-views { right:8px; top:8px; padding:3px; display:flex; gap:3px; }
-    .dem-views button { font:10px Consolas,monospace; letter-spacing:1px; color:var(--dim);
+    .dem-views button { font:calc(10px * var(--fs, 1)) Consolas,monospace; letter-spacing:1px; color:var(--dim);
       background:var(--panel2); border:1px solid var(--line); border-radius:4px; padding:3px 7px; cursor:pointer; }
     .dem-views button.on { color:var(--accent); border-color:var(--accent); }
     .dem-stats { left:8px; top:8px; pointer-events:none; color:var(--text); }
     .dem-stats b { color:var(--red); font-weight:normal; }
     .dem-compact .dem-legend { display:none; }
-    .dem-compact .dem-overlay { padding:2px 5px; font-size:9px; }
-    .dem-compact .dem-views button { padding:1px 5px; font-size:9px; }`;
+    .dem-compact .dem-overlay { padding:2px 5px; font-size:calc(9px * var(--fs, 1)); }
+    .dem-compact .dem-views button { padding:1px 5px; font-size:calc(9px * var(--fs, 1)); }`;
 
   /* Below this panel size the legend is hidden and the stats shortened. */
   const COMPACT_W = 520, COMPACT_H = 320;

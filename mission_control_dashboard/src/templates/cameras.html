@@ -27,7 +27,7 @@
   html, body { height: 100%; }
   body {
     background: var(--bg); color: var(--text); font-family: var(--mono);
-    font-size: 13px; overflow: hidden;
+    font-size: calc(13px * var(--fs, 1)); overflow: hidden;
     display: grid; grid-template-rows: 46px 1fr; gap: 6px; padding: 6px;
   }
 
@@ -39,18 +39,18 @@
     overflow-x: auto;
   }
   a.back {
-    color: var(--dim); text-decoration: none; font-size: 11px; letter-spacing: 1px;
+    color: var(--dim); text-decoration: none; font-size: calc(11px * var(--fs, 1)); letter-spacing: 1px;
     border: 1px solid var(--line); padding: 6px 11px; border-radius: 4px; white-space: nowrap;
   }
   a.back:hover { color: var(--cyan); border-color: var(--cyan); }
-  .brand { color: var(--accent); font-weight: bold; letter-spacing: 3px; font-size: 15px;
+  .brand { color: var(--accent); font-weight: bold; letter-spacing: 3px; font-size: calc(15px * var(--fs, 1));
            text-shadow: 0 0 12px rgba(51,214,166,.3); white-space: nowrap; }
-  .brand small { color: var(--dim); letter-spacing: 1px; font-size: 10px; display: block; }
+  .brand small { color: var(--dim); letter-spacing: 1px; font-size: calc(10px * var(--fs, 1)); display: block; }
   .spacer { flex: 1; }
 
   .chips { display: flex; gap: 6px; }
   .chip {
-    font-family: var(--mono); font-size: 11px; letter-spacing: 1px; cursor: pointer;
+    font-family: var(--mono); font-size: calc(11px * var(--fs, 1)); letter-spacing: 1px; cursor: pointer;
     background: var(--panel); color: var(--dim); border: 1px solid var(--line);
     border-radius: 4px; padding: 6px 10px; white-space: nowrap; user-select: none;
   }
@@ -58,7 +58,7 @@
   .chip.on { color: var(--bg); background: var(--accent); border-color: var(--accent);
              font-weight: bold; }
 
-  .conn { display: flex; align-items: center; gap: 7px; font-size: 10px; letter-spacing: 1px;
+  .conn { display: flex; align-items: center; gap: 7px; font-size: calc(10px * var(--fs, 1)); letter-spacing: 1px;
           color: var(--dim); white-space: nowrap; }
   .conn .dot { width: 10px; height: 10px; border-radius: 50%; background: #402028; }
   .conn .dot.ok { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
@@ -75,7 +75,7 @@
   }
   .tile.hidden { display: none; }
   .tile .title {
-    padding: 4px 10px; font-size: 10px; letter-spacing: 2px; color: var(--dim);
+    padding: 4px 10px; font-size: calc(10px * var(--fs, 1)); letter-spacing: 2px; color: var(--dim);
     border-bottom: 1px solid var(--line); background: var(--panel2);
     display: flex; align-items: center; gap: 8px;
   }
@@ -88,12 +88,12 @@
   .tile .feed img { width: 100%; height: 100%; object-fit: contain; display: block; }
   .tile .nosig {
     position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-    color: var(--view-text, #4d6580); font-size: 12px; letter-spacing: 4px;
+    color: var(--view-text, #4d6580); font-size: calc(12px * var(--fs, 1)); letter-spacing: 4px;
     background: repeating-linear-gradient(0deg, var(--view, #10151c) 0 2px, var(--view2, #161d28) 2px 4px);
   }
   #empty {
     grid-column: 1 / -1; text-align: center; color: var(--dim);
-    padding: 60px 20px; letter-spacing: 2px; font-size: 12px;
+    padding: 60px 20px; letter-spacing: 2px; font-size: calc(12px * var(--fs, 1));
   }
 </style>
 </head>

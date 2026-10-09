@@ -136,49 +136,57 @@ for _app in (app, app_teleop, app_sys, app_replay):
 
 # ---- colour theme, shared by every window (chosen in the hub) ----
 THEMES = ('mission', 'midnight', 'night', 'daylight')
+FONTS = ('small', 'normal', 'large', 'xlarge')
 # Kept next to the package sources (mounted from the repository), so it survives
 # container rebuilds; git-ignored.
 UI_SETTINGS = os.environ.get('GNC_UI_SETTINGS',
                              '/opt/ros/jazzy/src/mission_control_dashboard/ui_settings.json')
 
 
-def _load_theme() -> str:
+def _load_ui_settings() -> tuple:
     try:
         with open(UI_SETTINGS, encoding='utf-8') as f:
-            theme = json.load(f).get('theme')
-        return theme if theme in THEMES else THEMES[0]
+            saved = json.load(f)
     except (OSError, ValueError):
-        return THEMES[0]
+        saved = {}
+    theme = saved.get('theme') if saved.get('theme') in THEMES else THEMES[0]
+    font = saved.get('font') if saved.get('font') in FONTS else 'normal'
+    return theme, font
 
 
-theme = _load_theme()
+theme, font = _load_ui_settings()
 
 
 def _theme_js():
     """theme.js with the current theme filled in, so it applies before the page paints."""
     with open(os.path.join(template_dir, 'theme.js'), encoding='utf-8') as f:
-        body = f.read().replace('__THEME__', theme)
+        body = f.read().replace('__THEME__', theme).replace('__FONT__', font)
     return Response(body, mimetype='application/javascript', headers={'Cache-Control': 'no-store'})
 
 
 def _theme_json():
-    return Response(json.dumps({'theme': theme, 'themes': THEMES}), mimetype='application/json',
+    return Response(json.dumps({'theme': theme, 'themes': THEMES, 'font': font, 'fonts': FONTS}),
+                    mimetype='application/json',
                     headers={'Cache-Control': 'no-store'})
 
 
 def _set_theme():
-    """POST {theme}: the hub's theme selector. Saved, and picked up by every window."""
-    global theme
-    choice = (request.get_json(silent=True) or {}).get('theme')
-    if choice not in THEMES:
-        return jsonify(error=f'unknown theme {choice!r}'), 400
-    theme = choice
+    """POST {theme} and/or {font}: the hub's selectors. Saved, and picked up by every window."""
+    global theme, font
+    body = request.get_json(silent=True) or {}
+    if 'theme' not in body and 'font' not in body:
+        return jsonify(error='expected theme or font'), 400
+    if 'theme' in body and body['theme'] not in THEMES:
+        return jsonify(error=f"unknown theme {body['theme']!r}"), 400
+    if 'font' in body and body['font'] not in FONTS:
+        return jsonify(error=f"unknown font size {body['font']!r}"), 400
+    theme, font = body.get('theme', theme), body.get('font', font)
     try:
         with open(UI_SETTINGS, 'w', encoding='utf-8') as f:
-            json.dump({'theme': theme}, f)
+            json.dump({'theme': theme, 'font': font}, f)
     except OSError as exc:
-        return jsonify(theme=theme, warning=f'not saved: {exc}')
-    return jsonify(theme=theme)
+        return jsonify(theme=theme, font=font, warning=f'not saved: {exc}')
+    return jsonify(theme=theme, font=font)
 
 
 for _app in (app, app_hub, app_teleop, app_cams, app_map, app_sys, app_replay):

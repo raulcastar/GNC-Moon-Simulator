@@ -24,11 +24,11 @@ const ViewPicker = (() => {
   const CSS = `
     .vp-pop { display: none; position: fixed; z-index: 50; width: 300px; padding: 8px 10px; gap: 5px;
               flex-wrap: wrap; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
-              box-shadow: 0 8px 28px rgba(0,0,0,.5); font-family: var(--mono); font-size: 10px; }
+              box-shadow: 0 8px 28px rgba(0,0,0,.5); font-family: var(--mono); font-size: calc(10px * var(--fs, 1)); }
     .vp-pop.open { display: flex; }
     .vp-pop h4 { flex-basis: 100%; margin: 0 0 3px; color: var(--dim); font-weight: normal;
-                 font-size: 9px; letter-spacing: 2px; }
-    .vp-pop .chip { font-size: 10px; letter-spacing: 1px; cursor: pointer; user-select: none;
+                 font-size: calc(9px * var(--fs, 1)); letter-spacing: 2px; }
+    .vp-pop .chip { font-size: calc(10px * var(--fs, 1)); letter-spacing: 1px; cursor: pointer; user-select: none;
                     color: var(--dim); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; }
     .vp-pop .chip:hover { border-color: var(--cyan); }
     .vp-pop .chip.on { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: bold; }
