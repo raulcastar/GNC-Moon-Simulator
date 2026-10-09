@@ -33,11 +33,14 @@
   .brand small { display: block; color: var(--dim); letter-spacing: 3px; font-size: 12px;
                  margin-top: 8px; font-weight: normal; }
 
+  /* Rows of up to three equal cards; a shorter last row stays centred (a grid
+     would leave a lone card hanging at the left). */
   .cards {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 340px));
-    gap: 22px; width: 100%; max-width: 760px; justify-content: center;
+    display: flex; flex-wrap: wrap; justify-content: center;
+    gap: 22px; width: 100%; max-width: 1110px;
   }
   a.card {
+    flex: 0 1 340px; min-width: 280px;
     display: flex; flex-direction: column; gap: 12px; text-decoration: none;
     background: linear-gradient(180deg, var(--panel2), var(--panel));
     border: 1px solid var(--line); border-radius: 8px; padding: 26px 24px;
