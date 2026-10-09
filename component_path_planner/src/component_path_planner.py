@@ -90,6 +90,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         
         # --- Planner Instances ---
         self.path_planner  = global_path_planner.Global_Path_Planner()
+        self.path_planner.log = self.get_logger()
         self.local_planner = local_trajectory_controller.Local_Trajectory_Controller()
         
         # Dynamic configuration namespace populated during the on_configure transition

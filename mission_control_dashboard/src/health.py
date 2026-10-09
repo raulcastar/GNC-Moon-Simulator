@@ -152,8 +152,10 @@ class HealthMixin:
         self._pending.discard(key)
         try:
             self._node_states[name] = fut.result().current_state.label
-        except Exception:
+        except Exception as exc:
             self._node_states[name] = 'error'
+            self.get_logger().warn(f'Lifecycle state of {name} unreadable: {exc}',
+                                   throttle_duration_sec=30.0)
 
     def _fetch_remote_params(self) -> None:
         """Reads the planner's tilt limit and the depth colour range once available."""
@@ -173,8 +175,9 @@ class HealthMixin:
         try:
             v = fut.result().values[0]
             value = v.double_value if v.type == 3 else float(v.integer_value) if v.type == 2 else None
-        except Exception:
+        except Exception as exc:     # asked again on the next health tick
             value = None
+            self.get_logger().warn(f'Parameter {key} unreadable: {exc}', throttle_duration_sec=30.0)
         if value is not None:
             self._remote[key] = value
             for server in (socketio, sio_cams, sio_teleop, sio_map):

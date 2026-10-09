@@ -5,6 +5,8 @@
 #                   Gonzalo Paz Delgado
 #==============================================================================
 
+import logging
+
 import numpy as np
 import math
 import bisect
@@ -16,6 +18,8 @@ GDM_STALL_STEPS = 40
 
 class Global_Path_Planner:
     def __init__(self):
+        # The owning node replaces this with its ROS logger (so warnings reach /rosout).
+        self.log = logging.getLogger('global_path_planner')
         self.rad2deg = 180/np.pi
         self.slopecostLUT = np.zeros((2,5))
         self.slopecostLUT[:][0] = [0, 5, 10, 15, 20]
@@ -94,10 +98,13 @@ class Global_Path_Planner:
                             nIndex = next(x for x,n in \
                                     enumerate(nbNodes[nIndex:],nIndex) if \
                                     np.array_equal(nodeChild,nbNodes[x]))
-                        except:
-                            print('error')
-                        del nbT[nIndex]
-                        del nbNodes[nIndex]
+                            del nbT[nIndex]
+                            del nbNodes[nIndex]
+                        except StopIteration:
+                            # Not in the narrow band: nothing to remove. (Deleting at the
+                            # bisect index anyway dropped some other node from the front.)
+                            self.log.warning(f'Fast marching: node {nodeChild.tolist()} with T '
+                                             f'{tempT:.2f} missing from the narrow band')
                         nIndex = bisect.bisect_left(nbT,T)
                         nbT.insert(nIndex,T)
                         nbNodes.insert(nIndex, nodeChild)
@@ -214,7 +221,10 @@ class Global_Path_Planner:
                             currentT = totalCostMap[nodeChild[1],nodeChild[0]]
                             dx = (nearN[0]-nodeChild[0])/tau
                             dy = (nearN[1]-nodeChild[1])/tau
-                except:
+                except Exception as exc:
+                    self.log.warning(f'Path extraction stopped at node {nearN} after '
+                                     f'{len(gamma)} points ({type(exc).__name__}: {exc}); '
+                                     f'returning the partial path')
                     return gamma
                     
             
