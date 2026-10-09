@@ -351,6 +351,17 @@ namespace
 			int32 Sent = 0;
 			if (!Socket->Send(Data + Offset, Num - Offset, Sent))
 			{
+				// The socket is non-blocking: a full send buffer (a big packet,
+				// e.g. the burst of events of the first frames) answers "would
+				// block", which is not a broken link. Wait for room and try again;
+				// only a real error drops the link.
+				const ESocketErrors Error =
+					ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->GetLastErrorCode();
+				if (Error == SE_EWOULDBLOCK || Error == SE_NO_ERROR)
+				{
+					Socket->Wait(ESocketWaitConditions::WaitForWrite, FTimespan::FromMilliseconds(100));
+					continue;
+				}
 				return false;
 			}
 			Offset += Sent;
