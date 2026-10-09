@@ -8,6 +8,7 @@
 <script src="/local_dem.js"></script>
 <script src="/feed_legends.js"></script>
 <script src="/nav_overlay.js"></script>
+<script src="/dash_common.js"></script>
 <style>
   :root {
     --bg:      #10151c;
@@ -80,21 +81,6 @@
   .cam-row { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr); gap: 6px; min-height: 0; }
   /* feeds switched off in VIEWS, and rows left with none */
   #cams .feed.off, #cams .cam-row.empty { display: none !important; }
-  #feed-pop {
-    display: none; position: fixed; z-index: 50; width: 300px; padding: 8px 10px;
-    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
-    box-shadow: 0 8px 28px rgba(0,0,0,.5); font-size: 10px;
-  }
-  #feed-pop.open { display: flex; flex-wrap: wrap; gap: 5px; }
-  #feed-pop h4 { flex-basis: 100%; margin: 0 0 3px; color: var(--dim); font-weight: normal;
-                 font-size: 9px; letter-spacing: 2px; }
-  #feed-pop .chip {
-    font-family: var(--mono); font-size: 10px; letter-spacing: 1px; cursor: pointer; user-select: none;
-    color: var(--dim); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px;
-  }
-  #feed-pop .chip:hover { border-color: var(--cyan); }
-  #feed-pop .chip.on { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: bold; }
-  #feed-pop .all { margin-left: auto; color: var(--cyan); cursor: pointer; letter-spacing: 1px; }
   .feed { position: relative; background: #000; min-height: 0; overflow: hidden; }
   .feed img {
     width: 100%; height: 100%; object-fit: contain; display: block;
@@ -270,7 +256,6 @@
   <button class="hbtn" id="btn-sys" title="Open the system window: feed rates, lifecycle nodes, ROS 2 topics">SYSTEM ↗</button>
 </header>
 
-<div id="feed-pop"></div>
 
 <main data-view="all">
   <!-- ============ LEFT: CAMERAS ============ -->
@@ -532,12 +517,11 @@ function addRow(level, node, text, stamp) {
   d.className = 'row';
   const ts = new Date((stamp || Date.now()/1000) * 1000).toISOString().substr(11, 8);
   d.innerHTML = `<span class="t">${ts}</span> <span class="${level}">${level.padEnd(5)}</span> ` +
-                `<span class="n">[${node}]</span> <span class="${level}">${esc(text)}</span>`;
+                `<span class="n">[${node}]</span> <span class="${level}">${escHtml(text)}</span>`;
   logDiv.appendChild(d);
   while (logDiv.childNodes.length > 500) logDiv.removeChild(logDiv.firstChild);
   if (atBottom) logDiv.scrollTop = logDiv.scrollHeight;
 }
-const esc = s => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const addLocal = (lvl, txt) => addRow(lvl, 'console', txt, Date.now()/1000);
 socket.on('log', m => addRow(m.level, m.node, m.text, m.stamp));
 
@@ -949,9 +933,6 @@ document.addEventListener('keydown', e => {
    empty collapse in the overview column; the CAMERAS tab regrids the rest. */
 const feedEls = [...camsEl.querySelectorAll('.feed')];
 let feedSel = {};
-try { feedSel = JSON.parse(localStorage.getItem('mc_feeds') || '{}'); } catch (e) { feedSel = {}; }
-feedEls.forEach(f => { if (!(f.id in feedSel)) feedSel[f.id] = true; });
-if (!feedEls.some(f => feedSel[f.id])) feedEls.forEach(f => feedSel[f.id] = true);
 
 function layoutFeeds() {
   feedEls.forEach(f => f.classList.toggle('off', !feedSel[f.id]));
@@ -977,45 +958,16 @@ function layoutFeeds() {
   camsEl.style.setProperty('--cam-grid-rows', Math.ceil(n / best.cols));
 }
 
-const feedPop = $('feed-pop');
-feedPop.addEventListener('click', e => e.stopPropagation());   /* rebuilt chips are detached */
-function buildFeedPop() {
-  feedPop.innerHTML = '<h4>CAMERA VIEWS <span class="all" id="feeds-all">ALL</span></h4>';
-  feedEls.forEach(f => {
-    const chip = document.createElement('span');
-    chip.className = 'chip' + (feedSel[f.id] ? ' on' : '');
-    chip.textContent = f.title;
-    chip.onclick = () => {
-      /* keep at least one feed */
-      if (feedSel[f.id] && feedEls.filter(g => feedSel[g.id]).length === 1) return;
-      feedSel[f.id] = !feedSel[f.id];
-      chip.classList.toggle('on', feedSel[f.id]);
-      saveFeeds();
-    };
-    feedPop.appendChild(chip);
-  });
-  $('feeds-all').onclick = () => { feedEls.forEach(f => feedSel[f.id] = true); buildFeedPop(); saveFeeds(); };
-}
-function saveFeeds() {
-  try { localStorage.setItem('mc_feeds', JSON.stringify(feedSel)); } catch (e) {}
-  layoutFeeds();
-  requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));   /* legends follow */
-}
-$('btn-feeds').onclick = e => {
-  e.stopPropagation();
-  if (feedPop.classList.toggle('open')) {
-    buildFeedPop();
-    const r = $('btn-feeds').getBoundingClientRect();
-    feedPop.style.top = (r.bottom + 4) + 'px';
-    feedPop.style.left = Math.max(6, Math.min(r.left, window.innerWidth - 310)) + 'px';
-  }
-};
-document.addEventListener('click', e => {
-  if (feedPop.classList.contains('open') && !feedPop.contains(e.target) && e.target !== $('btn-feeds'))
-    feedPop.classList.remove('open');
+ViewPicker.attach({
+  button: $('btn-feeds'), storageKey: 'mc_feeds',
+  items: feedEls.map(f => ({ key: f.id, label: f.title })),
+  onChange: sel => {
+    feedSel = sel;
+    layoutFeeds();
+    requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));   /* legends follow */
+  },
 });
 window.addEventListener('resize', layoutFeeds);
-layoutFeeds();
 
 function setView(v) {
   if (v !== 'cams' && camsEl.dataset.focus) focusFeed(null);

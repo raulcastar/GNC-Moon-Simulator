@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GNC MOON SIM — System</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+<script src="/dash_common.js"></script>
 <style>
   :root {
     --bg:      #10151c;
@@ -160,7 +161,7 @@
   const host = window.location.hostname || 'localhost';
   document.getElementById('hublink').href = `http://${host}:5000/`;
   const $ = id => document.getElementById(id);
-  const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const esc = escHtml;
   const socket = io();
 
   // ---- feeds, nodes, recording (the 'health' push, once a second) ----
