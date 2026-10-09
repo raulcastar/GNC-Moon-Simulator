@@ -9,3 +9,5 @@ component_path_planner/maps
 mission_control_dashboard/bags/
 # Dashboard UI preferences (theme)
 mission_control_dashboard/ui_settings.json
+tools/scenarios/results/
+.pytest_cache/
