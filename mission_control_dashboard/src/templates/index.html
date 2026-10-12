@@ -67,8 +67,11 @@
   #map-panel { flex: 1; }
   #map-body { flex: 1; display: flex; gap: 8px; padding: 8px; min-height: 0; }
   #map-wrap { position: relative; flex: 1; min-width: 0; overflow: hidden; }
-  #map-stack { position: absolute; inset: 0; margin: auto; transform-origin: 0 0; will-change: transform; }
-  #map-stack canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+  /* #map-stack is invisible: its translate+scale is the map's place on screen.
+     The canvases cover the whole view at the display's resolution and are
+     redrawn with that placement, so zoom never enlarges pixels. */
+  #map-stack { position: absolute; inset: 0; margin: auto; transform-origin: 0 0; visibility: hidden; pointer-events: none; }
+  #map-wrap > canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
   #mapCanvas  { z-index: 1; }
   #odomCanvas { z-index: 2; cursor: crosshair; }
   #planning {
@@ -232,7 +235,6 @@
   #t-tiltfill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--accent);
                 transition: width .3s, background .3s; }
   #t-tiltlim { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--red); display: none; }
-  #mapCanvas { image-rendering: pixelated; }
 </style>
 </head>
 <body>
@@ -309,10 +311,9 @@
       </div>
       <div id="map-body">
         <div id="map-wrap">
-          <div id="map-stack">
-            <canvas id="mapCanvas"></canvas>
-            <canvas id="odomCanvas"></canvas>
-          </div>
+          <div id="map-stack"></div>
+          <canvas id="mapCanvas"></canvas>
+          <canvas id="odomCanvas"></canvas>
           <div id="planning">COMPUTING TRAVERSE…</div>
         </div>
         <div id="cbar">
@@ -727,13 +728,17 @@ $('btn-camrst').onclick = e => {
 /* ---------------- map (elevation + paths + goal) ---------------- */
 const mapCanvas = $('mapCanvas'),  mapCtx  = mapCanvas.getContext('2d');
 const odomCanvas = $('odomCanvas'), odomCtx = odomCanvas.getContext('2d');
+const mapStack = $('map-stack');           /* invisible: the map's placement (zoom + pan) */
 const cbCanvas = $('cbarCanvas'),   cbCtx   = cbCanvas.getContext('2d');
 let mapRes = 1, mapW = 0, mapH = 0;
+const ROVER_WIDTH_M = 0.96;        /* rover_width in the rover's params.yaml */
+const MAX_ZOOM = 150;
 let currentPose = null, globalPath = [], drivenPath = [];
 let firstPath = [], replans = 0;      /* the route first planned for this goal, and re-plans since */
 let lidarObs = [];                    /* planner's lidar obstacles, flat [x0, y0, x1, y1, ...] (odom) */
 let elevMin = '0', elevMax = '0';
-const OV = 4;                      /* overlay canvas pixels per map pixel */
+/* the elevation image at one pixel per map cell, drawn into the view on each redraw */
+const elevCanvas = document.createElement('canvas'), elevCtx = elevCanvas.getContext('2d');
 let localObs = null;               /* latest local obstacles + camera FOV (odom frame) */
 socket.on('local_obstacles', m => { localObs = m; drawOverlay(); });
 
@@ -754,12 +759,10 @@ socket.on('map_update', m => {
     for (let i = 0; i < q.length; i++) m.data[i] = q[i] === 65535 ? 9999 : m.lo + q[i] * m.scale;
   }
   mapW = m.width; mapH = m.height; mapRes = m.resolution;
-  mapCanvas.width = mapW; mapCanvas.height = mapH;
-  /* overlay drawn at OV× the map resolution so local details stay sharp when zoomed */
-  odomCanvas.width = mapW * OV; odomCanvas.height = mapH * OV;
+  elevCanvas.width = mapW; elevCanvas.height = mapH;
   fitMapStack();
 
-  const img = mapCtx.createImageData(mapW, mapH);
+  const img = elevCtx.createImageData(mapW, mapH);
   let lo = Infinity, hi = -Infinity;
   for (const v of m.data) if (v < 9999) { if (v < lo) lo = v; if (v > hi) hi = v; }
   const ok = hi !== -Infinity, span = (hi - lo) || 1;
@@ -771,19 +774,33 @@ socket.on('map_update', m => {
     const c = viridis(Math.floor((m.data[i]-lo)/span*20)/20);
     img.data[o] = c[0]; img.data[o+1] = c[1]; img.data[o+2] = c[2]; img.data[o+3] = 255;
   }
-  mapCtx.putImageData(img, 0, 0);
+  elevCtx.putImageData(img, 0, 0);
   drawColorbar(ok); drawOverlay();
   addLocal('INFO', `Elevation map loaded: ${mapW}×${mapH} @ ${mapRes} m/px.`);
 });
 
+/* The canvases match the view box at the display's pixel density. */
+function sizeCanvases() {
+  const wrap = $('map-wrap'), dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(wrap.clientWidth * dpr)), h = Math.max(1, Math.round(wrap.clientHeight * dpr));
+  for (const c of [mapCanvas, odomCanvas]) if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+}
+
+/* Where the map is on screen: the stack's origin in the view (CSS px) and CSS px per map cell. */
+function mapPlacement() {
+  const r = mapStack.getBoundingClientRect(), w = $('map-wrap').getBoundingClientRect();
+  return { ox: r.left - w.left, oy: r.top - w.top, s: r.width / mapW };
+}
+
 function fitMapStack() {
   const wrap = $('map-wrap'), stack = $('map-stack');
+  sizeCanvases();
   if (!mapW) return;
   const s = Math.min(wrap.clientWidth / mapW, wrap.clientHeight / mapH);
   stack.style.width  = (mapW * s) + 'px';
   stack.style.height = (mapH * s) + 'px';
 }
-window.addEventListener('resize', () => { fitMapStack(); drawColorbar(mapW > 0); });
+window.addEventListener('resize', () => { fitMapStack(); drawColorbar(mapW > 0); drawOverlay(); });
 
 function drawColorbar(show) {
   $('cbar').style.display = show ? 'flex' : 'none';
@@ -802,8 +819,19 @@ function drawColorbar(show) {
 
 function drawOverlay() {
   if (!mapW) return;
-  odomCtx.setTransform(OV, 0, 0, OV, 0, 0);
-  odomCtx.clearRect(0, 0, mapW, mapH);
+  sizeCanvases();
+  const dpr = window.devicePixelRatio || 1, place = mapPlacement();
+  const a = dpr * place.s, ox = dpr * place.ox, oy = dpr * place.oy;   /* map cell -> canvas pixel */
+
+  mapCtx.setTransform(1, 0, 0, 1, 0, 0);
+  mapCtx.clearRect(0, 0, mapCanvas.width, mapCanvas.height);
+  mapCtx.setTransform(a, 0, 0, a, ox, oy);
+  mapCtx.imageSmoothingEnabled = a < 1;          /* smooth when shrunk, crisp cells when zoomed */
+  mapCtx.drawImage(elevCanvas, 0, 0);
+
+  odomCtx.setTransform(1, 0, 0, 1, 0, 0);
+  odomCtx.clearRect(0, 0, odomCanvas.width, odomCanvas.height);
+  odomCtx.setTransform(a, 0, 0, a, ox, oy);
   /* symbol sizes are given in screen pixels at 1x and divided by the zoom, so
      markers keep their on-screen size when zooming in */
   const k = 1 / vz;
@@ -876,6 +904,9 @@ function drawOverlay() {
   }
 
   if (currentPose) {
+    /* the usual on-screen size, growing to the rover's real footprint when
+       zoomed in (the body circle is then the rover's width) */
+    const kr = Math.max(k, ROVER_WIDTH_M / 2 / mapRes / 6);
     const x = currentPose.x/mapRes, y = mapH - currentPose.y/mapRes;
     if (currentPose.yaw !== undefined) {
       // Heading arrow. Screen y is down, world +y is up, so the y term is
@@ -884,12 +915,12 @@ function drawOverlay() {
       // the reported yaw is the travel direction directly — no correction.
       const a = currentPose.yaw * Math.PI / 180;
       const dx = Math.cos(a), dy = -Math.sin(a);
-      const L = 26*k, hl = 12*k, hw = 7*k;    // shaft length, head length, head half-width
+      const L = 26*kr, hl = 12*kr, hw = 7*kr;    // shaft length, head length, head half-width
       const tx = x + dx*L,        ty = y + dy*L;        // arrow tip
       const bx = x + dx*(L - hl), by = y + dy*(L - hl); // base of the head
       const px = -dy, py = dx;                          // unit perpendicular
       odomCtx.strokeStyle = '#33d6a6'; odomCtx.fillStyle = '#33d6a6';
-      odomCtx.lineWidth = 3*k; odomCtx.lineCap = 'round';
+      odomCtx.lineWidth = 3*kr; odomCtx.lineCap = 'round';
       odomCtx.beginPath(); odomCtx.moveTo(x, y); odomCtx.lineTo(bx, by); odomCtx.stroke();
       odomCtx.beginPath();
       odomCtx.moveTo(tx, ty);
@@ -898,9 +929,9 @@ function drawOverlay() {
       odomCtx.closePath(); odomCtx.fill();
     }
     // Rover body marker, drawn on top of the arrow's tail.
-    odomCtx.beginPath(); odomCtx.arc(x, y, 6*k, 0, 7);
+    odomCtx.beginPath(); odomCtx.arc(x, y, 6*kr, 0, 7);
     odomCtx.fillStyle = '#33d6a6'; odomCtx.fill();
-    odomCtx.strokeStyle = '#fff'; odomCtx.lineWidth = 2*k; odomCtx.stroke();
+    odomCtx.strokeStyle = '#fff'; odomCtx.lineWidth = 2*kr; odomCtx.stroke();
   }
 }
 
@@ -925,7 +956,6 @@ socket.on('trajectory_update',  m => {
    the live translate+scale. Zooming toward the cursor then reduces to a single
    pan nudge: tx += (cursorX - rectLeft) * (1 - scaleRatio). A click sets a goal;
    a drag (moved past a threshold) pans instead, so both share the left button. */
-const mapStack = $('map-stack');
 let vz = 1, vtx = 0, vty = 0;
 function applyView() {
   mapStack.style.transform = `translate(${vtx}px, ${vty}px) scale(${vz})`;
@@ -938,7 +968,8 @@ $('map-wrap').addEventListener('wheel', e => {
   e.preventDefault();
   const r = mapStack.getBoundingClientRect();
   const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-  let nz = Math.min(40, Math.max(1, vz * f));
+  let nz = Math.min(MAX_ZOOM, Math.max(1, vz * f));
+  if (following) { vz = nz; followRover(); return; }   /* zoom about the rover, still following */
   following = false; $('btn-follow').style.color = ''; try { localStorage.setItem('map_follow', '0'); } catch (e) {}
   const k = nz / vz;
   vtx += (e.clientX - r.left) * (1 - k);
@@ -970,7 +1001,7 @@ window.addEventListener('mouseup', e => {
   const wasDrag = dragged;
   dragStart = null; odomCanvas.style.cursor = 'crosshair';
   if (wasDrag) return;                       // panned, not a goal click
-  const r = odomCanvas.getBoundingClientRect();
+  const r = mapStack.getBoundingClientRect();
   if (e.clientX < r.left || e.clientX > r.right ||
       e.clientY < r.top  || e.clientY > r.bottom) return;
   const gx = (e.clientX - r.left) * (mapW / r.width) * mapRes;
