@@ -22,7 +22,7 @@ side fails here instead of in a Play session:
 import numpy as np
 import pytest
 
-from src.component_stereo_depth import FrameStreamReceiver
+from src.frame_stream import FrameStreamReceiver
 
 
 class Log:

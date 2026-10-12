@@ -32,29 +32,31 @@ Disparity has no separate visualisation: it is a monotonic function of depth, so
 it would just render image_depth/visualization inverted.
 
 Frames arrive over TCP from the UnrealStereoCam Unreal plugin
-(unreal/UnrealStereoCam/): each SceneCapture renders with the game frame and is
-pushed here, so there is no render-on-demand and no game-thread stall. Every
-capture enqueued in one Unreal tick carries the same frame id, which is what
-pairs the left/right eyes as one rigid stereo view.
+(unreal/UnrealStereoCam/): each SceneCapture renders when a frame is sent and is
+pushed here, with no game-thread stall. Every capture enqueued in one Unreal
+tick carries the same frame id, which is what pairs the left/right eyes as one
+rigid stereo view.
 
 Rig geometry (baseline, focal length) is declared from parameters — stream mode
 has nothing to measure it against — and the image size is taken from the first
 frames.
+
+This file is the ROS wiring: parameters, lifecycle, publishers and the cycle
+that ties the parts together. The parts:
+    frame_stream      TCP receiver for the plugin's frames (input/output)
+    stereo_geometry   rig, SGBM matching, depth, reprojection (logic)
+    masks             object and shadow masks, mask classes (logic)
+    stereo_config     parameter parsing (logic)
+    ros_messages      CameraInfo and DisparityImage construction
 """
 
-from typing import Dict, Optional, Tuple
-import collections
-import math
-import os
-import socket
-import struct
-import threading
-import time
 import json
+import os
 import traceback
+from typing import Dict, Optional
 
-import numpy as np
 import cv2
+import numpy as np
 
 import rclpy
 from ament_index_python.packages import get_package_share_directory
@@ -62,270 +64,17 @@ import rclpy.lifecycle
 from rclpy.lifecycle import Publisher, State, TransitionCallbackReturn
 from rclpy.timer import Timer
 
-from builtin_interfaces.msg import Time as RosTime
-from sensor_msgs.msg import Image as RosImage, CompressedImage, CameraInfo, RegionOfInterest
+from sensor_msgs.msg import Image as RosImage, CompressedImage, CameraInfo
 from std_msgs.msg import String
 from stereo_msgs.msg import DisparityImage
 from cv_bridge import CvBridge
 
-
-def _ros_time(ns: int) -> RosTime:
-    """Simulation time in ns (UnrealSimClock) -> builtin_interfaces/Time."""
-    return RosTime(sec=int(ns // 1_000_000_000), nanosec=int(ns % 1_000_000_000))
-
-
-def _frame_id(topic: str) -> str:
-    """
-    Topic namespace -> TF frame name: 'navcam/central' -> 'navcam_central'.
-
-    tf2 reserves '/' in frame names for the deprecated tf_prefix syntax.
-    """
-    return topic.strip('/').replace('/', '_')
-
-
-class CycleTimer:
-    """
-    Time spent per processing cycle, by stage, summarised in one log line every
-    `period` seconds (wall clock): cycles per second and the mean milliseconds
-    of each stage. `start()` opens a cycle, `mark(stage)` closes the stage
-    running since the previous mark, `end()` closes the cycle.
-    """
-
-    def __init__(self, logger, label: str, period: float = 30.0):
-        self._log, self._label, self._period = logger, label, period
-        self._sums = collections.OrderedDict()
-        self._cycles, self._total, self._worst = 0, 0.0, 0.0
-        self._since = time.monotonic()
-        self._t0 = self._last = None
-
-    def start(self) -> None:
-        self._t0 = self._last = time.perf_counter()
-
-    def mark(self, stage: str) -> None:
-        if self._last is None:
-            return
-        now = time.perf_counter()
-        self._sums[stage] = self._sums.get(stage, 0.0) + (now - self._last)
-        self._last = now
-
-    def end(self) -> None:
-        if self._t0 is None:
-            return
-        spent = time.perf_counter() - self._t0
-        self._t0 = self._last = None
-        self._cycles += 1
-        self._total += spent
-        self._worst = max(self._worst, spent)
-        elapsed = time.monotonic() - self._since
-        if elapsed >= self._period:
-            n = self._cycles
-            stages = ', '.join(f'{k} {1000 * v / n:.0f}' for k, v in self._sums.items())
-            self._log.info(f'{self._label}: {n / elapsed:.2f} cycles/s, {1000 * self._total / n:.0f} ms per '
-                           f'cycle (worst {1000 * self._worst:.0f})' + (f' | ms: {stages}' if stages else ''))
-            self._sums.clear()
-            self._cycles, self._total, self._worst = 0, 0.0, 0.0
-            self._since = time.monotonic()
-
-
-class FrameStreamReceiver:
-    """
-    TCP server for the UnrealStereoCam plugin (unreal/UnrealStereoCam/).
-
-    Unreal renders the navcams with each frame and pushes them here over one
-    connection, so nothing is rendered on demand and the game thread never
-    stalls. Packets are 24-byte-header BGRA frames tagged with
-    Unreal's frame counter; captures enqueued in one tick share a tag, which
-    is what lets left/right be paired as a rigid stereo view.
-
-    Runs a background thread; survives Play/Stop cycles by re-accepting.
-    Several UnrealStereoCam components may connect at once (e.g. the navcam
-    rig and a separate rear camera), each on its own connection and reader
-    thread; their frames land in the same per-cam-id rings.
-    """
-
-    _HEADER = struct.Struct('<4sBBBBHHQI')
-    _MAGIC = b'NAVF'
-    _RING = 6                      # frames kept per camera for pairing
-
-    def __init__(self, bind_ip: str, port: int, logger):
-        self._addr = (bind_ip, port)
-        self._log = logger
-        self._frames: Dict[int, collections.deque] = {}
-        self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._server: Optional[socket.socket] = None
-        self._thread: Optional[threading.Thread] = None
-        self.connections = 0                    # Unreal streamers connected now
-        self.known_ids: set = set()             # camera ids the node uses (set after configure)
-        self._unknown_ids: set = set()          # ids already warned about
-
-    def start(self) -> None:
-        self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._server.bind(self._addr)
-        self._server.listen(4)
-        self._server.settimeout(0.5)
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
-        self._log.info(f'Frame stream: listening on {self._addr[0]}:{self._addr[1]} '
-                       f'for the UnrealStereoCam plugin.')
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=2.0)
-            self._thread = None
-        if self._server:
-            self._server.close()
-            self._server = None
-
-    def latest_pair(self, left_id: int, right_id: int, center_id: int):
-        """
-        Newest frame id present for BOTH eyes, with the nearest centre frame.
-
-        Returns (left, right, center, frame_id, age_s) or None. The eyes must
-        match exactly — that is the rigid-pair guarantee. The centre tolerates
-        a small offset: it is not matched against anything, only overlaid.
-        """
-        with self._lock:
-            eyes_l = {e[0]: e for e in self._frames.get(left_id, ())}
-            eyes_r = {e[0]: e[1] for e in self._frames.get(right_id, ())}
-            common = sorted(set(eyes_l) & set(eyes_r))
-            if not common:
-                return None
-            fid = common[-1]
-            centers = list(self._frames.get(center_id, ()))
-            if not centers:
-                return None
-            c_fid, center, _, _ = min(centers, key=lambda e: abs(e[0] - fid))
-            if abs(c_fid - fid) > 60:        # a second of frames apart: stale
-                return None
-            _, left, t, stamp_ns = eyes_l[fid]
-            age = time.monotonic() - t
-            return left, eyes_r[fid], center, fid, age, stamp_ns
-
-    def frame_near(self, cam_id: int, fid: int, max_gap: int = 60):
-        """
-        The frame for cam_id closest to frame id `fid`, or None.
-
-        Used for the object-mask capture, which is streamed on its own cam_id
-        but must overlay the central image: take the mask rendered nearest the
-        same world tick. `max_gap` matches the centre-pairing tolerance in
-        latest_pair — a second of frames apart is treated as stale.
-        """
-        with self._lock:
-            frames = list(self._frames.get(cam_id, ()))
-        if not frames:
-            return None
-        f_fid, img, _, _ = min(frames, key=lambda e: abs(e[0] - fid))
-        if abs(f_fid - fid) > max_gap:
-            return None
-        return img
-
-    def latest(self, cam_id: int):
-        """(frame_id, image, stamp_ns) of the newest frame for cam_id, or None."""
-        with self._lock:
-            frames = self._frames.get(cam_id)
-            if not frames:
-                return None
-            fid, img, _, stamp_ns = frames[-1]
-            return fid, img, stamp_ns
-
-    # ------------------------------------------------------------------ #
-
-    def _loop(self) -> None:
-        while not self._stop.is_set():
-            try:
-                conn, addr = self._server.accept()
-            except socket.timeout:
-                continue
-            except OSError:
-                return
-            threading.Thread(target=self._serve, args=(conn, addr), daemon=True).start()
-
-    def _serve(self, conn: socket.socket, addr) -> None:
-        self._log.info(f'Frame stream: Unreal connected from {addr[0]}:{addr[1]}.')
-        with self._lock:
-            self.connections += 1
-        try:
-            self._read_stream(conn)
-        finally:
-            conn.close()
-            with self._lock:
-                self.connections -= 1
-            if not self._stop.is_set():
-                self._log.warn(f'Frame stream: Unreal disconnected ({addr[0]}:{addr[1]}); '
-                               'waiting for the next Play.')
-
-    def _read_stream(self, conn: socket.socket) -> None:
-        conn.settimeout(0.5)
-        # A bytearray grows in place: with bytes, every read copied the whole
-        # partial frame again (a 1.2 MB frame arrives in many reads).
-        buf = bytearray()
-        while not self._stop.is_set():
-            try:
-                chunk = conn.recv(1 << 20)
-            except socket.timeout:
-                continue
-            except OSError:
-                return
-            if not chunk:
-                return
-            buf += chunk
-            self._drain(buf)
-
-    def _drain(self, buf) -> bytearray:
-        """
-        Extract every complete frame from `buf`, consuming them in place (a
-        bytearray; bytes are copied into one), and return what is left: the
-        trailing fragment of the next frame.
-        """
-        if not isinstance(buf, bytearray):
-            buf = bytearray(buf)
-        while True:
-            start = buf.find(self._MAGIC)
-            if start < 0:
-                del buf[:-3]                 # keep a possible partial magic
-                return buf
-            if start > 0:
-                del buf[:start]              # resync past garbage
-            if len(buf) < self._HEADER.size:
-                return buf
-            (_, version, cam_id, fmt, _, w, h, fid,
-             size) = self._HEADER.unpack_from(buf)
-            if version not in (1, 2) or fmt not in (1, 2) or size != w * h * 4 or w == 0:
-                self._log.warn(f'Frame stream: bad header (v{version} fmt{fmt} '
-                               f'{w}x{h} size {size}); resyncing.',
-                               throttle_duration_sec=10.0)
-                del buf[:4]                  # skip this magic, scan again
-                continue
-            # Version 2 adds the capture time (simulation clock, ns) after the
-            # 24-byte header; version 1 frames get stamped on arrival (0 here).
-            start = self._HEADER.size + (8 if version == 2 else 0)
-            end = start + size
-            if len(buf) < end:
-                return buf                   # payload still in flight
-            stamp_ns = struct.unpack_from('<Q', buf, self._HEADER.size)[0] if version == 2 else 0
-            # bytes() copies the payload out, so no numpy view pins the
-            # bytearray (it could not be resized while one exists).
-            payload = bytes(buf[start:end])
-            if fmt == 2:                     # R32F depth, centimetres
-                image = np.frombuffer(payload, dtype='<f4').reshape(h, w).copy()
-            else:                            # BGRA8 colour -> RGB (cv2: ~30x faster than indexing)
-                image = cv2.cvtColor(np.frombuffer(payload, dtype=np.uint8).reshape(h, w, 4),
-                                     cv2.COLOR_BGRA2RGB)
-            if self.known_ids and cam_id not in self.known_ids and cam_id not in self._unknown_ids:
-                self._unknown_ids.add(cam_id)
-                self._log.warn(
-                    f'Frame stream: camera id {cam_id} ({w}x{h}) is not one this node '
-                    f'uses (configured: {sorted(self.known_ids)}); its frames are ignored. '
-                    'Check the camera ids in the UnrealStereoCam components against '
-                    'config/params.yaml.')
-            with self._lock:
-                ring = self._frames.setdefault(
-                    cam_id, collections.deque(maxlen=self._RING))
-                ring.append((fid, image, time.monotonic(), stamp_ns))
-            del buf[:end]
+from .cycle_timer import CycleTimer
+from .frame_stream import FrameStreamReceiver
+from . import masks
+from . import stereo_geometry as geo
+from .ros_messages import camera_info, disparity_msg, ros_time
+from .stereo_config import frame_id, parse_extra_camera
 
 
 class LifecycleStereoDepth(rclpy.lifecycle.Node):
@@ -342,7 +91,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
 
         self._timer: Optional[Timer] = None
         self._extra_timer: Optional[Timer] = None
-        # Extra mono cameras (extra_cameras): (cam_id, key, frame, intrinsics or None)
+        # Extra mono cameras (extra_cameras), stereo_config.ExtraCamera each
         self._extras: list = []
         self._extra_last_fid: Dict[int, int] = {}
         self.cv_bridge = CvBridge()
@@ -352,26 +101,15 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self._stream: Optional[FrameStreamReceiver] = None
         self._last_stream_fid: int = -1
 
-        # Rig solution, filled in by _solve_stream_rig on the first frame.
-        self._baseline_m: float = 0.0
-        self._fx: float = 0.0
-        self._cx: float = 0.0
-        self._cy: float = 0.0
-        self._width: int = 0
-        self._height: int = 0
-        self._swap_lr: bool = False
-
-        self._matcher: Optional[cv2.StereoSGBM] = None
-        self._num_disparities: int = 0
-        self._near_limit_m: float = 0.0     # fx*B/num_disparities, set in _build_matcher
-        self._clahe = None
+        # Rig and matcher, built on the first frame (the image size is needed).
+        self._rig: Optional[geo.StereoRig] = None
+        self._matcher: Optional[geo.StereoMatcher] = None
 
         self.declare_parameters(
             namespace='',
             parameters=[
                 # The UnrealStereoCam plugin (unreal/UnrealStereoCam/) pushes
-                # frames to this TCP server: each SceneCapture renders with the
-                # game frame, so there is no render-on-demand and no game stall.
+                # frames to this TCP server.
                 ('stream_bind_ip',          rclpy.Parameter.Type.STRING),
                 ('stream_port',             rclpy.Parameter.Type.INTEGER),
                 ('left_camera_id',          rclpy.Parameter.Type.INTEGER),
@@ -425,17 +163,13 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
     # Object-mask legend
     # =========================================================================
 
-    def _load_mask_classes(self) -> Tuple[str, str]:
+    def _load_mask_classes(self):
         """
         The object-mask classes from mask_classes_file, as the two JSON strings
-        published with the mask: the id -> name legend (object_mask_mapping,
-        e.g. {"1": "sky", "5": "landscape"}) and the full class list with
-        colours and groups (object_mask_classes).
-
-        The mask itself only carries colours, so this file is the record of
-        what each id in the Unreal scene means; Terrain Studio bakes the same
-        file into the mask material. Malformed entries are skipped with a
-        warning rather than aborting configuration.
+        published with the mask (masks.mask_class_messages). The mask itself
+        only carries colours, so this file is the record of what each id in the
+        Unreal scene means; Terrain Studio bakes the same file into the mask
+        material. Malformed entries are skipped with a warning.
         """
         path = self.get_parameter('mask_classes_file').value or os.path.join(
             get_package_share_directory('component_stereo_depth'), 'config', 'mask_classes.json')
@@ -446,137 +180,45 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
             self.get_logger().error(f'Object-mask classes unreadable ({path}): {exc}. '
                                     'object_mask_mapping will publish "{}".')
             return '{}', '[]'
-        classes = []
-        for entry in entries:
-            cid, name, rgb = entry.get('id'), entry.get('name'), entry.get('rgb')
-            if (not isinstance(cid, int) or not isinstance(name, str) or not name
-                    or not isinstance(rgb, list) or len(rgb) != 3):
-                self.get_logger().warn(f'{path}: ignoring malformed class {entry}.')
-                continue
-            classes.append({'id': cid, 'name': name, 'group': entry.get('group', 'other'),
-                            'rgb': [int(v) for v in rgb]})
-        classes.sort(key=lambda c: c['id'])
-        legend = {str(c['id']): c['name'] for c in classes}
+        classes, skipped = masks.parse_mask_classes(entries)
+        for entry in skipped:
+            self.get_logger().warn(f'{path}: ignoring malformed class {entry}.')
         if classes:
             self.get_logger().info(
                 f'Object mask classes ({len(classes)}, {path}): '
                 + ', '.join(f'{c["id"]}={c["name"]}' for c in classes))
         else:
             self.get_logger().warn(f'{path} lists no classes; object_mask_mapping will publish "{{}}".')
-        return json.dumps(legend), json.dumps(classes)
-
-    def _build_matcher(self) -> None:
-        """
-        Configure SGBM and derive the near limit from the disparity search.
-
-        num_disparities is the width of the search window, and therefore of the
-        unmatched left border. The nearest resolvable surface follows from it:
-
-            near = fx * B / num_disparities
-
-        Depth resolution follows dZ = Z^2 / (fx * B): a short baseline and a
-        wide FOV leave the far field coarsely quantised.
-        """
-        fxb = self._fx * self._baseline_m
-
-        nd = self.num_disparities_param
-        if nd % 16 != 0 or nd <= 0:
-            nd = max(16, min(int(math.ceil(nd / 16.0)) * 16, 256))
-            self.get_logger().warn(
-                f'num_disparities must be a positive multiple of 16; using {nd}.')
-        self._num_disparities = min(nd, 256)
-        self._near_limit_m = fxb / self._num_disparities
-
-        block = self.block_size | 1   # SGBM requires an odd block size
-        self._matcher = cv2.StereoSGBM_create(
-            minDisparity=0,
-            numDisparities=self._num_disparities,
-            blockSize=block,
-            P1=8 * block * block,
-            P2=32 * block * block,
-            disp12MaxDiff=1,
-            uniquenessRatio=self.uniqueness_ratio,
-            speckleWindowSize=self.speckle_window_size,
-            speckleRange=self.speckle_range,
-            mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY,
-        )
-
-        far = fxb / (1.0 / 16.0)   # one sub-pixel step of disparity
-        dz_at_max = self.max_depth_m ** 2 / fxb
-        self.get_logger().info(
-            f'SGBM: numDisparities {self._num_disparities}, blockSize {block} | '
-            f'near limit fx*B/nd = {self._near_limit_m:.2f} m .. {far:.0f} m')
-        if self.fill_left_border:
-            # A surface at Z is recoverable from column u >= fx*B/Z.
-            recover_at = fxb / self.max_depth_m
-            self.get_logger().info(
-                f'Left border recovered per-pixel (d <= u): a surface at '
-                f'{self.max_depth_m:.0f} m is matchable from column '
-                f'{recover_at:.0f} onward, not column {self._num_disparities}')
-        else:
-            self.get_logger().warn(
-                f'fill_left_border is off: the leftmost {self._num_disparities} '
-                f'columns ({self._num_disparities / self._width * 100:.0f}% of the '
-                f'image) will be blank regardless of scene depth')
-        self.get_logger().info(
-            f'Depth resolution dZ = Z^2/(fx*B), fx*B = {fxb:.2f} m*px -> '
-            f'{dz_at_max * 100:.1f} cm per disparity pixel at {self.max_depth_m:.1f} m')
-        if dz_at_max > 0.1 * self.max_depth_m:
-            self.get_logger().warn(
-                f'At max_depth_m={self.max_depth_m:.1f} m one pixel of matching '
-                f'error is a {dz_at_max / self.max_depth_m * 100:.0f}% depth error. '
-                f'Widen the baseline or narrow the FOV before trusting far-field depth.')
-
-        if self.equalize_for_glare:
-            self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        return masks.mask_class_messages(classes)
 
     # =========================================================================
     # Capture
     # =========================================================================
 
-    def _solve_stream_rig(self, eye_shape, center_shape) -> None:
-        """
-        Rig geometry from parameters and the first streamed frames.
-
-        The stream carries no camera poses, so the geometry is declared:
-        baseline_m and hfov_deg from parameters, image size from the frames,
-        the eyes co-rotated (SGBM requires it anyway — the UnrealStereoCam
-        captures must share a rotation), and the centre camera on the baseline
-        at center_offset_m from the left eye (midpoint when negative).
-        """
-        self._height, self._width = eye_shape[:2]
-        self._cx = self._width / 2.0
-        self._cy = self._height / 2.0
-        self._fx = (self._width / 2.0) / math.tan(
-            math.radians(self.hfov_deg_param) / 2.0)
-
-        self._c_h, self._c_w = center_shape[:2]
-        self._c_fx = (self._c_w / 2.0) / math.tan(
-            math.radians(self.hfov_deg_param) / 2.0)
-        self._c_cx, self._c_cy = self._c_w / 2.0, self._c_h / 2.0
-
-        offset = (self.center_offset_m if self.center_offset_m >= 0.0
-                  else self._baseline_m / 2.0)
-        self._c_R = np.eye(3)
-        # Optical axes: x = right. The centre sits `offset` to the right of
-        # the left eye, on the baseline.
-        self._c_t = np.array([offset, 0.0, 0.0])
-
-        self._build_matcher()
-        self.get_logger().info(
-            f'Rig declared (stream mode): {self._width}x{self._height} | '
-            f'baseline {self._baseline_m * 100:.2f} cm | '
-            f'hfov {self.hfov_deg_param:.2f} deg -> fx {self._fx:.2f} px | '
-            f'centre {offset * 100:.2f} cm from the left eye')
+    def _solve_rig(self, eye_shape, center_shape) -> None:
+        """Rig and matcher from parameters and the first streamed frames."""
+        self._rig = geo.solve_rig(eye_shape, center_shape, self.hfov_deg_param,
+                                  self.baseline_m_param, self.center_offset_m)
+        self._matcher = geo.StereoMatcher(
+            self._rig, self.num_disparities_param, self.block_size, self.uniqueness_ratio,
+            self.speckle_window_size, self.speckle_range, self.max_depth_m,
+            self.fill_left_border, self.equalize_for_glare)
+        log = self.get_logger()
+        for level, message in self._matcher.report():
+            (log.warn if level == 'warn' else log.info)(message)
+        rig = self._rig
+        log.info(f'Rig declared (stream mode): {rig.width}x{rig.height} | '
+                 f'baseline {rig.baseline_m * 100:.2f} cm | '
+                 f'hfov {self.hfov_deg_param:.2f} deg -> fx {rig.fx:.2f} px | '
+                 f'centre {rig.c_offset_m * 100:.2f} cm from the left eye')
 
     def _capture_from_stream(self):
         """
         Take the newest same-tick pair from the UnrealStereoCam plugin.
 
-        Frames were rendered with the game frame and pushed here, with no
-        game-thread stall. Returns None when there is nothing new to
-        process; the cycle simply skips. Geometry is solved from parameters on
-        the first frame, when the image size becomes known.
+        Returns None when there is nothing new to process; the cycle simply
+        skips. Geometry is solved from parameters on the first frame, when the
+        image size becomes known.
         """
         got = self._stream.latest_pair(self.left_camera_id,
                                        self.right_camera_id,
@@ -597,11 +239,11 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
             return None
 
         if self._matcher is None:
-            self._solve_stream_rig(left.shape, center.shape)
-        elif left.shape[:2] != (self._height, self._width):
+            self._solve_rig(left.shape, center.shape)
+        elif left.shape[:2] != (self._rig.height, self._rig.width):
             self.get_logger().error(
                 f'Streamed frame is {left.shape[1]}x{left.shape[0]} but the '
-                f'rig was solved at {self._width}x{self._height}. Restart the '
+                f'rig was solved at {self._rig.width}x{self._rig.height}. Restart the '
                 f'node after changing the render target size.',
                 throttle_duration_sec=15.0)
             return None
@@ -622,244 +264,8 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         return left, right, center, mask, depth_gt, stamp_ns
 
     # =========================================================================
-    # Stereo matching
+    # Publishing
     # =========================================================================
-
-    def _compute_disparity(self, left: np.ndarray, right: np.ndarray) -> np.ndarray:
-        """SGBM disparity in the left frame, sub-pixel, NaN where unmatched."""
-        gray_l = cv2.cvtColor(left, cv2.COLOR_RGB2GRAY)
-        gray_r = cv2.cvtColor(right, cv2.COLOR_RGB2GRAY)
-
-        # CLAHE pulls texture back out of near-saturated pixels. It cannot
-        # recover a fully clipped highlight, where the texture is simply gone.
-        if self._clahe is not None:
-            gray_l = self._clahe.apply(gray_l)
-            gray_r = self._clahe.apply(gray_r)
-
-        if not self.fill_left_border:
-            disp = self._matcher.compute(gray_l, gray_r).astype(np.float32) / 16.0
-            disp[disp <= 0.0] = np.nan
-            return disp
-
-        # OpenCV blanks every column u < numDisparities, where the widest search
-        # window does not fit. The true constraint is per-pixel: a left pixel at
-        # column u with disparity d matches right pixel u - d, so it is
-        # recoverable whenever d <= u. Distant surfaces have small d and match
-        # well inside that border.
-        #
-        # Pad both images by numDisparities so the window always fits, crop back,
-        # then enforce u - d >= 0. Matches reaching into the padding violate it
-        # and are dropped: those points lie outside the right camera's FOV.
-        d_max = self._num_disparities
-        pad_l = cv2.copyMakeBorder(gray_l, 0, 0, d_max, 0, cv2.BORDER_REPLICATE)
-        pad_r = cv2.copyMakeBorder(gray_r, 0, 0, d_max, 0, cv2.BORDER_REPLICATE)
-
-        disp = self._matcher.compute(pad_l, pad_r).astype(np.float32) / 16.0
-        disp = disp[:, d_max:]                       # back to the left frame
-
-        u = np.arange(disp.shape[1], dtype=np.float32)[None, :]
-        disp[u - disp < 0.0] = -1.0                  # outside the right FOV
-        disp[disp <= 0.0] = np.nan
-        return np.ascontiguousarray(disp)
-
-    def _depth_from_disparity(self, disp: np.ndarray) -> np.ndarray:
-        """Z = fx * B / d, clamped to the configured depth window."""
-        with np.errstate(divide='ignore', invalid='ignore'):
-            depth = (self._fx * self._baseline_m) / disp
-        depth[~np.isfinite(depth)] = np.nan
-        depth[(depth < self._near_limit_m) | (depth > self.max_depth_m)] = np.nan
-        return depth.astype(np.float32)
-
-    def _reproject_to_center(self, depth_left: np.ndarray) -> Optional[np.ndarray]:
-        """
-        Forward-warp the left-frame planar depth into the centre camera.
-
-        Each valid left pixel is back-projected to 3D, moved into the centre
-        camera's optical frame and projected through its intrinsics. Several may
-        land on one centre pixel, so a z-buffer keeps the nearest; otherwise
-        background bleeds through foreground at depth discontinuities.
-
-        Two passes. Pass 1 rounds each point to its nearest centre pixel. The
-        shift fx*t/Z varies with depth, so adjacent source pixels can land two
-        columns apart, leaving single-pixel gaps. Pass 2 splats each point over
-        its 2x2 footprint and is consulted only where pass 1 left a hole, so a
-        foreground surface grows by at most one pixel and only into a gap.
-
-        Occlusion holes, wider than one pixel, survive as NaN.
-        """
-        valid = np.isfinite(depth_left)
-        if not valid.any():
-            return None
-
-        vv, uu = np.nonzero(valid)
-        Z = depth_left[valid].astype(np.float64)
-        X = (uu - self._cx) * Z / self._fx
-        Y = (vv - self._cy) * Z / self._fx        # fy == fx for a square pixel
-
-        P_c = self._c_R @ (np.stack([X, Y, Z]) - self._c_t[:, None])   # (3, N)
-        Zc = P_c[2]
-
-        front = Zc > self._near_limit_m           # behind the centre camera: drop
-        if not front.any():
-            return None
-        Zc = Zc[front]
-        uf = self._c_fx * P_c[0][front] / Zc + self._c_cx     # sub-pixel
-        vf = self._c_fx * P_c[1][front] / Zc + self._c_cy
-
-        w, h = self._c_w, self._c_h
-
-        def zbuffer(u_i: np.ndarray, v_i: np.ndarray, z: np.ndarray) -> np.ndarray:
-            inb = (u_i >= 0) & (u_i < w) & (v_i >= 0) & (v_i < h)
-            buf = np.full(h * w, np.inf, dtype=np.float64)
-            if inb.any():
-                np.minimum.at(buf, v_i[inb] * w + u_i[inb], z[inb])
-            return buf
-
-        # Pass 1: nearest pixel, no edge growth.
-        primary = zbuffer(np.rint(uf).astype(np.int32),
-                          np.rint(vf).astype(np.int32), Zc)
-
-        # Pass 2: 2x2 splat, consulted only where pass 1 left a hole.
-        holes = np.isinf(primary)
-        if holes.any():
-            u0 = np.floor(uf).astype(np.int32)
-            v0 = np.floor(vf).astype(np.int32)
-            splat = np.full(h * w, np.inf, dtype=np.float64)
-            for du, dv in ((0, 0), (1, 0), (0, 1), (1, 1)):
-                np.minimum(splat, zbuffer(u0 + du, v0 + dv, Zc), out=splat)
-            primary[holes] = splat[holes]
-
-        primary[np.isinf(primary)] = np.nan
-        return primary.reshape(h, w).astype(np.float32)
-
-    # =========================================================================
-    # Message construction
-    # =========================================================================
-
-    def _camera_info(self, stamp, frame_id: str, is_right: bool,
-                     intrinsics: Optional[Tuple[float, float, float, int, int]] = None
-                     ) -> CameraInfo:
-        """
-        Pinhole CameraInfo for an already-rectified pair.
-
-        The right camera carries the baseline in P[3] = -fx * B, which is how the
-        standard ROS stereo pipeline recovers depth from disparity. Pass
-        `intrinsics` as (fx, cx, cy, width, height) for the centre camera, whose
-        FOV may differ from the pair's.
-        """
-        if intrinsics is None:
-            fx, cx, cy = self._fx, self._cx, self._cy
-            width, height = self._width, self._height
-        else:
-            fx, cx, cy, width, height = intrinsics
-        info = CameraInfo()
-        info.header.stamp = stamp
-        info.header.frame_id = frame_id
-        info.width = width
-        info.height = height
-        info.distortion_model = 'plumb_bob'
-        info.d = [0.0, 0.0, 0.0, 0.0, 0.0]
-        info.k = [fx, 0.0, cx,
-                  0.0, fx, cy,
-                  0.0, 0.0, 1.0]
-        info.r = [1.0, 0.0, 0.0,
-                  0.0, 1.0, 0.0,
-                  0.0, 0.0, 1.0]
-        tx = -fx * self._baseline_m if is_right else 0.0
-        info.p = [fx, 0.0, cx, tx,
-                  0.0, fx, cy, 0.0,
-                  0.0, 0.0, 1.0, 0.0]
-        return info
-
-    def _disparity_msg(self, disp: np.ndarray, stamp, frame_id: str,
-                       fx: Optional[float] = None,
-                       width: Optional[int] = None,
-                       height: Optional[int] = None,
-                       valid_window: bool = True) -> DisparityImage:
-        fx = self._fx if fx is None else fx
-        width = self._width if width is None else width
-        height = self._height if height is None else height
-
-        msg = DisparityImage()
-        msg.header.stamp = stamp
-        msg.header.frame_id = frame_id
-        # Unmatched pixels go out as 0.0: consumers treat anything
-        # <= min_disparity as invalid, and NaN is not portable here.
-        msg.image = self.cv_bridge.cv2_to_imgmsg(
-            np.nan_to_num(disp, nan=0.0), encoding='32FC1')
-        msg.image.header.stamp = stamp
-        msg.image.header.frame_id = frame_id
-        msg.f = float(fx)
-        msg.t = float(self._baseline_m)
-        msg.min_disparity = 0.0
-        msg.max_disparity = float(self._num_disparities)
-        msg.delta_d = 1.0 / 16.0    # SGBM's sub-pixel quantum
-        if valid_window and not self.fill_left_border:
-            # The leftmost numDisparities columns have no search window in the
-            # right image and can never be matched.
-            msg.valid_window = RegionOfInterest(
-                x_offset=self._num_disparities, y_offset=0,
-                width=max(0, width - self._num_disparities),
-                height=height, do_rectify=False)
-        else:
-            # With the border recovered, and after reprojection, validity is
-            # per-pixel (d <= u), not a column range. Test the value, not this
-            # rectangle.
-            msg.valid_window = RegionOfInterest(
-                x_offset=0, y_offset=0, width=width, height=height,
-                do_rectify=False)
-        return msg
-
-    # Shadow-mask colours.
-    SHADOW_RGB = (0, 0, 0)          # Any surface the sun does not reach
-    SUNLIT_RGB = (40, 120, 255)     # Ground in sunlight
-    SKY_RGB = (0, 0, 0)             # Untagged (sky)
-    OTHER_RGB = (128, 128, 128)     # Rocks, rover in sunlight
-    ROVER_SHADOW_RGB = (255, 140, 0)  # The rover's own cast shadow
-
-    # Ground-truth depth beyond this (metres) has no surface: the sky (+Inf).
-    GROUND_TRUTH_FAR_M = 1.0e5
-
-    # Shadow class ids (shadow_label, mono8), for training.
-    SHADOW_IDS = {0: 'sky', 1: 'sunlit_ground', 2: 'shadowed_ground',
-                  3: 'sunlit_object', 4: 'shadowed_object', 5: 'rover_shadow'}
-
-    def _split_shadow_mask(self, frame: np.ndarray
-                           ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Splits a mask frame from Terrain Studio's mask material into the shadow
-        feed (colours), the shadow label image (SHADOW_IDS) and the object
-        mask. The lowest bit of green flags ground, the lowest bit of blue any
-        surface without sunlight (ground, rocks, rover), the lowest bit of red
-        the rover's own shadow (with blue) or the sky (without blue: sky, sun's
-        disc, glare); all
-        are cleared from the object mask. The sun stays sky in the shadow feeds.
-        """
-        # One 4-bit code per pixel (ground | shadow | red flag | sky), then
-        # two table lookups: ~3x faster than masked writes per class.
-        objects = frame & np.uint8(0xFE)
-        r, g, b = frame[:, :, 0], frame[:, :, 1], frame[:, :, 2]
-        sky = (objects[:, :, 0] | objects[:, :, 1] | objects[:, :, 2]) == 0
-        code = (g & 1) | ((b & 1) << 1) | ((r & 1) << 2) | (sky.view(np.uint8) << 3)
-        return (np.take(self._SHADOW_PALETTE, code, axis=0),
-                np.take(self._SHADOW_LABELS, code), objects)
-
-    @classmethod
-    def _shadow_tables(cls) -> Tuple[np.ndarray, np.ndarray]:
-        """Colour and SHADOW_IDS label for each code of _split_shadow_mask."""
-        palette = np.empty((16, 3), np.uint8)
-        labels = np.empty(16, np.uint8)
-        for code in range(16):
-            ground, shadow, red, sky = (code >> bit & 1 for bit in range(4))
-            rover, sun = red & shadow, red & (1 - shadow)
-            sky = sky | sun                 # Red without blue: the sky (sun included)
-            colour = cls.SKY_RGB if sky else cls.OTHER_RGB
-            colour = cls.SUNLIT_RGB if ground else colour
-            colour = cls.SHADOW_RGB if shadow else colour
-            palette[code] = cls.ROVER_SHADOW_RGB if rover else colour
-            label = 0 if sky else (1 if ground else 3) + shadow
-            labels[code] = 5 if rover else label
-        return palette, labels
 
     def _wanted(self, key: str) -> bool:
         """
@@ -872,36 +278,28 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         return pub is not None and pub.get_subscription_count() > 0
 
     def _publish_image(self, key: str, img: np.ndarray, encoding: str,
-                       stamp, frame_id: str) -> None:
+                       stamp, frame: str) -> None:
         if not self._wanted(key):
             return
         msg = self.cv_bridge.cv2_to_imgmsg(img, encoding=encoding)
         msg.header.stamp = stamp
-        msg.header.frame_id = frame_id
+        msg.header.frame_id = frame
         self._pubs[key].publish(msg)
 
-    def _publish_color(self, key: str, rgb: np.ndarray, stamp, frame_id: str) -> None:
+    def _publish_color(self, key: str, rgb: np.ndarray, stamp, frame: str) -> None:
         """Raw rgb8 plus a JPEG-compressed copy, on <key> and <key>_compressed."""
-        self._publish_image(key, rgb, 'rgb8', stamp, frame_id)
+        self._publish_image(key, rgb, 'rgb8', stamp, frame)
         if not self._wanted(key + '_compressed'):
             return
 
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         msg = self.cv_bridge.cv2_to_compressed_imgmsg(bgr, dst_format='jpg')
         msg.header.stamp = stamp
-        msg.header.frame_id = frame_id
+        msg.header.frame_id = frame
         self._pubs[key + '_compressed'].publish(msg)
 
-    def _colourise(self, values: np.ndarray, vmax: float) -> np.ndarray:
-        """Scalar field -> JET bgr8, invalid pixels black."""
-        norm = np.nan_to_num(values, nan=0.0) / max(vmax, 1e-6)
-        vis = cv2.applyColorMap((np.clip(norm, 0.0, 1.0) * 255).astype(np.uint8),
-                                cv2.COLORMAP_JET)
-        vis[~np.isfinite(values)] = 0
-        return np.ascontiguousarray(vis)
-
     # =========================================================================
-    # Timer callback
+    # Timer callbacks
     # =========================================================================
 
     def read_stereo_pair(self) -> None:
@@ -921,47 +319,42 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                 return
             left, right, center, center_mask, depth_gt_cm, stamp_ns = captured
             if stamp_ns:                     # capture time from Unreal (simulation clock)
-                stamp = _ros_time(stamp_ns)
+                stamp = ros_time(stamp_ns)
+            rig, matcher = self._rig, self._matcher
             timer.mark('frames')
-            disp = self._compute_disparity(left, right)
-            depth_left = self._depth_from_disparity(disp)
+            disp = matcher.disparity(left, right)
+            depth_left = matcher.depth(disp)
             timer.mark('matching')
 
             # The eyes carry colour only: depth is a product of the pair.
+            eye = (rig.fx, rig.cx, rig.cy, rig.width, rig.height)
             self._publish_color('left_color', left, stamp, f_left)
             self._publish_color('right_color', right, stamp, f_right)
-            self._pubs['left_info'].publish(self._camera_info(stamp, f_left, False))
-            self._pubs['right_info'].publish(self._camera_info(stamp, f_right, True))
+            self._pubs['left_info'].publish(camera_info(stamp, f_left, eye))
+            self._pubs['right_info'].publish(camera_info(stamp, f_right, eye, rig.baseline_m))
 
             # The central camera is the RGB-D sensor this rig simulates.
             self._publish_color('center_color', center, stamp, f_center)
-            c_intr = (self._c_fx, self._c_cx, self._c_cy, self._c_w, self._c_h)
-            self._pubs['center_info'].publish(
-                self._camera_info(stamp, f_center, False, intrinsics=c_intr))
+            self._pubs['center_info'].publish(camera_info(stamp, f_center, rig.center_intrinsics))
             timer.mark('colour')
 
             # Warped onto the central pixel grid, so depth, disparity and RGB
             # all overlay one another.
-            depth_c = self._reproject_to_center(depth_left)
+            depth_c = geo.reproject_to_center(depth_left, rig, matcher.near_limit_m)
             if depth_c is not None:
-                depth_pub = np.clip(depth_c, 0.0, self.depth_max_distance)
-                depth_pub[~np.isfinite(depth_c)] = np.nan
+                depth_pub = geo.clip_depth(depth_c, self.depth_max_distance)
                 self._publish_image('center_depth', depth_pub, '32FC1', stamp, f_center)
                 if self._wanted('center_depth_vis'):
                     self._publish_image('center_depth_vis',
-                                        self._colourise(depth_pub, self.depth_max_distance),
+                                        geo.colourise(depth_pub, self.depth_max_distance),
                                         'bgr8', stamp, f_center)
-
-                # Disparity a virtual pair would see from the centre, using the
-                # central focal length: d = fx_c * B / Z.
                 if self._wanted('center_disparity'):
-                    with np.errstate(divide='ignore', invalid='ignore'):
-                        disp_c = (self._c_fx * self._baseline_m) / depth_c
-                    disp_c[~np.isfinite(depth_c)] = np.nan
-                    self._pubs['center_disparity'].publish(
-                        self._disparity_msg(disp_c, stamp, f_center, fx=self._c_fx,
-                                            width=self._c_w, height=self._c_h,
-                                            valid_window=False))
+                    # With the border recovered, and after reprojection, validity
+                    # is per pixel (d <= u): the valid window is the whole image.
+                    self._pubs['center_disparity'].publish(disparity_msg(
+                        self.cv_bridge, geo.center_disparity(depth_c, rig), stamp, f_center,
+                        rig.c_fx, rig.baseline_m, matcher.num_disparities,
+                        rig.c_width, rig.c_height))
             timer.mark('depth')
 
             if depth_gt_cm is not None and (self._wanted('center_depth_gt')
@@ -972,33 +365,29 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                         f'the central image {center.shape[1]}x{center.shape[0]}: skipped.',
                         throttle_duration_sec=15.0)
                 else:
-                    depth_gt = depth_gt_cm / 100.0                       # metres
-                    depth_gt[~(depth_gt < self.GROUND_TRUTH_FAR_M)] = np.inf  # sky
-                    self._publish_image('center_depth_gt', depth_gt.astype(np.float32),
-                                        '32FC1', stamp, f_center)
+                    depth_gt = geo.ground_truth_depth_m(depth_gt_cm)
+                    self._publish_image('center_depth_gt', depth_gt, '32FC1', stamp, f_center)
                     if self._wanted('center_depth_gt_vis'):
                         shown = np.where(np.isfinite(depth_gt),
                                          np.clip(depth_gt, 0.0, self.depth_max_distance), np.nan)
                         self._publish_image('center_depth_gt_vis',
-                                            self._colourise(shown, self.depth_max_distance),
+                                            geo.colourise(shown, self.depth_max_distance),
                                             'bgr8', stamp, f_center)
             timer.mark('ground truth')
 
             if center_mask is not None:
                 if self.enable_shadow_mask:
-                    shadow, labels, center_mask = self._split_shadow_mask(center_mask)
+                    shadow, labels, center_mask = masks.split_shadow_mask(center_mask)
                     self._publish_image('center_shadow_mask', shadow, 'rgb8',
                                         stamp, f_center)
                     self._publish_image('center_shadow_label', labels, 'mono8',
                                         stamp, f_center)
-                    msg_ids = String()
-                    msg_ids.data = self._shadow_ids_json
-                    self._pubs['center_shadow_label_mapping'].publish(msg_ids)
+                    self._pubs['center_shadow_label_mapping'].publish(
+                        String(data=self._shadow_ids_json))
                 self._publish_image('center_object_mask', center_mask, 'rgb8',
                                     stamp, f_center)
-                msg_map = String()
-                msg_map.data = self._cached_color_map_json
-                self._pubs['center_object_mask_mapping'].publish(msg_map)
+                self._pubs['center_object_mask_mapping'].publish(
+                    String(data=self._cached_color_map_json))
                 self._pubs['center_object_mask_classes'].publish(String(data=self._mask_classes_json))
             timer.mark('masks')
             timer.end()
@@ -1020,24 +409,24 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         if not self._is_active or self._stream is None:
             return
         stamp = self.get_clock().now().to_msg()
-        for cam_id, key, frame, hfov in self._extras:
+        for cam, frame in self._extras:
             try:
-                got = self._stream.latest(cam_id)
-                if got is None or got[0] == self._extra_last_fid.get(cam_id):
+                got = self._stream.latest(cam.cam_id)
+                if got is None or got[0] == self._extra_last_fid.get(cam.cam_id):
                     continue
                 fid, rgb, stamp_ns = got
                 if rgb.ndim != 3:                   # a depth (R32F) stream: not a colour camera
                     continue
-                self._extra_last_fid[cam_id] = fid
-                shot = _ros_time(stamp_ns) if stamp_ns else stamp      # capture time when known
-                self._publish_color(f'{key}_color', rgb, shot, frame)
-                if hfov:
+                self._extra_last_fid[cam.cam_id] = fid
+                shot = ros_time(stamp_ns) if stamp_ns else stamp      # capture time when known
+                self._publish_color(f'{cam.key}_color', rgb, shot, frame)
+                if cam.hfov_deg:
                     h, w = rgb.shape[:2]
-                    fx = (w / 2.0) / math.tan(math.radians(hfov) / 2.0)
-                    self._pubs[f'{key}_info'].publish(self._camera_info(
-                        shot, frame, False, intrinsics=(fx, w / 2.0, h / 2.0, w, h)))
+                    fx = geo.focal_from_hfov(w, cam.hfov_deg)
+                    self._pubs[f'{cam.key}_info'].publish(
+                        camera_info(shot, frame, (fx, w / 2.0, h / 2.0, w, h)))
             except Exception as exc:
-                self.get_logger().error(f'Extra camera {cam_id} publish failed: {exc}',
+                self.get_logger().error(f'Extra camera {cam.cam_id} publish failed: {exc}',
                                         throttle_duration_sec=10.0)
 
     # =========================================================================
@@ -1112,18 +501,15 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                     f'Object mask served from stream cam id '
                     f'{self.mask_camera_id} (UnrealStereoCam segmentation '
                     f'capture).')
-        self._baseline_m = self.baseline_m_param
-        self._swap_lr = False
         # Intrinsics need the frame size; solved when the first frame lands.
-        self._matcher = None
-        self._width = self._height = 0
+        self._rig = self._matcher = None
 
         L, R, C = self.left_topic, self.right_topic, self.center_topic
 
         # Topic namespaces are hierarchical; TF frame names cannot contain '/'.
-        self.left_frame = _frame_id(L)
-        self.right_frame = _frame_id(R)
-        self.center_frame = _frame_id(C)
+        self.left_frame = frame_id(L)
+        self.right_frame = frame_id(R)
+        self.center_frame = frame_id(C)
 
         def pub(key, msg_type, topic):
             self._pubs[key] = self.create_lifecycle_publisher(msg_type, topic, 10)
@@ -1149,8 +535,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                 pub('center_shadow_mask', RosImage, f'{C}/shadow_mask')
                 pub('center_shadow_label', RosImage, f'{C}/shadow_label')
                 pub('center_shadow_label_mapping', String, f'{C}/shadow_label_mapping')
-                self._shadow_ids_json = json.dumps(
-                    {str(k): v for k, v in self.SHADOW_IDS.items()})
+                self._shadow_ids_json = masks.shadow_ids_json()
             # The colours are baked into the Unreal post-process material from the
             # same class file, so publishing it tells a consumer what each id and
             # colour in the mask represents.
@@ -1167,21 +552,18 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         # Extra mono cameras: "<cam_id>:<topic>[:<hfov_deg>]".
         self._extras, self._extra_last_fid = [], {}
         for entry in self.get_parameter('extra_cameras').value or []:
-            parts = [x.strip() for x in str(entry).split(':')]
-            if len(parts) not in (2, 3) or not parts[0].lstrip('-').isdigit() or not parts[1]:
+            cam = parse_extra_camera(entry)
+            if cam is None:
                 self.get_logger().warn(f'extra_cameras: ignored "{entry}" '
                                        '(expected "<cam_id>:<topic>[:<hfov_deg>]").')
                 continue
-            cam_id, topic = int(parts[0]), parts[1].strip('/')
-            hfov = float(parts[2]) if len(parts) == 3 else None
-            key = f'extra_{cam_id}'
-            pub(f'{key}_color', RosImage, f'{topic}/image_color')
-            pub(f'{key}_color_compressed', CompressedImage, f'{topic}/image_color/compressed')
-            if hfov:
-                pub(f'{key}_info', CameraInfo, f'{topic}/camera_info')
-            self._extras.append((cam_id, key, _frame_id(topic), hfov))
-            self.get_logger().info(f'Extra camera: stream cam id {cam_id} -> {topic}/image_color'
-                                   f'{f" (hfov {hfov:g} deg)" if hfov else ""}.')
+            pub(f'{cam.key}_color', RosImage, f'{cam.topic}/image_color')
+            pub(f'{cam.key}_color_compressed', CompressedImage, f'{cam.topic}/image_color/compressed')
+            if cam.hfov_deg:
+                pub(f'{cam.key}_info', CameraInfo, f'{cam.topic}/camera_info')
+            self._extras.append((cam, frame_id(cam.topic)))
+            self.get_logger().info(f'Extra camera: stream cam id {cam.cam_id} -> {cam.topic}/image_color'
+                                   f'{f" (hfov {cam.hfov_deg:g} deg)" if cam.hfov_deg else ""}.')
 
         self._stream = FrameStreamReceiver(
             self.get_parameter('stream_bind_ip').value,
@@ -1192,7 +574,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self._stream.known_ids = {i for i in (
             self.left_camera_id, self.right_camera_id, self.center_camera_id,
             self.mask_camera_id if self.enable_object_mask else -1,
-            self.depth_gt_camera_id) if i is not None and i >= 0} | {e[0] for e in self._extras}
+            self.depth_gt_camera_id) if i is not None and i >= 0} | {c.cam_id for c, _ in self._extras}
         self._stream.start()
 
         self._timer = self.create_timer(1.0 / hz, self.read_stereo_pair)
@@ -1241,11 +623,6 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self._is_active = False
         self._release()
         return TransitionCallbackReturn.SUCCESS
-
-
-# Shadow-split lookup tables, built once from the class colours.
-LifecycleStereoDepth._SHADOW_PALETTE, LifecycleStereoDepth._SHADOW_LABELS = \
-    LifecycleStereoDepth._shadow_tables()
 
 
 def main():

@@ -5,7 +5,6 @@ the cooperative stop used by the node's planning thread.
 """
 import os
 import time
-import types
 
 import cv2
 import numpy as np
@@ -129,11 +128,10 @@ def test_should_stop_cancels_a_search(planner, maps):
 
 
 def test_goal_snapping(maps):
-    """_drivable_goal: drivable goals stay, goals on obstacles move to a reachable cell nearby."""
-    from src.component_path_planner import GOAL_SNAP_RADIUS_CELLS, LifecyclePlannerController
+    """drivable_goal: drivable goals stay, goals on obstacles move to a reachable cell nearby."""
+    from src.mission import GOAL_SNAP_RADIUS_CELLS, drivable_goal
     _, obstacles, regions = maps
-    me = types.SimpleNamespace(obstacleMap=obstacles, freeRegions=regions)
-    snap = lambda goal: LifecyclePlannerController._drivable_goal(me, goal, START)
+    snap = lambda goal: drivable_goal(obstacles, regions, goal, START)
     assert snap([640, 560]) == [640, 560]
     blocked = np.argwhere(obstacles == 1)
     near = blocked[np.argmin(np.hypot(blocked[:, 1] - START[0], blocked[:, 0] - START[1]))]
