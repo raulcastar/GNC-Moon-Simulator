@@ -108,6 +108,15 @@ public:
 	UPROPERTY(EditAnywhere, Category = "StereoCam", meta = (ClampMin = "0.5", ClampMax = "30"))
 	float SendHz = 2.0f;
 
+	// Render the captures only when a frame is sent (SendHz), instead of every
+	// engine frame. Each capture is a full scene render prepared on the render
+	// thread, and most of those were never sent: at ~13 engine frames/s and
+	// SendHz 5, about 60% of them. The captures keep their rendering state
+	// (exposure, temporal AA, Lumen) between renders. Off: every frame, as
+	// before.
+	UPROPERTY(EditAnywhere, Category = "StereoCam")
+	bool bCaptureOnDemand = true;
+
 	// The three navcam SceneCapture2Ds, selected by name from a dropdown
 	// listing every SceneCapture2D in reach (this blueprint's components tree,
 	// or the world when placed in a level). Resolved at BeginPlay with a log

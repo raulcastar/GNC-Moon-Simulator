@@ -227,13 +227,16 @@ void UUnrealStereoCam::ResolveCapture(const FName& Name, int32 CamId)
 		       CaptureWidth, CaptureHeight, *Name.ToString());
 	}
 
-	// Renders every frame on the render thread — no game-thread stall — and
-	// is read back at SendHz. An on-demand variant (CaptureSceneDeferred,
-	// triggered only at SendHz) was tried to cut the GPU cost further, but
-	// its readback one tick later captured a stale buffer regardless of the
-	// scene: a GPU-pipeline-depth timing bug, not yet solved. Revisit only
-	// with a proper GPU fence instead of a fixed one-tick delay.
-	Found->bCaptureEveryFrame = true;
+	// With bCaptureOnDemand, rendered only when a frame is sent: TickComponent
+	// calls CaptureScene(), which queues the render on the render thread, and
+	// the readback command is queued right after it, so the render thread runs
+	// them in order and the copy reads this render (as UnrealLidarCam does). An
+	// earlier variant (CaptureSceneDeferred, read back one tick later) read a
+	// stale buffer; the difference is the readback queued behind the render.
+	// The rendering state persists between renders, so exposure, temporal AA
+	// and Lumen keep their history. Otherwise: rendered every engine frame.
+	Found->bCaptureEveryFrame = !bCaptureOnDemand;
+	Found->bAlwaysPersistRenderingState = true;
 	Found->bCaptureOnMovement = false;
 	Found->CaptureSource = SCS_FinalColorLDR;
 
@@ -311,8 +314,34 @@ void UUnrealStereoCam::AddCenterDepthCapture()
 	RT->UpdateResourceImmediate(true);
 	Depth->TextureTarget = RT;
 	Depth->CaptureSource = SCS_SceneDepth;
-	Depth->bCaptureEveryFrame = true;
+	Depth->bCaptureEveryFrame = !bCaptureOnDemand;
+	Depth->bAlwaysPersistRenderingState = true;
 	Depth->bCaptureOnMovement = false;
+
+	// Depth only: skip all the shading that does not change it (lighting,
+	// shadows, global illumination, reflections, fog, decals, translucency,
+	// post-processing). Decals and translucent particles write no depth.
+	FEngineShowFlags& F = Depth->ShowFlags;
+	F.SetLighting(false);
+	F.SetDynamicShadows(false);
+	F.SetGlobalIllumination(false);
+	F.SetLumenGlobalIllumination(false);
+	F.SetLumenReflections(false);
+	F.SetReflectionEnvironment(false);
+	F.SetScreenSpaceReflections(false);
+	F.SetAmbientOcclusion(false);
+	F.SetDistanceFieldAO(false);
+	F.SetSkyLighting(false);
+	F.SetFog(false);
+	F.SetVolumetricFog(false);
+	F.SetAtmosphere(false);
+	F.SetDecals(false);
+	F.SetTranslucency(false);
+	F.SetParticles(false);
+	F.SetBloom(false);
+	F.SetEyeAdaptation(false);
+	F.SetMotionBlur(false);
+	F.SetPostProcessing(false);
 
 	FStereoCamResolved Entry;
 	Entry.Capture = Depth;
@@ -396,6 +425,16 @@ void UUnrealStereoCam::TickComponent(float DeltaTime, ELevelTick TickType,
 	if (Now - LastSendTime >= 1.0 / FMath::Max(SendHz, 0.5f))
 	{
 		LastSendTime = Now;
+		if (bCaptureOnDemand)
+		{
+			for (FStereoCamResolved& Cam : Active)
+			{
+				if (Cam.Capture && Cam.Capture->TextureTarget)
+				{
+					Cam.Capture->CaptureScene();     // Queued before PumpCaptures' readback
+				}
+			}
+		}
 		PumpCaptures();
 	}
 }
