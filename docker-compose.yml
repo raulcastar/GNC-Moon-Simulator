@@ -149,7 +149,7 @@ services:
   debug_cli:
     build:
       context: ./docker
-      dockerfile: base.Dockerfile
+      dockerfile: tools.Dockerfile           # base + rviz2 / rqt
     image: gnc_moon_simulator/debug_cli:dev
     network_mode: host
     ipc: host
