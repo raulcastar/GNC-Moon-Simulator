@@ -12,7 +12,7 @@ set -uo pipefail
 cd "$(dirname "$0")"
 
 # package (= its compose service)
-PACKAGES=(component_path_planner component_stereo_depth component_lidar mission_control_dashboard)
+PACKAGES=(component_path_planner component_stereo_depth component_lidar component_rover_leo_raph component_imu mission_control_dashboard)
 if [[ $# -gt 0 ]]; then
     PACKAGES=("$1"); shift
 fi

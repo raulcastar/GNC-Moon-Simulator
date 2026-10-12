@@ -66,6 +66,32 @@ def _q_to_euler(q):
     return math.degrees(roll), math.degrees(pitch), math.degrees(yaw)
 
 
+def _q_unrotate(q, v):
+    """The world vector v expressed in the frame q (rotates v by q's inverse)."""
+    x, y, z, w = _q_mul(_q_mul(_q_inv(q), (v[0], v[1], v[2], 0.0)), q)
+    return (x, y, z)
+
+
+# Optional telemetry fields: the physics body's velocity, world frame, Unreal
+# axes. vx, vy, vz in cm/s (Get Physics Linear Velocity); wx, wy, wz in rad/s
+# (Get Physics Angular Velocity In Radians).
+_TWIST_KEYS = ('vx', 'vy', 'vz', 'wx', 'wy', 'wz')
+
+
+def twist_from_telemetry(transform: dict, orientation):
+    """
+    Body-frame (base_link) linear and angular velocity in ROS units from the
+    telemetry's world velocities, with orientation the odom attitude (x, y, z,
+    w). The world axes map as the position does (x negated). Unreal is
+    left-handed, so an angular velocity also flips sign with that mirror:
+    (wx, -wy, -wz). A yaw rate turning Unreal's X towards +Y is a negative
+    heading rate, as heading = -yaw - 90.
+    """
+    v_world = (-transform['vx'] / 100.0, transform['vy'] / 100.0, transform['vz'] / 100.0)
+    w_world = (transform['wx'], -transform['wy'], -transform['wz'])
+    return _q_unrotate(orientation, v_world), _q_unrotate(orientation, w_world)
+
+
 class LifecycleRoverController(rclpy.lifecycle.Node):
     """
     Lifecycle node handling asynchronous UDP communication with Unreal Engine.
@@ -483,6 +509,18 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         else:
             # Pure-yaw fallback: flat-ground-correct, ignores body tilt.
             odom_msg.pose.pose.orientation = self.euler_to_quaternion(0.0, 0.0, heading_deg)
+
+        # Velocities, when the Blueprint sends them: straight from the physics
+        # body, so the IMU differentiates them once instead of the pose twice.
+        # A non-zero twist covariance marks the twist as measured; without the
+        # fields it stays all zero (unknown), as before.
+        if all(k in transform for k in _TWIST_KEYS):
+            o = odom_msg.pose.pose.orientation
+            lin, ang = twist_from_telemetry(transform, (o.x, o.y, o.z, o.w))
+            t = odom_msg.twist.twist
+            t.linear.x, t.linear.y, t.linear.z = lin
+            t.angular.x, t.angular.y, t.angular.z = ang
+            odom_msg.twist.covariance = [1e-4 if i % 7 == 0 else 0.0 for i in range(36)]
 
         self._pub_odom.publish(odom_msg)
 

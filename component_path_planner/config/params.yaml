@@ -11,7 +11,7 @@ lc_component_path_planner:
     soil_map_path: "maps/procedural_lunar_terrain_1_soilMap_edges_0_2.csv"
     global_res: 1.0
     slope_threshold: 15.0         # [deg] steeper cells are impassable
-    max_tilt_deg: 15.0            # [deg] abort the goal above this body tilt
+    max_tilt_deg: 25.0            # [deg] abort the goal above this body tilt (static tip-over: ~58 deg)
 
     # ---------------------------------------------------------
     # Planning & Control Tuning
@@ -20,10 +20,10 @@ lc_component_path_planner:
     lookahead_dist: 4.0           # Distance to look ahead on the global path
     max_speed: 0.5                # [m/s] below the rover's ~0.6 m/s traction limit
     min_speed: 0.0                # [m/s]
-    max_accel: 0.6                # [m/s^2] matches the rover node's accel limit
+    max_accel: 0.1                # [m/s^2] matches the rover node's accel limit (Moon gravity)
     max_yaw_rate_deg: 20.0        # Degrees per second
-    max_delta_yaw_rate_deg: 20.0  # Degrees per second squared
-    v_resolution: 0.02            # sized to keep a DWA cycle ~10 ms
+    max_delta_yaw_rate_deg: 17.0  # Degrees per second squared (0.3 rad/s^2, the rover node's limit)
+    v_resolution: 0.005           # < max_accel * dt (0.01), or only v = 0 is sampled; 4 samples, a DWA cycle ~10 ms
     yaw_rate_resolution_deg: 0.5
 
     # DWA Prediction & Costs

@@ -15,10 +15,14 @@ the way a strap-down IMU would report it:
                          gravity, i.e. what an accelerometer physically reads.
                          At rest and level this is (0, 0, +g).
 
-Everything is a finite difference of the pose, so an EMA smoothing factor and
-optional Gaussian noise make the signal behave like hardware instead of a
-perfect analytic value. A pose gap (e.g. an Unreal Play/Stop teleport) resets
-the differentiator so it does not emit a huge spurious spike.
+When the rover Blueprint also sends the physics body's velocities, the rover
+node fills odom's twist (marked by a non-zero twist covariance). The gyro is
+then that angular velocity, and the acceleration is one difference of that
+velocity rather than two of the position. Without them, everything is a finite
+difference of the pose. Either way an EMA smoothing factor and optional
+Gaussian noise make the signal behave like hardware instead of a perfect
+analytic value. A pose gap (e.g. an Unreal Play/Stop teleport) resets the
+differentiator so it does not emit a huge spurious spike.
 
 Publishes: imu/data (sensor_msgs/Imu) in frame `imu_frame_id`.
 """
@@ -85,6 +89,7 @@ class LifecycleImu(rclpy.lifecycle.Node):
         self._v_prev: Optional[np.ndarray] = None
         self._accel_ema = np.zeros(3)
         self._gyro_ema = np.zeros(3)
+        self._measured = None              # odom twist measured? (logged on change)
 
         self.declare_parameters(
             namespace='',
@@ -166,7 +171,20 @@ class LifecycleImu(rclpy.lifecycle.Node):
         o = msg.pose.pose.orientation
         q = (o.x, o.y, o.z, o.w)
 
-        gyro = np.zeros(3)
+        # A twist with a non-zero covariance was measured by Unreal's physics
+        # (the rover node fills it when the telemetry carries velocities): the
+        # gyro is read from it, and the velocity is differentiated only once.
+        tw = msg.twist.twist
+        measured = any(msg.twist.covariance)
+        if measured != self._measured:
+            self._measured = measured
+            self.get_logger().info(
+                'IMU from the velocities of Unreal\'s physics (odom twist).' if measured else
+                'IMU from the odom pose (no velocities in the telemetry): differentiated twice.')
+        v_measured = (np.array(q_rot(q, (tw.linear.x, tw.linear.y, tw.linear.z)))
+                      if measured else None)
+
+        gyro = np.array([tw.angular.x, tw.angular.y, tw.angular.z]) if measured else np.zeros(3)
         accel_body = None
 
         if self._t_prev is not None:
@@ -176,14 +194,15 @@ class LifecycleImu(rclpy.lifecycle.Node):
                 # differentiator so we never emit a giant spurious spike.
                 self._reset()
             else:
-                # Angular velocity: body-frame rates from the quaternion delta.
-                dq = q_mul(q_conj(self._q_prev), q)
-                if dq[3] < 0.0:
-                    dq = tuple(-c for c in dq)          # shortest arc
-                gyro = np.array([2.0 * dq[0] / dt, 2.0 * dq[1] / dt, 2.0 * dq[2] / dt])
+                if not measured:
+                    # Angular velocity: body-frame rates from the quaternion delta.
+                    dq = q_mul(q_conj(self._q_prev), q)
+                    if dq[3] < 0.0:
+                        dq = tuple(-c for c in dq)          # shortest arc
+                    gyro = np.array([2.0 * dq[0] / dt, 2.0 * dq[1] / dt, 2.0 * dq[2] / dt])
 
                 # World-frame velocity, then acceleration.
-                v = (p - self._pos_prev) / dt
+                v = v_measured if measured else (p - self._pos_prev) / dt
                 if self._v_prev is not None:
                     a_world = (v - self._v_prev) / dt
                     # Accelerometer measures specific force = proper accel − gravity.
@@ -191,6 +210,8 @@ class LifecycleImu(rclpy.lifecycle.Node):
                     f_world = a_world - g_world
                     accel_body = np.array(q_rot(q_conj(q), (f_world[0], f_world[1], f_world[2])))
                 self._v_prev = v
+        if measured:
+            self._v_prev = v_measured          # valid from the first sample, even after a gap
 
         self._t_prev = t
         self._pos_prev = p
