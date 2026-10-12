@@ -4,8 +4,14 @@ lc_component_stereo_depth:
     # and timers follow Unreal's time, and pause when Play is not running.
     use_sim_time: true
 
-    debug_mode:                           true
-    image_reading_hz_rate:                 1.0
+    # Per-frame log of matching coverage, for diagnosis (the read cycle's rate and
+    # timing are logged every 30 s regardless).
+    debug_mode:                           false
+    # How often the node checks for a new stereo pair. Each new pair is processed
+    # once (~110 ms); a check that finds nothing new returns at once. Polling
+    # faster than the UnrealStereoCam SendHz (5 in the level) is what lets every
+    # pair be taken: at an equal rate the two beat and about a third are missed.
+    image_reading_hz_rate:                10.0
 
     # ── Frame stream ──────────────────────────────────────────────────────────
     # Frames are pushed by the UnrealStereoCam plugin (unreal/UnrealStereoCam/)

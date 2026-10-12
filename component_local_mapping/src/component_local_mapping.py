@@ -17,6 +17,7 @@ import bisect
 import collections
 import math
 import threading
+import time
 from typing import Optional, Tuple
 
 import numpy as np
@@ -90,6 +91,50 @@ def _rot_to_quat(R: np.ndarray) -> Tuple[float, float, float, float]:
 _ROT_Z_MINUS_90 = np.array([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
 
 
+
+class CycleTimer:
+    """
+    Time spent per processing cycle, by stage, summarised in one log line every
+    `period` seconds (wall clock): cycles per second and the mean milliseconds
+    of each stage. `start()` opens a cycle, `mark(stage)` closes the stage
+    running since the previous mark, `end()` closes the cycle.
+    """
+
+    def __init__(self, logger, label: str, period: float = 30.0):
+        self._log, self._label, self._period = logger, label, period
+        self._sums = collections.OrderedDict()
+        self._cycles, self._total, self._worst = 0, 0.0, 0.0
+        self._since = time.monotonic()
+        self._t0 = self._last = None
+
+    def start(self) -> None:
+        self._t0 = self._last = time.perf_counter()
+
+    def mark(self, stage: str) -> None:
+        if self._last is None:
+            return
+        now = time.perf_counter()
+        self._sums[stage] = self._sums.get(stage, 0.0) + (now - self._last)
+        self._last = now
+
+    def end(self) -> None:
+        if self._t0 is None:
+            return
+        spent = time.perf_counter() - self._t0
+        self._t0 = self._last = None
+        self._cycles += 1
+        self._total += spent
+        self._worst = max(self._worst, spent)
+        elapsed = time.monotonic() - self._since
+        if elapsed >= self._period:
+            n = self._cycles
+            stages = ', '.join(f'{k} {1000 * v / n:.0f}' for k, v in self._sums.items())
+            self._log.info(f'{self._label}: {n / elapsed:.2f} cycles/s, {1000 * self._total / n:.0f} ms per '
+                           f'cycle (worst {1000 * self._worst:.0f})' + (f' | ms: {stages}' if stages else ''))
+            self._sums.clear()
+            self._cycles, self._total, self._worst = 0, 0.0, 0.0
+            self._since = time.monotonic()
+
 class LifecycleLocalMapping(rclpy.lifecycle.Node):
     """
     Local DEM built from a single RealSense-style depth camera.
@@ -122,6 +167,7 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
 
     def __init__(self, node_name: str, **kwargs):
         super().__init__(node_name, **kwargs)
+        self._cycle_timer = CycleTimer(self.get_logger(), 'Local mapping (per depth frame)')
 
         self._pub_elevation_raw:  Optional[Publisher] = None
         self._pub_elevation_grid: Optional[Publisher] = None
@@ -618,6 +664,14 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
     def _depth_callback(self, msg: RosImage) -> None:
         if not self._is_active:
             return
+        # Rate and time per depth frame (the DEM is built here), logged every 30 s.
+        self._cycle_timer.start()
+        try:
+            self._process_depth(msg)
+        finally:
+            self._cycle_timer.end()
+
+    def _process_depth(self, msg: RosImage) -> None:
 
         try:
             depth_m = self.cv_bridge.imgmsg_to_cv2(msg, desired_encoding='32FC1')

@@ -43,6 +43,7 @@ class LifecycleSimClock(rclpy.lifecycle.Node):
 
     def __init__(self, node_name: str, **kwargs):
         super().__init__(node_name, **kwargs)
+        self._rate_since, self._received, self._published = None, 0, 0
         self.declare_parameter('bind_ip', '0.0.0.0')
         self.declare_parameter('port', 3008)
         # Seconds without a record before the log says the simulation stopped.
@@ -154,10 +155,22 @@ class LifecycleSimClock(rclpy.lifecycle.Node):
                 if version != 1:
                     continue
                 last_rx = time.monotonic()
+                self._count_record(last_rx)
                 if not running:
                     running = True
                     self.get_logger().info(f'Simulation clock running: sim time {sim_ns * 1e-9:.3f} s.')
                 self._publish(sim_ns)
+
+    def _count_record(self, now: float) -> None:
+        """Logs every 30 s how many records arrive and how many go out as /clock."""
+        if self._rate_since is None:
+            self._rate_since, self._received, self._published = now, 0, 0
+        self._received += 1
+        elapsed = now - self._rate_since
+        if elapsed >= 30.0:
+            self.get_logger().info(f'Clock: {self._received / elapsed:.1f} records/s from Unreal, '
+                                   f'{self._published / elapsed:.1f} /clock messages/s published.')
+            self._rate_since, self._received, self._published = now, 0, 0
 
     def _publish(self, sim_ns: int) -> None:
         if sim_ns <= self._last_ns:         # repeated or older: keep /clock monotonic
@@ -167,6 +180,7 @@ class LifecycleSimClock(rclpy.lifecycle.Node):
             msg = Clock()
             msg.clock = RosTime(sec=sim_ns // 1_000_000_000, nanosec=sim_ns % 1_000_000_000)
             self._pub.publish(msg)
+            self._published += 1
 
 
 def main(args=None):

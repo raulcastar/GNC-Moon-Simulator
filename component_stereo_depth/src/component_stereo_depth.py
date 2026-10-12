@@ -83,6 +83,50 @@ def _frame_id(topic: str) -> str:
     return topic.strip('/').replace('/', '_')
 
 
+class CycleTimer:
+    """
+    Time spent per processing cycle, by stage, summarised in one log line every
+    `period` seconds (wall clock): cycles per second and the mean milliseconds
+    of each stage. `start()` opens a cycle, `mark(stage)` closes the stage
+    running since the previous mark, `end()` closes the cycle.
+    """
+
+    def __init__(self, logger, label: str, period: float = 30.0):
+        self._log, self._label, self._period = logger, label, period
+        self._sums = collections.OrderedDict()
+        self._cycles, self._total, self._worst = 0, 0.0, 0.0
+        self._since = time.monotonic()
+        self._t0 = self._last = None
+
+    def start(self) -> None:
+        self._t0 = self._last = time.perf_counter()
+
+    def mark(self, stage: str) -> None:
+        if self._last is None:
+            return
+        now = time.perf_counter()
+        self._sums[stage] = self._sums.get(stage, 0.0) + (now - self._last)
+        self._last = now
+
+    def end(self) -> None:
+        if self._t0 is None:
+            return
+        spent = time.perf_counter() - self._t0
+        self._t0 = self._last = None
+        self._cycles += 1
+        self._total += spent
+        self._worst = max(self._worst, spent)
+        elapsed = time.monotonic() - self._since
+        if elapsed >= self._period:
+            n = self._cycles
+            stages = ', '.join(f'{k} {1000 * v / n:.0f}' for k, v in self._sums.items())
+            self._log.info(f'{self._label}: {n / elapsed:.2f} cycles/s, {1000 * self._total / n:.0f} ms per '
+                           f'cycle (worst {1000 * self._worst:.0f})' + (f' | ms: {stages}' if stages else ''))
+            self._sums.clear()
+            self._cycles, self._total, self._worst = 0, 0.0, 0.0
+            self._since = time.monotonic()
+
+
 class FrameStreamReceiver:
     """
     TCP server for the UnrealStereoCam plugin (unreal/UnrealStereoCam/).
@@ -215,7 +259,9 @@ class FrameStreamReceiver:
 
     def _read_stream(self, conn: socket.socket) -> None:
         conn.settimeout(0.5)
-        buf = b''
+        # A bytearray grows in place: with bytes, every read copied the whole
+        # partial frame again (a 1.2 MB frame arrives in many reads).
+        buf = bytearray()
         while not self._stop.is_set():
             try:
                 chunk = conn.recv(1 << 20)
@@ -226,16 +272,23 @@ class FrameStreamReceiver:
             if not chunk:
                 return
             buf += chunk
-            buf = self._drain(buf)
+            self._drain(buf)
 
-    def _drain(self, buf: bytes) -> bytes:
-        """Extract every complete frame; keep the trailing fragment."""
+    def _drain(self, buf) -> bytearray:
+        """
+        Extract every complete frame from `buf`, consuming them in place (a
+        bytearray; bytes are copied into one), and return what is left: the
+        trailing fragment of the next frame.
+        """
+        if not isinstance(buf, bytearray):
+            buf = bytearray(buf)
         while True:
             start = buf.find(self._MAGIC)
             if start < 0:
-                return buf[-3:]              # keep a possible partial magic
+                del buf[:-3]                 # keep a possible partial magic
+                return buf
             if start > 0:
-                buf = buf[start:]            # resync past garbage
+                del buf[:start]              # resync past garbage
             if len(buf) < self._HEADER.size:
                 return buf
             (_, version, cam_id, fmt, _, w, h, fid,
@@ -244,7 +297,7 @@ class FrameStreamReceiver:
                 self._log.warn(f'Frame stream: bad header (v{version} fmt{fmt} '
                                f'{w}x{h} size {size}); resyncing.',
                                throttle_duration_sec=10.0)
-                buf = buf[4:]                # skip this magic, scan again
+                del buf[:4]                  # skip this magic, scan again
                 continue
             # Version 2 adds the capture time (simulation clock, ns) after the
             # 24-byte header; version 1 frames get stamped on arrival (0 here).
@@ -253,13 +306,14 @@ class FrameStreamReceiver:
             if len(buf) < end:
                 return buf                   # payload still in flight
             stamp_ns = struct.unpack_from('<Q', buf, self._HEADER.size)[0] if version == 2 else 0
+            # bytes() copies the payload out, so no numpy view pins the
+            # bytearray (it could not be resized while one exists).
+            payload = bytes(buf[start:end])
             if fmt == 2:                     # R32F depth, centimetres
-                image = np.frombuffer(buf[start:end],
-                                      dtype='<f4').reshape(h, w).copy()
-            else:                            # BGRA8 colour
-                bgra = np.frombuffer(buf[start:end],
-                                     dtype=np.uint8).reshape(h, w, 4)
-                image = np.ascontiguousarray(bgra[:, :, [2, 1, 0]])
+                image = np.frombuffer(payload, dtype='<f4').reshape(h, w).copy()
+            else:                            # BGRA8 colour -> RGB (cv2: ~30x faster than indexing)
+                image = cv2.cvtColor(np.frombuffer(payload, dtype=np.uint8).reshape(h, w, 4),
+                                     cv2.COLOR_BGRA2RGB)
             if self.known_ids and cam_id not in self.known_ids and cam_id not in self._unknown_ids:
                 self._unknown_ids.add(cam_id)
                 self._log.warn(
@@ -271,7 +325,7 @@ class FrameStreamReceiver:
                 ring = self._frames.setdefault(
                     cam_id, collections.deque(maxlen=self._RING))
                 ring.append((fid, image, time.monotonic(), stamp_ns))
-            buf = buf[end:]
+            del buf[:end]
 
 
 class LifecycleStereoDepth(rclpy.lifecycle.Node):
@@ -282,6 +336,8 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
 
         self._pubs: Dict[str, Publisher] = {}   # keyed by short name
         self._cached_color_map_json: str = "{}"
+        # Rate and per-stage time of the read cycle, logged every 30 s.
+        self._cycle_timer = CycleTimer(self.get_logger(), 'Stereo cycle')
         self._mask_classes_json: str = "[]"
 
         self._timer: Optional[Timer] = None
@@ -805,8 +861,20 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
             labels[code] = 5 if rover else label
         return palette, labels
 
+    def _wanted(self, key: str) -> bool:
+        """
+        Whether anything subscribes to output `key` now. Outputs nobody reads
+        (raw eye images, disparity, raw ground truth...) are not built or
+        published; a subscriber (a viewer, a bag recording) brings one back on
+        the next frame.
+        """
+        pub = self._pubs.get(key)
+        return pub is not None and pub.get_subscription_count() > 0
+
     def _publish_image(self, key: str, img: np.ndarray, encoding: str,
                        stamp, frame_id: str) -> None:
+        if not self._wanted(key):
+            return
         msg = self.cv_bridge.cv2_to_imgmsg(img, encoding=encoding)
         msg.header.stamp = stamp
         msg.header.frame_id = frame_id
@@ -815,6 +883,8 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
     def _publish_color(self, key: str, rgb: np.ndarray, stamp, frame_id: str) -> None:
         """Raw rgb8 plus a JPEG-compressed copy, on <key> and <key>_compressed."""
         self._publish_image(key, rgb, 'rgb8', stamp, frame_id)
+        if not self._wanted(key + '_compressed'):
+            return
 
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         msg = self.cv_bridge.cv2_to_compressed_imgmsg(bgr, dst_format='jpg')
@@ -838,19 +908,24 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         if not self._is_active:
             return
 
+        timer = self._cycle_timer
         try:
             stamp = self.get_clock().now().to_msg()
             f_left, f_right, f_center = (self.left_frame, self.right_frame,
                                          self.center_frame)
 
+            timer.start()
             captured = self._capture_from_stream()
             if captured is None:
+                timer.start()                # nothing new: not a cycle
                 return
             left, right, center, center_mask, depth_gt_cm, stamp_ns = captured
             if stamp_ns:                     # capture time from Unreal (simulation clock)
                 stamp = _ros_time(stamp_ns)
+            timer.mark('frames')
             disp = self._compute_disparity(left, right)
             depth_left = self._depth_from_disparity(disp)
+            timer.mark('matching')
 
             # The eyes carry colour only: depth is a product of the pair.
             self._publish_color('left_color', left, stamp, f_left)
@@ -863,6 +938,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
             c_intr = (self._c_fx, self._c_cx, self._c_cy, self._c_w, self._c_h)
             self._pubs['center_info'].publish(
                 self._camera_info(stamp, f_center, False, intrinsics=c_intr))
+            timer.mark('colour')
 
             # Warped onto the central pixel grid, so depth, disparity and RGB
             # all overlay one another.
@@ -871,21 +947,25 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                 depth_pub = np.clip(depth_c, 0.0, self.depth_max_distance)
                 depth_pub[~np.isfinite(depth_c)] = np.nan
                 self._publish_image('center_depth', depth_pub, '32FC1', stamp, f_center)
-                self._publish_image('center_depth_vis',
-                                    self._colourise(depth_pub, self.depth_max_distance),
-                                    'bgr8', stamp, f_center)
+                if self._wanted('center_depth_vis'):
+                    self._publish_image('center_depth_vis',
+                                        self._colourise(depth_pub, self.depth_max_distance),
+                                        'bgr8', stamp, f_center)
 
                 # Disparity a virtual pair would see from the centre, using the
                 # central focal length: d = fx_c * B / Z.
-                with np.errstate(divide='ignore', invalid='ignore'):
-                    disp_c = (self._c_fx * self._baseline_m) / depth_c
-                disp_c[~np.isfinite(depth_c)] = np.nan
-                self._pubs['center_disparity'].publish(
-                    self._disparity_msg(disp_c, stamp, f_center, fx=self._c_fx,
-                                        width=self._c_w, height=self._c_h,
-                                        valid_window=False))
+                if self._wanted('center_disparity'):
+                    with np.errstate(divide='ignore', invalid='ignore'):
+                        disp_c = (self._c_fx * self._baseline_m) / depth_c
+                    disp_c[~np.isfinite(depth_c)] = np.nan
+                    self._pubs['center_disparity'].publish(
+                        self._disparity_msg(disp_c, stamp, f_center, fx=self._c_fx,
+                                            width=self._c_w, height=self._c_h,
+                                            valid_window=False))
+            timer.mark('depth')
 
-            if depth_gt_cm is not None:
+            if depth_gt_cm is not None and (self._wanted('center_depth_gt')
+                                            or self._wanted('center_depth_gt_vis')):
                 if depth_gt_cm.shape != center.shape[:2]:
                     self.get_logger().warn(
                         f'Ground-truth depth is {depth_gt_cm.shape[1]}x{depth_gt_cm.shape[0]}, '
@@ -896,11 +976,13 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                     depth_gt[~(depth_gt < self.GROUND_TRUTH_FAR_M)] = np.inf  # sky
                     self._publish_image('center_depth_gt', depth_gt.astype(np.float32),
                                         '32FC1', stamp, f_center)
-                    shown = np.where(np.isfinite(depth_gt),
-                                     np.clip(depth_gt, 0.0, self.depth_max_distance), np.nan)
-                    self._publish_image('center_depth_gt_vis',
-                                        self._colourise(shown, self.depth_max_distance),
-                                        'bgr8', stamp, f_center)
+                    if self._wanted('center_depth_gt_vis'):
+                        shown = np.where(np.isfinite(depth_gt),
+                                         np.clip(depth_gt, 0.0, self.depth_max_distance), np.nan)
+                        self._publish_image('center_depth_gt_vis',
+                                            self._colourise(shown, self.depth_max_distance),
+                                            'bgr8', stamp, f_center)
+            timer.mark('ground truth')
 
             if center_mask is not None:
                 if self.enable_shadow_mask:
@@ -918,6 +1000,8 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                 msg_map.data = self._cached_color_map_json
                 self._pubs['center_object_mask_mapping'].publish(msg_map)
                 self._pubs['center_object_mask_classes'].publish(String(data=self._mask_classes_json))
+            timer.mark('masks')
+            timer.end()
 
             if self.debug_mode:
                 matched = np.isfinite(disp).mean() * 100

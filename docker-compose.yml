@@ -17,6 +17,11 @@ x-ros-env: &ros-env
   ROS_DOMAIN_ID: 0
   RMW_IMPLEMENTATION: rmw_zenoh_cpp
   RCUTILS_COLORIZED_OUTPUT: 1
+  # numpy's OpenBLAS starts a worker per core whose idle threads busy-wait after
+  # every matrix call; the nodes' matrices (3x3 rotations of point clouds) are
+  # far too small to gain from them. Measured on the stereo node: ~40% of a
+  # core spent spinning.
+  OPENBLAS_NUM_THREADS: 1
 
 # For nodes that can open a debug window on the host's X server (off by default).
 x-display-env: &display-env
