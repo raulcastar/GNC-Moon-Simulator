@@ -13,6 +13,38 @@ from std_msgs.msg import String
 from .settings import CAMERA_DEFAULTS, MIN_CAMERA_DEPTH, PATH_OVERLAY_AHEAD, PATH_OVERLAY_STEP, ROVER_HALF_WIDTH
 from .web import emit_feeds, feed_viewers
 
+GOAL_POLE_M = 1.0          # height of the goal marker drawn on the navcam
+
+
+def path_ahead(path: np.ndarray, rx: float, ry: float,
+               ahead: float = PATH_OVERLAY_AHEAD, step: float = PATH_OVERLAY_STEP):
+    """
+    The path from the rover onwards: from (rx, ry) through the vertices after
+    the closest one, resampled every `step` m up to `ahead` m. Returns
+    (x, y, distance) arrays, or None when less than two samples remain.
+    """
+    if path is None or len(path) < 2:
+        return None
+    i0 = int(np.argmin(np.hypot(path[:, 0] - rx, path[:, 1] - ry)))
+    pts = np.vstack(([rx, ry], path[i0 + 1:]))
+    if len(pts) < 2:
+        return None
+    cum = np.r_[0.0, np.cumsum(np.hypot(*np.diff(pts, axis=0).T))]
+    d = np.arange(0.0, min(cum[-1], ahead) + 1e-9, step)
+    if len(d) < 2:
+        return None
+    return np.interp(d, cum, pts[:, 0]), np.interp(d, cum, pts[:, 1]), d
+
+
+def goal_bearing(pose: tuple, goal) -> tuple:
+    """(distance m, bearing deg) of the goal from the rover; bearing > 0 is to the left."""
+    px, py, _, qx, qy, qz, qw = pose
+    yaw = math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
+    dx, dy = goal[0] - px, goal[1] - py
+    rel = math.atan2(dy, dx) - yaw
+    rel = math.atan2(math.sin(rel), math.cos(rel))
+    return math.hypot(dx, dy), math.degrees(rel)
+
 
 class ImageryMixin:
     """Camera feeds relayed to the browser, and the planned path drawn on the central navcam. Mixed into LifecycleMissionControlUI."""
@@ -172,7 +204,9 @@ class ImageryMixin:
     def _emit_path_overlay(self) -> None:
         """
         Sends the planned path ahead of the rover, projected onto the central
-        navcam, as a centre line, a rover-width ribbon and metre marks.
+        navcam, as a centre line, a rover-width ribbon and metre marks; with
+        the goal, the original route once the planner has re-planned, and the
+        planner's lidar obstacles.
         """
         active = self._mission.get('state') in ('planning', 'driving')
         path = self._global_path
@@ -183,17 +217,11 @@ class ImageryMixin:
                 self._overlay_shown = False
             return
 
-        # Path ahead: from the rover to the closest vertex onwards, resampled.
         rx, ry = self._odom_pose[0], self._odom_pose[1]
-        i0 = int(np.argmin(np.hypot(path[:, 0] - rx, path[:, 1] - ry)))
-        pts = np.vstack(([rx, ry], path[i0 + 1:]))
-        if len(pts) < 2:
+        ahead = path_ahead(path, rx, ry)
+        if ahead is None:
             return
-        cum = np.r_[0.0, np.cumsum(np.hypot(*np.diff(pts, axis=0).T))]
-        d = np.arange(0.0, min(cum[-1], PATH_OVERLAY_AHEAD) + 1e-9, PATH_OVERLAY_STEP)
-        if len(d) < 2:
-            return
-        x, y = np.interp(d, cum, pts[:, 0]), np.interp(d, cum, pts[:, 1])
+        x, y, d = ahead
         tx, ty = np.gradient(x), np.gradient(y)
         norm = np.hypot(tx, ty) + 1e-9
         nx, ny = -ty / norm * ROVER_HALF_WIDTH, tx / norm * ROVER_HALF_WIDTH
@@ -209,8 +237,42 @@ class ImageryMixin:
             'right': project(x - nx, y - ny),
             'dist': [round(float(v), 2) for v in d],
             'pose': [round(float(v), 4) for v in self._odom_pose],   # pose used, for checks
+            **self._overlay_extras(project),
         })
         self._overlay_shown = True
+
+    def _overlay_extras(self, project) -> dict:
+        """The goal, the original route (once re-planned) and lidar obstacles, for the navcam overlay."""
+        rx, ry = self._odom_pose[0], self._odom_pose[1]
+        out = {'replans': self._route['replans']}
+
+        if self._route['replans'] > 0 and len(self._route['first']) >= 2:
+            first = np.array([[c['x'], c['y']] for c in self._route['first']])
+            ahead = path_ahead(first, rx, ry)
+            if ahead is not None:
+                out['first'] = project(ahead[0], ahead[1])
+
+        goal = self._mission.get('goal')
+        if goal is not None:
+            dist, bearing = goal_bearing(self._odom_pose, goal)
+            gx, gy = np.array([float(goal[0])]), np.array([float(goal[1])])
+            gz = self._ground_z(gx, gy)
+            uv = self._project(np.column_stack((np.r_[gx, gx], np.r_[gy, gy], np.r_[gz, gz + GOAL_POLE_M])))
+            ok = [bool(np.isfinite(r).all()) for r in uv]
+            out['goal'] = {
+                'base': [round(float(v), 4) for v in uv[0]] if ok[0] else None,
+                'top': [round(float(v), 4) for v in uv[1]] if ok[1] else None,
+                'dist': round(dist, 1), 'bearing': round(bearing, 1)}
+
+        xyz = self._obstacle_xyz
+        if xyz is not None and len(xyz):
+            near = xyz[np.hypot(xyz[:, 0] - rx, xyz[:, 1] - ry) < PATH_OVERLAY_AHEAD]
+            if len(near):
+                # the planner sends them flat (z = 0): placed on the terrain, like the path
+                uv = self._project(np.column_stack((near[:, 0], near[:, 1], self._ground_z(near[:, 0], near[:, 1]))))
+                inside = np.isfinite(uv).all(axis=1) & (uv >= 0).all(axis=1) & (uv <= 1).all(axis=1)
+                out['obstacles'] = np.round(uv[inside], 4).ravel().tolist()
+        return out
 
     def camera_info_callback(self, msg: CameraInfo) -> None:
         fx = msg.k[0]

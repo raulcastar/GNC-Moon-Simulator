@@ -800,7 +800,10 @@ function fitMapStack() {
   stack.style.width  = (mapW * s) + 'px';
   stack.style.height = (mapH * s) + 'px';
 }
-window.addEventListener('resize', () => { fitMapStack(); drawColorbar(mapW > 0); drawOverlay(); });
+window.addEventListener('resize', () => {
+  fitMapStack(); drawColorbar(mapW > 0);
+  if (following) followRover(); else drawOverlay();   /* the box changed size: re-centre on the rover */
+});
 
 function drawColorbar(show) {
   $('cbar').style.display = show ? 'flex' : 'none';
@@ -832,9 +835,9 @@ function drawOverlay() {
   odomCtx.setTransform(1, 0, 0, 1, 0, 0);
   odomCtx.clearRect(0, 0, odomCanvas.width, odomCanvas.height);
   odomCtx.setTransform(a, 0, 0, a, ox, oy);
-  /* symbol sizes are given in screen pixels at 1x and divided by the zoom, so
-     markers keep their on-screen size when zooming in */
-  const k = 1 / vz;
+  /* symbol sizes are in screen (CSS) pixels: k is one screen pixel in map
+     cells, so markers keep their on-screen size at any zoom */
+  const k = 1 / place.s;
 
   odomCtx.save();
   odomCtx.strokeStyle = 'rgba(255,255,255,.12)'; odomCtx.setLineDash([4*k, 6*k]); odomCtx.lineWidth = k;

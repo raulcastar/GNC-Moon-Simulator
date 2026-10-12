@@ -135,6 +135,7 @@ class TelemetryMixin:
             return
         self._last_obstacles = now
         xyz = cloud_xyz(msg, 2000)
+        self._obstacle_xyz = xyz            # also drawn on the navcam overlay
         socketio.emit('lidar_obstacles', {'pts': np.round(xyz[:, :2], 2).ravel().tolist()})
 
     def trajectory_callback(self, msg: Path) -> None:

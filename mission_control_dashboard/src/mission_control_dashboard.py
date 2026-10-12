@@ -108,6 +108,7 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
         # (around a lidar obstacle, or after a tilt or a new session).
         self._route = {'goal': None, 'first': [], 'current': [], 'replans': 0}
         self._avoidance = None          # planner's lidar_obstacle_avoidance (None: unknown)
+        self._obstacle_xyz = None       # planner's lidar obstacles (N, 3), odom frame
         self._last_obstacles = 0.0      # monotonic time of the last obstacle update sent
         self._elev = None               # planner's global elevation map [row = y, col = x], metres
         self._elev_offset = collections.deque(maxlen=30)   # odom z - map z, sampled at the rover

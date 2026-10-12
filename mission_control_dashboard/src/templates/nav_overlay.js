@@ -3,7 +3,9 @@
  *
  * Draws the 'path_overlay' feed (planned path ahead of the rover projected
  * into the image by the dashboard backend): a rover-width ribbon, its centre
- * line and distance marks. A PATH button toggles it (remembered).
+ * line and distance marks; the goal (a marker, or an arrow at the image edge
+ * when out of view); once re-planned, the original route dashed; and the
+ * planner's lidar obstacles. A PATH button toggles it (remembered).
  *
  * Usage: NavOverlay.attach(socket, [feedEl, …]); each feed element holds the
  * navcam <img> and must be position:relative.
@@ -44,6 +46,18 @@
     const P = uv => uv && [r.x + uv[0] * r.w, r.y + uv[1] * r.h];
     g.save();
     g.beginPath(); g.rect(r.x, r.y, r.w, r.h); g.clip();
+
+    /* the original route, dashed, once the planner has re-planned (map colour) */
+    if (m.first && m.first.length) {
+      g.strokeStyle = 'rgba(255,107,125,0.9)'; g.lineWidth = 2; g.setLineDash([7, 6]);
+      g.beginPath(); let pen = false;
+      for (const uv of m.first) {
+        const q = P(uv);
+        if (!q) { pen = false; continue; }
+        pen ? g.lineTo(...q) : g.moveTo(...q); pen = true;
+      }
+      g.stroke(); g.setLineDash([]);
+    }
 
     /* ribbon: one quad per sample pair where all four corners are in front of the camera */
     g.fillStyle = 'rgba(255,190,92,0.22)';
@@ -100,7 +114,56 @@
       g.lineWidth = 3; g.strokeStyle = 'rgba(16,21,28,0.9)'; g.strokeText(txt, edge[0] + 5, edge[1]);
       g.fillStyle = '#ffd28a'; g.fillText(txt, edge[0] + 5, edge[1]);
     }
+
+    /* the planner's lidar obstacles */
+    if (m.obstacles && m.obstacles.length) {
+      g.fillStyle = 'rgba(255,209,102,0.9)'; g.strokeStyle = 'rgba(16,21,28,0.8)'; g.lineWidth = 1;
+      for (let i = 0; i < m.obstacles.length; i += 2) {
+        const [x, y] = P([m.obstacles[i], m.obstacles[i + 1]]);
+        g.fillRect(x - 2.5, y - 2.5, 5, 5); g.strokeRect(x - 2.5, y - 2.5, 5, 5);
+      }
+    }
+    drawGoal(g, r, P, m.goal);
+
+    if (m.replans > 0) {                  /* tag, top left (the PATH button is top right) */
+      const txt = m.replans > 1 ? `RE-PLANNED ×${m.replans}` : 'RE-PLANNED';
+      g.font = 'bold 10px Consolas, Menlo, monospace'; g.textBaseline = 'top';
+      const tw = g.measureText(txt).width;
+      g.fillStyle = 'rgba(16,21,28,0.8)'; g.fillRect(r.x + 5, r.y + 5, tw + 10, 15);
+      g.strokeStyle = '#ffa94d'; g.lineWidth = 1; g.strokeRect(r.x + 5.5, r.y + 5.5, tw + 9, 14);
+      g.fillStyle = '#ffa94d'; g.fillText(txt, r.x + 10, r.y + 8);
+    }
     g.restore();
+  }
+
+  /* The goal: a pole with a cross at its foot and the distance when it is in
+     view; otherwise an arrow at the left or right edge pointing towards it. */
+  function drawGoal(g, r, P, goal) {
+    if (!goal) return;
+    const inView = uv => uv && uv[0] >= 0 && uv[0] <= 1 && uv[1] >= 0 && uv[1] <= 1;
+    const label = `GOAL ${goal.dist.toFixed(goal.dist < 10 ? 1 : 0)} m`;
+    g.font = 'bold 11px Consolas, Menlo, monospace'; g.textBaseline = 'middle';
+    const text = (t, x, y, align) => {
+      g.textAlign = align; g.lineWidth = 3; g.strokeStyle = 'rgba(16,21,28,0.9)';
+      g.strokeText(t, x, y); g.fillStyle = '#ffbe5c'; g.fillText(t, x, y); g.textAlign = 'left';
+    };
+    if (inView(goal.base)) {
+      const [bx, by] = P(goal.base), top = goal.top ? P(goal.top) : [bx, by - 30];
+      g.strokeStyle = '#ffbe5c'; g.lineWidth = 2; g.lineCap = 'round';
+      g.beginPath(); g.moveTo(bx, by); g.lineTo(...top); g.stroke();
+      const c = 5;
+      g.beginPath(); g.moveTo(bx - c, by - c); g.lineTo(bx + c, by + c);
+      g.moveTo(bx + c, by - c); g.lineTo(bx - c, by + c); g.stroke();
+      g.fillStyle = '#ffbe5c';                                     /* flag */
+      g.beginPath(); g.moveTo(...top); g.lineTo(top[0] + 12, top[1] + 4); g.lineTo(top[0], top[1] + 8); g.fill();
+      text(label, top[0] + 15, top[1] + 4, 'left');
+      return;
+    }
+    const left = goal.bearing > 0, y = r.y + r.h * 0.45;
+    const x = left ? r.x + 8 : r.x + r.w - 8, s = left ? 1 : -1;
+    g.fillStyle = '#ffbe5c';
+    g.beginPath(); g.moveTo(x, y); g.lineTo(x + s * 12, y - 9); g.lineTo(x + s * 12, y + 9); g.fill();
+    text(Math.abs(goal.bearing) > 90 ? label + ' (behind)' : label, x + s * 17, y, left ? 'left' : 'right');
   }
 
   window.NavOverlay = {
