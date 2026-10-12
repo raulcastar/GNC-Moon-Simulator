@@ -34,7 +34,7 @@ from geometry_msgs.msg import PoseStamped, Twist
 from lifecycle_msgs.srv import ChangeState, GetState
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rcl_interfaces.msg import Log
-from rcl_interfaces.srv import GetParameters
+from rcl_interfaces.srv import GetParameters, SetParameters
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.lifecycle import State, TransitionCallbackReturn
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
@@ -49,7 +49,7 @@ from .mapping import MappingMixin
 from .recording import RecordingMixin
 from .replay import ReplayMixin
 from .settings import (CAM_PRODUCT_MIN_PERIOD, DEFAULT_BAG_PRESET, HEALTH_PERIOD, INSPECT_PERIOD,
-                       LIFECYCLE_NODES, REMOTE_PARAMS, TIMELINE_MAX)
+                       LIFECYCLE_NODES, PLANNER_NODE, REMOTE_PARAMS, TIMELINE_MAX)
 from .telemetry import TelemetryMixin
 from .topics import TopicsMixin
 from .web import (app, app_cams, app_hub, app_map, app_replay, app_sys, app_teleop, sio_cams, sio_hub,
@@ -103,6 +103,12 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
         self._dem_half_width = 3.0      # m; lateral half-extent of the latest DEM
         self._odom_pose = None          # (x, y, z, qx, qy, qz, qw), latest odom
         self._global_path = None        # planned path (N, 2), odom frame
+        # Routes for the current goal, as sent to the overview: the first one
+        # planned and the latest, which differ once the planner re-plans
+        # (around a lidar obstacle, or after a tilt or a new session).
+        self._route = {'goal': None, 'first': [], 'current': [], 'replans': 0}
+        self._avoidance = None          # planner's lidar_obstacle_avoidance (None: unknown)
+        self._last_obstacles = 0.0      # monotonic time of the last obstacle update sent
         self._elev = None               # planner's global elevation map [row = y, col = x], metres
         self._elev_offset = collections.deque(maxlen=30)   # odom z - map z, sampled at the rover
         self._elev_requested = 0.0
@@ -160,14 +166,16 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
         for n in LIFECYCLE_NODES:
             self._cli_get_state[n] = self.create_client(GetState, f'/{n}/get_state')
             self._cli_change_state[n] = self.create_client(ChangeState, f'/{n}/change_state')
-        for n in {node for node, _ in REMOTE_PARAMS.values()}:
+        for n in {node for node, _ in REMOTE_PARAMS.values()} | {PLANNER_NODE}:
             self._cli_params[n] = self.create_client(GetParameters, f'/{n}/get_parameters')
+        self._cli_planner_set = self.create_client(SetParameters, f'/{PLANNER_NODE}/set_parameters')
 
         sub = self.create_subscription
         self._subs = [
             sub(Odometry, 'odom', self.odom_callback, 10),
             sub(Path, 'global_path', self.global_path_callback, 10),
             sub(Path, 'driven_trajectory', self.trajectory_callback, 10),
+            sub(PointCloud2, 'planner/obstacles', self.obstacles_callback, 10),
             sub(Log, '/rosout', self.rosout_callback, 50),
             sub(PointCloud2, 'lidar/points', self.lidar_callback,
                 qos_profile_sensor_data),

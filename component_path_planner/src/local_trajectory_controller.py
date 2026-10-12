@@ -131,6 +131,10 @@ class Local_Trajectory_Controller():
                         # best omega=0 rad/s (heading to the goal with
                         # angle difference of 0)
                         best_u[1] = -robot_description.max_delta_yaw_rate
+        if not math.isfinite(min_cost):
+            # Every reachable trajectory hits an obstacle: stop rather than
+            # take whichever infinite-cost sample came last.
+            return [0.0, 0.0], np.array([x])
         return best_u, best_trajectory
 
 
@@ -138,6 +142,8 @@ class Local_Trajectory_Controller():
         """
         calc obstacle cost inf: collision
         """
+        if len(ob) == 0:
+            return 0.0              # nothing to avoid
         ox = ob[:, 0]
         oy = ob[:, 1]
         dx = trajectory[:, 0] - ox[:, None]

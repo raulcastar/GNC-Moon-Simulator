@@ -4,13 +4,15 @@ import threading
 import time
 
 from lifecycle_msgs.srv import ChangeState, GetState
+from rcl_interfaces.msg import ParameterType
 from rcl_interfaces.srv import GetParameters
 
-from .settings import FEED_NAMES, FEED_STALE_S, HEALTH_WINDOW, NODE_POLL_TICKS, REMOTE_PARAMS
+from .settings import (AVOIDANCE_PARAM, FEED_NAMES, FEED_STALE_S, HEALTH_WINDOW, NODE_POLL_TICKS,
+                       PLANNER_NODE, REMOTE_PARAMS)
 from sensor_msgs.msg import Image
 from rclpy.qos import qos_profile_sensor_data
 
-from .web import feed_watchers, sio_cams, sio_map, sio_replay, sio_sys, sio_teleop, socketio
+from .web import emit_all, feed_watchers, sio_cams, sio_map, sio_replay, sio_sys, sio_teleop, socketio
 
 
 class HealthMixin:
@@ -109,6 +111,7 @@ class HealthMixin:
         if not self._is_active():
             return
         self._sync_viewer_subscriptions()
+        self._poll_avoidance()
         now = time.monotonic()
         feeds = {}
         for name, times in self._arrivals.items():
@@ -178,6 +181,26 @@ class HealthMixin:
             self._node_states[name] = 'error'
             self.get_logger().warn(f'Lifecycle state of {name} unreadable: {exc}',
                                    throttle_duration_sec=30.0)
+
+    def _poll_avoidance(self) -> None:
+        """Reads the planner's lidar_obstacle_avoidance, so the switch shows changes made elsewhere."""
+        client = self._cli_params.get(PLANNER_NODE)
+        if client is None or not client.service_is_ready() or ('param', AVOIDANCE_PARAM) in self._pending:
+            return
+        self._pending.add(('param', AVOIDANCE_PARAM))
+        fut = client.call_async(GetParameters.Request(names=[AVOIDANCE_PARAM]))
+        fut.add_done_callback(self._on_avoidance)
+
+    def _on_avoidance(self, fut) -> None:
+        self._pending.discard(('param', AVOIDANCE_PARAM))
+        try:
+            value = fut.result().values[0]
+            on = value.bool_value if value.type == ParameterType.PARAMETER_BOOL else None
+        except Exception:
+            on = None
+        if on != self._avoidance:
+            self._avoidance = on
+            emit_all('avoidance', {'on': on})
 
     def _fetch_remote_params(self) -> None:
         """Reads the planner's tilt limit and the depth colour range once available."""

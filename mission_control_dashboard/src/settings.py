@@ -41,6 +41,7 @@ REPLAY_LIVE_OUTPUTS = {
     '/local_mapping/elevation_map_raw': 'component_local_mapping, from the depth',
     '/local_mapping/elevation_grid': 'component_local_mapping, from the depth',
     '/global_path': 'component_path_planner',
+    '/planner/obstacles': 'component_path_planner (lidar obstacles)',
     '/driven_trajectory': 'component_path_planner',
     '/mission_status/state': 'component_path_planner',
     '/mission_status/goal_reached': 'component_path_planner',
@@ -74,6 +75,11 @@ LIFECYCLE_NODES = (
     'lc_component_sim_clock',
 )
 # Parameters read from other nodes: name -> (node, parameter).
+# The planner, whose lidar obstacle avoidance the overview switches.
+PLANNER_NODE = 'lc_component_path_planner'
+AVOIDANCE_PARAM = 'lidar_obstacle_avoidance'
+OBSTACLES_MIN_PERIOD = 0.5      # s between obstacle updates sent to the overview
+
 REMOTE_PARAMS = {
     'max_tilt_deg': ('lc_component_path_planner', 'max_tilt_deg'),
     'depth_max_distance': ('lc_component_stereo_depth', 'depth_max_distance'),

@@ -1,6 +1,12 @@
-"""Operator commands: headlights, stop, teleop drive (with its deadman), goals."""
+"""Operator commands: headlights, stop, teleop drive (with its deadman), goals, obstacle avoidance."""
 
 import time
+
+from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+from rcl_interfaces.srv import SetParameters
+
+from .settings import AVOIDANCE_PARAM, PLANNER_NODE
+from .web import emit_all
 
 from geometry_msgs.msg import PoseStamped, Twist
 from std_msgs.msg import Bool, Empty
@@ -8,6 +14,30 @@ from std_msgs.msg import Bool, Empty
 
 class CommandsMixin:
     """Operator commands: headlights, stop, teleop drive (with its deadman), goals. Mixed into LifecycleMissionControlUI."""
+
+    def set_obstacle_avoidance(self, on: bool) -> None:
+        """Switches the planner's lidar obstacle avoidance (its parameter, live)."""
+        client = self._cli_planner_set
+        if client is None or not client.service_is_ready():
+            self._console('WARN', f'Obstacle avoidance not changed: {PLANNER_NODE} is not running.')
+            emit_all('avoidance', {'on': self._avoidance})
+            return
+        value = ParameterValue(type=ParameterType.PARAMETER_BOOL, bool_value=bool(on))
+        request = SetParameters.Request(parameters=[Parameter(name=AVOIDANCE_PARAM, value=value)])
+        client.call_async(request).add_done_callback(lambda f: self._avoidance_set(bool(on), f))
+
+    def _avoidance_set(self, on: bool, fut) -> None:
+        try:
+            result = fut.result().results[0]
+            ok, reason = result.successful, result.reason
+        except Exception as exc:
+            ok, reason = False, str(exc)
+        if ok:
+            self._avoidance = on
+            self._console('INFO', f"Lidar obstacle avoidance {'ON' if on else 'OFF'} (from the console).")
+        else:
+            self._console('WARN', f'Obstacle avoidance not changed: {reason or "refused"}.')
+        emit_all('avoidance', {'on': self._avoidance})
 
     def set_headlights(self, on: bool) -> None:
         if self._pub_lights and self._pub_lights.is_activated:

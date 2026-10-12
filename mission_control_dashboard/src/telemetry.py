@@ -10,8 +10,26 @@ from nav_msgs.msg import Odometry, Path
 from rcl_interfaces.msg import Log
 from std_msgs.msg import String
 
-from .settings import LOG_LEVELS, ODOM_MIN_PERIOD, TRAJ_MAX_POINTS, TRAJ_MIN_PERIOD
+from .geometry import cloud_xyz
+from .settings import LOG_LEVELS, OBSTACLES_MIN_PERIOD, ODOM_MIN_PERIOD, TRAJ_MAX_POINTS, TRAJ_MIN_PERIOD
 from .web import emit_all, sio_map, socketio
+
+
+def track_route(route: dict, coords: list, goal) -> dict:
+    """
+    The routes to show for the current goal, after the planner published
+    `coords` (it republishes the current route every cycle). A new goal starts
+    over; a different route for the same goal is a re-plan, and the first
+    route is kept to show beside it. An empty route (cancel, new session)
+    clears everything.
+    """
+    if not coords:
+        return {'goal': None, 'first': [], 'current': [], 'replans': 0}
+    if goal != route['goal'] or not route['first']:
+        return {'goal': goal, 'first': coords, 'current': coords, 'replans': 0}
+    if coords == route['current']:
+        return route
+    return dict(route, current=coords, replans=route['replans'] + 1)
 
 
 class TelemetryMixin:
@@ -101,7 +119,23 @@ class TelemetryMixin:
                   for p in msg.poses]
         self._global_path = (np.array([[c['x'], c['y']] for c in coords])
                              if coords else None)
-        socketio.emit('global_path_update', {'path': coords})
+        route = track_route(self._route, coords, self._mission.get('goal'))
+        if route['replans'] > self._route['replans']:
+            self._console('INFO', f"Route re-planned ({route['replans']} since the goal was set).")
+        self._route = route
+        socketio.emit('global_path_update', {'path': coords, 'first': route['first'],
+                                             'replans': route['replans']})
+
+    def obstacles_callback(self, msg) -> None:
+        """The planner's lidar obstacles (odom frame), to the overview at most 2 Hz."""
+        if not self._is_active():
+            return
+        now = time.monotonic()
+        if now - self._last_obstacles < OBSTACLES_MIN_PERIOD:
+            return
+        self._last_obstacles = now
+        xyz = cloud_xyz(msg, 2000)
+        socketio.emit('lidar_obstacles', {'pts': np.round(xyz[:, :2], 2).ravel().tolist()})
 
     def trajectory_callback(self, msg: Path) -> None:
         if not self._is_active():

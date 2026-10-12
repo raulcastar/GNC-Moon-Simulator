@@ -10,10 +10,15 @@ followed by a Dynamic Window Approach (DWA) local controller
 - The mission state is latched on mission_status/state.
 - The route and the driven trajectory are published for the UIs, and the maps
   are served on the get_matrices service.
+- With lidar_obstacle_avoidance on, obstacles seen by the lidar (by height
+  above the local ground, lidar_obstacles) are avoided by the DWA, published on
+  planner/obstacles, and marked in the global map: a route running into one is
+  planned again around it.
 
 This file is the ROS wiring: parameters, lifecycle, callbacks, the planning
 thread and the control loop. The parts:
     mission           goals, routes, final approach, attitude (logic)
+    lidar_obstacles   obstacles from the lidar, their memory and map cells (logic)
     planner_maps      map loading, cost/obstacle maps, drivable regions
     ros_conversions   Path and Float32MultiArray messages
     debug_plots       optional matplotlib windows
@@ -37,15 +42,18 @@ from rclpy.timer import Timer
 
 from geometry_msgs.msg import Twist, PoseStamped
 from nav_msgs.msg import Odometry, Path
-from std_msgs.msg import Bool, Empty, String
+from sensor_msgs.msg import PointCloud2
+from sensor_msgs_py import point_cloud2
+from std_msgs.msg import Bool, Empty, Header, String
+from rclpy.qos import qos_profile_sensor_data
 
 from custom_map_interfaces.srv import GetMatrices
 
 from src import debug_plots
 from src import global_path_planner
+from src import lidar_obstacles
 from src import local_trajectory_controller
 from src import mission
-from src.mission import GOAL_SNAP_RADIUS_CELLS  # noqa: F401  (part of the node's interface)
 from src.planner_maps import load_planner_maps
 from src.ros_conversions import finite_cost_map, matrix_msg, path_msg
 
@@ -102,7 +110,14 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         self._last_cmd = (0.0, 0.0)
         self.current_goal = None    # Vector: [x, y]
         self.global_path = None
-        self.obstacles = np.array([])
+        self.obstacles = np.empty((0, 2))     # Obstacles the DWA avoids (odom, metres)
+        # Lidar obstacles: remembered points (odom frame) and the global-map
+        # cells they block (col, row). Rocks do not move, so cells stay blocked
+        # until a new session.
+        self._obstacle_memory = lidar_obstacles.ObstacleMemory()
+        self._blocked_cells = set()
+        self._sub_lidar: Optional[Subscription] = None
+        self._pub_obstacles: Optional[Publisher] = None
         self.trajectory_history = []
         self.goal_reached = False
         # A Play/Stop in Unreal teleports the rover back to its start pose, which
@@ -154,7 +169,17 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 # Physical Footprint
                 ('robot_width', 0.35),
                 ('robot_length', 0.35),
-                ('robot_radius', 0.35)
+                ('robot_radius', 0.35),
+
+                # Lidar obstacle avoidance (read every cycle: can be switched live)
+                ('lidar_obstacle_avoidance', True),
+                ('lidar_topic', 'lidar/points'),
+                ('lidar_pitch_deg', -20.0),
+                ('lidar_x_offset_m', 0.0),
+                ('obstacle_min_height_m', 0.15),
+                ('obstacle_max_range_m', 6.0),
+                ('obstacle_memory_s', 20.0),
+                ('obstacle_replan_lookahead_m', 5.0),
             ])
 
         if self._param('enable_path_visualization'):
@@ -191,6 +216,8 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 self.current_goal = None
                 self.global_path = None
                 self.goal_reached = False
+                self._blocked_cells = set()
+            self._obstacle_memory.clear()
             self._stop_robot()
             self._publish_clear()
             self._set_state('idle', 'new session')
@@ -198,6 +225,52 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         self.robot_pose = np.array([x, y, yaw, v, omega])
         self._tilt_deg = mission.tilt_deg(q)
         mission.record_point(self.trajectory_history, x, y)
+
+    def _lidar_enabled(self) -> bool:
+        return bool(self._param('lidar_obstacle_avoidance'))
+
+    def lidar_callback(self, msg: PointCloud2) -> None:
+        """Obstacles in a scan, by height: remembered, published, and their cells blocked."""
+        if not self._lidar_enabled() or self.robot_pose is None:
+            return
+        points = point_cloud2.read_points_numpy(msg, field_names=('x', 'y', 'z'), skip_nans=True)
+        settings = lidar_obstacles.DetectionSettings(
+            pitch_deg=self._param('lidar_pitch_deg'), x_offset_m=self._param('lidar_x_offset_m'),
+            min_height_m=self._param('obstacle_min_height_m'),
+            max_range_m=self._param('obstacle_max_range_m'))
+        found = lidar_obstacles.detect(np.asarray(points, dtype=float).reshape(-1, 3), settings)
+        x, y, yaw = self.robot_pose[:3]
+        now = self.get_clock().now().nanoseconds * 1e-9
+        memory = self._obstacle_memory
+        memory.max_age_s = self._param('obstacle_memory_s')
+        if len(found):
+            odom = lidar_obstacles.to_odom(found, x, y, yaw)
+            memory.add(odom, now)
+            if self.obstacleMap is not None:
+                cells = lidar_obstacles.grid_cells(odom, self._param('global_res'), self.obstacleMap.shape)
+                with self._plan_lock:
+                    self._blocked_cells |= cells
+        memory.prune(now, x, y)
+        if self._pub_obstacles is not None and self._pub_obstacles.is_activated:
+            xy = memory.points()
+            cloud = point_cloud2.create_cloud_xyz32(
+                Header(stamp=msg.header.stamp, frame_id='odom'),
+                np.column_stack((xy, np.zeros(len(xy)))).tolist())
+            self._pub_obstacles.publish(cloud)
+
+    def _planning_maps(self, start_pos: list, goal: list):
+        """
+        The cost and obstacle maps for planning: with the lidar's blocked cells
+        marked impassable, except around the rover and the goal (the rover sits
+        next to what it sees; a goal beside a rock stays reachable).
+        """
+        if not self._lidar_enabled() or not self._blocked_cells:
+            return self.costMap, self.obstacleMap
+        with self._plan_lock:
+            cells = set(self._blocked_cells)
+        cells = lidar_obstacles.keep_clear(cells, [start_pos, goal], self.robot_conf.robot_radius + 1.0)
+        return lidar_obstacles.mark_blocked(self.costMap, self.obstacleMap, cells,
+                                            2 * self._param('slope_threshold'))
 
     def _set_state(self, state: str, reason: str = '') -> None:
         """Publishes the mission state on mission_status/state (mission.state_json)."""
@@ -270,8 +343,9 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         planner = self.path_planner
         planner.should_stop = lambda: generation != self._plan_generation
         try:
+            cost_map, obstacle_map = self._planning_maps(start_pos, goal)
             outcome = mission.plan_route(
-                planner, self.costMap, self.obstacleMap, self.freeRegions, start_pos, goal,
+                planner, cost_map, obstacle_map, self.freeRegions, start_pos, goal,
                 self._param('slope_threshold'), self.get_logger().info)
         except global_path_planner.PlanningCancelled:
             self.get_logger().info(f"Planning to {goal} stopped: the goal changed.")
@@ -358,6 +432,24 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
 
             self.current_goal = None
             return
+
+        # A lidar obstacle on the route ahead: plan the route again around it.
+        if self._lidar_enabled():
+            with self._plan_lock:
+                cells = set(self._blocked_cells)
+            cells = lidar_obstacles.keep_clear(cells, [self.robot_pose[:2]], self.robot_conf.robot_radius)
+            if lidar_obstacles.path_blocked(self.global_path, cells, self.robot_pose[:2],
+                                            self._param('obstacle_replan_lookahead_m'),
+                                            self._param('global_res')):
+                self.get_logger().info("Obstacle on the route ahead (lidar): planning around it.")
+                with self._plan_lock:
+                    self.global_path = None
+                self._set_state('planning', 'obstacle on the route')
+                self._stop_robot()
+                return
+            self.obstacles = self._obstacle_memory.points()
+        else:
+            self.obstacles = np.empty((0, 2))
 
         # Slow down over the braking distance so the rover does not overshoot.
         braking_distance = self._param('braking_distance')
@@ -457,7 +549,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 self._param('global_res'), self._param('slope_threshold'))
             self.elevationMap, self.costMap = maps.elevation, maps.cost
             self.obstacleMap, self.freeRegions = maps.obstacles, maps.free_regions
-            self.obstacles = mission.TEST_OBSTACLES
+            self.obstacles = np.empty((0, 2))
 
             if self._param('enable_path_visualization'):
                 self.get_logger().info("Rendering topological matrix alignment preview...")
@@ -482,6 +574,13 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         self._sub_odom = self.create_subscription(Odometry, 'odom', self.odom_callback, 10)
         self._sub_goal = self.create_subscription(PoseStamped, 'goal_pose', self.goal_pose_callback, 10)
         self._sub_cancel = self.create_subscription(Empty, 'cancel_goal', self.cancel_goal_callback, 10)
+        self._sub_lidar = self.create_subscription(
+            PointCloud2, self._param('lidar_topic'), self.lidar_callback, qos_profile_sensor_data)
+        self._pub_obstacles = self.create_lifecycle_publisher(PointCloud2, 'planner/obstacles', 10)
+        self.get_logger().info(
+            f"Lidar obstacle avoidance {'ON' if self._lidar_enabled() else 'OFF'} "
+            f"(obstacles: {self._param('obstacle_min_height_m'):g} m above the ground, "
+            f"within {self._param('obstacle_max_range_m'):g} m).")
 
         return TransitionCallbackReturn.SUCCESS
 
@@ -514,6 +613,8 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         if self._sub_odom: self.destroy_subscription(self._sub_odom)
         if self._sub_goal: self.destroy_subscription(self._sub_goal)
         if self._sub_cancel: self.destroy_subscription(self._sub_cancel)
+        if self._sub_lidar: self.destroy_subscription(self._sub_lidar)
+        if self._pub_obstacles: self.destroy_publisher(self._pub_obstacles)
         if self._pub_cmd_vel: self.destroy_publisher(self._pub_cmd_vel)
         if self._pub_goal_reached: self.destroy_publisher(self._pub_goal_reached)
         if self._pub_state: self.destroy_publisher(self._pub_state)

@@ -141,6 +141,7 @@
   #cmd-bar button.lit { border-color: var(--amber); color: var(--amber);
                         box-shadow: 0 0 8px rgba(255,180,84,.25); }
   #btn-stop { border-color: #5a2230 !important; color: var(--red) !important; }
+  #btn-avoid.off { color: var(--dim); }
   #btn-stop:hover { background: #2a1018 !important; box-shadow: 0 0 10px rgba(255,85,102,.3); }
 
   /* ============ CONSOLE ============ */
@@ -320,12 +321,14 @@
         </div>
       </div>
       <div id="map-hint">
-        <span><b class="sw" style="background:#ff6b7d"></b>PLANNED</span>
+        <span><b class="sw" style="background:#ff6b7d"></b>PLANNED (dashed once re-planned)</span>
+        <span><b class="sw" style="background:#ffa94d"></b>RE-PLANNED</span>
         <span><b class="sw" style="background:#59b0ff"></b>DRIVEN</span>
         <span><b style="color:#33d6a6">➤</b> ROVER + HEADING</span>
         <span><b style="color:#ffbe5c">✕</b> GOAL</span>
         <span><b style="color:#9fcbf2">◢</b> CAMERA FOV</span>
         <span><b style="color:#ff6b7d">■</b> LOCAL OBSTACLES</span>
+        <span><b style="color:#ffd166">■</b> LIDAR OBSTACLES</span>
         <span><b>⇕</b> WHEEL ZOOM · DRAG PAN</span>
       </div>
       <div id="mtl">
@@ -358,6 +361,7 @@
         <button id="btn-lon">☀ LIGHTS ON</button>
         <button id="btn-loff">● LIGHTS OFF</button>
         <button id="btn-stop">■ ALL STOP</button>
+        <button id="btn-avoid" title="Lidar obstacle avoidance: the planner steers and re-plans around rocks the lidar sees (its lidar_obstacle_avoidance parameter). Click to switch.">⛰ AVOID —</button>
       </div>
       <div id="tele">
         <div class="tl"><span class="k">MISSION</span><span class="v"><span class="badge unknown" id="t-mstate">—</span></span></div>
@@ -693,6 +697,22 @@ $('btn-loff').onclick = () => {
   $('btn-loff').classList.add('lit'); $('btn-lon').classList.remove('lit');
   addLocal('INFO', 'Headlights OFF commanded.');
 };
+/* lidar obstacle avoidance switch: shows the planner's parameter, also when
+   changed elsewhere (ros2 param set); null = planner not reachable */
+let avoidOn = null;
+function showAvoid(on) {
+  avoidOn = on;
+  const b = $('btn-avoid');
+  b.textContent = on === null ? '⛰ AVOID —' : (on ? '⛰ AVOID ON' : '⛰ AVOID OFF');
+  b.classList.toggle('lit', on === true);
+  b.classList.toggle('off', on !== true);
+}
+socket.on('avoidance', m => showAvoid(m.on === undefined ? null : m.on));
+$('btn-avoid').onclick = () => {
+  if (avoidOn === null) { addLocal('WARN', 'Obstacle avoidance state unknown: is the planner running?'); return; }
+  socket.emit('obstacle_avoidance', { on: !avoidOn });
+  addLocal('INFO', `Lidar obstacle avoidance ${avoidOn ? 'OFF' : 'ON'} requested.`);
+};
 $('btn-stop').onclick = () => {
   socket.emit('stop_rover', {});
   addLocal('WARN', 'ALL STOP commanded.');
@@ -710,6 +730,8 @@ const odomCanvas = $('odomCanvas'), odomCtx = odomCanvas.getContext('2d');
 const cbCanvas = $('cbarCanvas'),   cbCtx   = cbCanvas.getContext('2d');
 let mapRes = 1, mapW = 0, mapH = 0;
 let currentPose = null, globalPath = [], drivenPath = [];
+let firstPath = [], replans = 0;      /* the route first planned for this goal, and re-plans since */
+let lidarObs = [];                    /* planner's lidar obstacles, flat [x0, y0, x1, y1, ...] (odom) */
 let elevMin = '0', elevMax = '0';
 const OV = 4;                      /* overlay canvas pixels per map pixel */
 let localObs = null;               /* latest local obstacles + camera FOV (odom frame) */
@@ -801,17 +823,33 @@ function drawOverlay() {
   }
   odomCtx.restore();
 
-  const path = (pts, color) => {
+  const path = (pts, color, dash) => {
     if (!pts.length) return;
+    odomCtx.save();
     odomCtx.beginPath(); odomCtx.strokeStyle = color; odomCtx.lineWidth = 3*k;
+    if (dash) odomCtx.setLineDash([8*k, 6*k]);
     pts.forEach((p, i) => {
       const x = p.x/mapRes, y = mapH - p.y/mapRes;
       i ? odomCtx.lineTo(x, y) : odomCtx.moveTo(x, y);
     });
     odomCtx.stroke();
+    odomCtx.restore();
   };
-  path(globalPath, '#ff6b7d');
+  if (replans > 0) {                    /* the original route, dashed, under the re-planned one */
+    path(firstPath, 'rgba(255,107,125,.75)', true);
+    path(globalPath, '#ffa94d');
+  } else {
+    path(globalPath, '#ff6b7d');
+  }
   path(drivenPath, '#59b0ff');
+
+  /* the planner's lidar obstacles (rocks it avoids) */
+  if (lidarObs.length) {
+    odomCtx.fillStyle = '#ffd166';
+    const s = Math.max(0.15 / mapRes, 2.5*k);
+    for (let i = 0; i < lidarObs.length; i += 2)
+      odomCtx.fillRect(lidarObs[i]/mapRes - s/2, mapH - lidarObs[i+1]/mapRes - s/2, s, s);
+  }
 
   /* camera FOV wedge and local obstacles (from the local DEM) */
   if (localObs && localObs.fov) {
@@ -866,11 +904,17 @@ function drawOverlay() {
   }
 }
 
-socket.on('global_path_update', m => { $('planning').style.display='none'; globalPath = m.path; drawOverlay(); });
+socket.on('global_path_update', m => {
+  $('planning').style.display = 'none';
+  globalPath = m.path; firstPath = m.first || []; replans = m.replans || 0;
+  drawOverlay();
+});
+socket.on('lidar_obstacles', m => { lidarObs = m.pts || []; drawOverlay(); });
 socket.on('trajectory_update',  m => {
   drivenPath = m.path;
   if (!m.path.length) {                 // session reset (Unreal Play/Stop): wipe stale goal
-    globalPath = []; $('t-goal').textContent = '—'; $('planning').style.display = 'none';
+    globalPath = []; firstPath = []; replans = 0; lidarObs = [];
+    $('t-goal').textContent = '—'; $('planning').style.display = 'none';
     addLocal('INFO', 'New session detected (Unreal Play/Stop) — map cleared.');
   }
   drawOverlay();

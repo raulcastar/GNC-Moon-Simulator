@@ -40,6 +40,28 @@ lc_component_path_planner:
     robot_radius: 0.35            # [m]
 
     # ---------------------------------------------------------
+    # Lidar obstacle avoidance
+    # ---------------------------------------------------------
+    # On: every lidar scan is levelled, the local ground plane fitted, and the
+    # points higher than obstacle_min_height_m above it become obstacles. The
+    # DWA steers around them (remembered for obstacle_memory_s, so a rock that
+    # leaves the lidar's view while turning is not forgotten), and their 1 m
+    # map cells are marked impassable: when the route within
+    # obstacle_replan_lookahead_m crosses one, it is planned again around it.
+    # They are published on planner/obstacles (odom frame).
+    # Off: the rover follows the route without looking (the maps' slopes and
+    # soil only). Read every cycle, so it can be switched while driving:
+    #   ros2 param set /lc_component_path_planner lidar_obstacle_avoidance false
+    lidar_obstacle_avoidance: true
+    lidar_topic: "lidar/points"
+    lidar_pitch_deg: -20.0          # [deg] the lidar's mounting pitch (negative = down)
+    lidar_x_offset_m: 0.0           # [m] lidar ahead of the rover's odometry point
+    obstacle_min_height_m: 0.15     # [m] above the local ground: the rover's body clears less
+    obstacle_max_range_m: 6.0       # [m] ahead; farther returns are ignored
+    obstacle_memory_s: 20.0         # [s] an obstacle not seen again is forgotten after this
+    obstacle_replan_lookahead_m: 5.0  # [m] of route checked for newly blocked cells
+
+    # ---------------------------------------------------------
     # Debug & Visualization
     # ---------------------------------------------------------
     debug_mode: true

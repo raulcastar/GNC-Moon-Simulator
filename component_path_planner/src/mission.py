@@ -19,11 +19,6 @@ GOAL_SNAP_RADIUS_CELLS = 5
 # Driven trajectory points are kept this far apart (metres).
 TRAJECTORY_SPACING_M = 0.1
 
-# Temporary static boundary testing array (a wall at x = 90 m) passed to the
-# DWA as its obstacles. Not the rover's real surroundings: see the obstacle
-# avoidance item in the review.
-TEST_OBSTACLES = np.array([[90, y] for y in range(66, 86)])
-
 
 # =========================================================================
 # Attitude

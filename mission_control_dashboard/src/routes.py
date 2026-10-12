@@ -238,6 +238,12 @@ def handle_headlights(json_data):
         web.node.set_headlights(json_data.get('on', False))
 
 
+@socketio.on('obstacle_avoidance')
+def handle_obstacle_avoidance(json_data):
+    if web.node is not None:
+        web.node.set_obstacle_avoidance(bool(json_data.get('on', True)))
+
+
 @socketio.on('stop_rover')
 def handle_stop(json_data=None):
     if web.node is not None:
@@ -270,6 +276,7 @@ def _send_cached(server, sid):
     if web.node._mask_classes:
         server.emit('mask_classes', web.node._mask_classes, to=sid)
     server.emit('mission', web.node._mission, to=sid)
+    server.emit('avoidance', {'on': web.node._avoidance}, to=sid)
 
 
 @sio_cams.on('connect')

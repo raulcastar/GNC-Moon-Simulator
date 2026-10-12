@@ -60,7 +60,7 @@ for their optional matplotlib debug windows (`enable_path_visualization` and
 | `component_stereo_depth` | Receives the three navcams from the UnrealStereoCam plugin and computes stereo depth; also republishes extra mono cameras (the rear camera, `rear_cam/image_color`). |
 | `component_lidar` | Lidar point cloud from the UnrealLidarCam plugin (`lidar/points`). |
 | `component_local_mapping` | Builds a local DEM and occupancy grid from the central navcam's depth. |
-| `component_path_planner` | Global path over the elevation grid. |
+| `component_path_planner` | Global path over the elevation grid, driven by a DWA controller. With `lidar_obstacle_avoidance` (on by default, switchable live with `ros2 param set`), obstacles the lidar sees 0.15 m or more above the local ground are avoided and the route re-planned around them; they are published on `planner/obstacles`. |
 | `component_rover_leo_raph` | Rover base: `/cmd_vel` in, `/odom` out. |
 | `component_sim_clock` | Publishes `/clock` (simulation time) from the UnrealSimClock plugin. |
 | `mission_control_dashboard` | Web mission control, menu on port 5000: overview (cameras, lidar, map with goal dispatch, telemetry, /rosout console), teleop, camera wall, 3D map, system (feeds, nodes, ROS 2 topics) and bags: record with presets, replay, manage (5007). |
