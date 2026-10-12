@@ -38,7 +38,7 @@ from rcl_interfaces.srv import GetParameters
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.lifecycle import State, TransitionCallbackReturn
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
-from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Imu, PointCloud2
+from sensor_msgs.msg import CameraInfo, CompressedImage, Imu, PointCloud2
 from std_msgs.msg import Bool, Empty, Float32MultiArray, String
 
 from . import web
@@ -67,6 +67,7 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
 
         self.bridge = CvBridge()
         self._subs = []
+        self._viewer_feeds, self._viewer_subs = [], []     # feeds subscribed only while watched
         self._pub_goal = None
         self._pub_lights = None
         self._pub_cmdvel = None
@@ -86,7 +87,8 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
         self._init_replay()
 
         # Latest data, for the snapshot export and for browsers that join late.
-        self._last_jpeg = {}            # feed id -> JPEG bytes
+        self._last_jpeg = {}            # feed id -> JPEG bytes (as last sent)
+        self._last_frame = {}           # feed id -> newest raw Image of a raw feed
         self._last_dem = None           # (DEM metres [forward, lateral], cell size)
         self._last_cloud = None         # lidar xyz, rover frame
         self._last_odom = None          # pose and attitude
@@ -192,32 +194,23 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
             CompressedImage, 'rear_cam/image_color/compressed',
             self._make_jpeg_relay('cam_rear'), qos_profile_sensor_data))
 
-        # Already-colourised products only need JPEG encoding.
-        self._subs.append(sub(
-            Image, f'{ns}/central/image_depth/visualization',
-            self._make_image_relay('depth', both=True), qos_profile_sensor_data))
-        self._subs.append(sub(
-            Image, f'{ns}/central/depth_ground_truth/visualization',
-            self._make_image_relay('depth_gt'), qos_profile_sensor_data))
-        self._subs.append(sub(
-            Image, f'{ns}/central/object_mask',
-            self._make_image_relay('mask'), qos_profile_sensor_data))
-        self._subs.append(sub(
-            Image, f'{ns}/central/shadow_mask',
-            self._make_image_relay('shadow'), qos_profile_sensor_data))
-
-        # Event (DVS) and SPAD cameras publish at ~30 Hz; throttle their
-        # browser-facing rate so the websocket / UI does not stall (~6 fps).
-        self._subs.append(sub(
-            Image, 'event_camera/image_events',
-            self._make_image_relay('events', min_period=CAM_PRODUCT_MIN_PERIOD),
-            qos_profile_sensor_data))
-
-        # SPAD camera digitised reconstruction from component_spad_camera.
-        self._subs.append(sub(
-            Image, 'spad/image',
-            self._make_image_relay('spad', min_period=CAM_PRODUCT_MIN_PERIOD),
-            qos_profile_sensor_data))
+        # Raw image feeds (already colourised products, event and SPAD cameras)
+        # are subscribed only while a window shows them (see
+        # _sync_viewer_subscriptions): each frame is ~1 MB to receive and
+        # decode, and the stereo node builds its visualisations only for
+        # subscribers. Event and SPAD publish at ~30 Hz, so their browser-facing
+        # rate is throttled (~6 fps).
+        self._viewer_feeds = [
+            ('depth', f'{ns}/central/image_depth/visualization', self._make_image_relay('depth', both=True)),
+            ('depth_gt', f'{ns}/central/depth_ground_truth/visualization', self._make_image_relay('depth_gt')),
+            ('mask', f'{ns}/central/object_mask', self._make_image_relay('mask')),
+            ('shadow', f'{ns}/central/shadow_mask', self._make_image_relay('shadow')),
+            ('events', 'event_camera/image_events',
+             self._make_image_relay('events', min_period=CAM_PRODUCT_MIN_PERIOD)),
+            ('spad', 'spad/image', self._make_image_relay('spad', min_period=CAM_PRODUCT_MIN_PERIOD)),
+        ]
+        self._viewer_subs = []
+        self._sync_viewer_subscriptions()
 
         # 5 Hz teleop deadman: stop the rover if manual commands stop arriving.
         self._teleop_watchdog = self.create_timer(0.2, self._teleop_watchdog_cb)
@@ -244,9 +237,9 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
             if getattr(self, attr) is not None:
                 self.destroy_timer(getattr(self, attr))
                 setattr(self, attr, None)
-        for s in self._subs:
+        for s in self._subs + self._viewer_subs:
             self.destroy_subscription(s)
-        self._subs = []
+        self._subs, self._viewer_subs = [], []
         for p in (self._pub_goal, self._pub_lights, self._pub_cmdvel, self._pub_cancel):
             if p:
                 self.destroy_publisher(p)

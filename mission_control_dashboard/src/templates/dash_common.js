@@ -1,8 +1,19 @@
 /* Helpers shared by the dashboard pages (overview, teleop, system).
  *
  *   escHtml(text)          text made safe to put inside HTML
+ *   showJpeg(img, data)    shows a JPEG received as binary (ArrayBuffer) in an <img>
  *   ViewPicker.attach(o)   a "VIEWS ▾" button opening a list of toggle chips
  */
+
+/* Camera frames arrive as binary JPEG (an ArrayBuffer). Each becomes an object
+   URL; the previous one is released at once (the image already shown stays). */
+function showJpeg(img, data) {
+  const previous = img.dataset.blob;
+  const url = URL.createObjectURL(new Blob([data], { type: 'image/jpeg' }));
+  img.src = url;
+  img.dataset.blob = url;
+  if (previous) URL.revokeObjectURL(previous);
+}
 
 const escHtml = t => String(t).replace(/[&<>"]/g,
   c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));

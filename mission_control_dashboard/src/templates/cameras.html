@@ -7,6 +7,7 @@
 <script src="/theme.js"></script>
 <link rel="stylesheet" href="/base.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+<script src="/dash_common.js"></script>
 <script src="/alerts.js"></script>
 <script src="/feed_legends.js"></script>
 <script src="/nav_overlay.js"></script>
@@ -189,7 +190,7 @@
     const tile = $('t-' + m.id);
     if (!tile) return;
     const img = tile.querySelector('img');
-    img.src = 'data:image/jpeg;base64,' + m.image;
+    showJpeg(img, m.image);
     if (img.style.display === 'none') {
       img.style.display = 'block';
       tile.querySelector('.nosig').style.display = 'none';

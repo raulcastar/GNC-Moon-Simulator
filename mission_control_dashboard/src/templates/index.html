@@ -432,7 +432,7 @@ socket.on('feed', msg => {
   const box = $('f-' + msg.id);
   if (!box) return;
   box.querySelector('.nosig').style.display = 'none';
-  box.querySelector('img').src = 'data:image/jpeg;base64,' + msg.image;
+  showJpeg(box.querySelector('img'), msg.image);
   if (msg.id.startsWith('cam_')) lastSeen.cam = Date.now();
   if (msg.id === 'depth') lastSeen.depth = Date.now();
 });
@@ -726,9 +726,8 @@ function viridis(t) {
 }
 
 socket.on('map_update', m => {
-  if (m.data_u16 !== undefined) {           /* uint16-quantised, base64; 65535 = no data */
-    const bin = atob(m.data_u16), q = new Uint16Array(bin.length / 2);
-    for (let i = 0; i < q.length; i++) q[i] = bin.charCodeAt(2*i) | (bin.charCodeAt(2*i + 1) << 8);
+  if (m.data_u16 !== undefined) {           /* uint16-quantised, binary; 65535 = no data */
+    const q = new Uint16Array(m.data_u16);
     m.data = new Float32Array(q.length);
     for (let i = 0; i < q.length; i++) m.data[i] = q[i] === 65535 ? 9999 : m.lo + q[i] * m.scale;
   }

@@ -272,8 +272,8 @@
                                                   viewResize = requestAnimationFrame(layoutViews); } });
 
   // ---- camera feeds ----
-  function showFeed(id, nsId, b64) {
-    const img = $(id); img.src = 'data:image/jpeg;base64,' + b64;
+  function showFeed(id, nsId, jpeg) {
+    const img = $(id); showJpeg(img, jpeg);
     if (img.style.display === 'none') { img.style.display = 'block'; $(nsId).style.display = 'none'; }
   }
   FeedLegends.attach(socket, { depth: [$('feed-depth')] });

@@ -7,7 +7,10 @@ from lifecycle_msgs.srv import ChangeState, GetState
 from rcl_interfaces.srv import GetParameters
 
 from .settings import FEED_NAMES, FEED_STALE_S, HEALTH_WINDOW, NODE_POLL_TICKS, REMOTE_PARAMS
-from .web import sio_cams, sio_map, sio_replay, sio_sys, sio_teleop, socketio
+from sensor_msgs.msg import Image
+from rclpy.qos import qos_profile_sensor_data
+
+from .web import feed_watchers, sio_cams, sio_map, sio_replay, sio_sys, sio_teleop, socketio
 
 
 class HealthMixin:
@@ -84,9 +87,28 @@ class HealthMixin:
     def _mark(self, feed: str) -> None:
         self._arrivals[feed].append(time.monotonic())
 
+    def _sync_viewer_subscriptions(self) -> None:
+        """
+        Subscribes to the raw image feeds while a window shows them or their
+        rates, and drops the subscriptions when the last such window closes.
+        """
+        wanted = feed_watchers()
+        if wanted and not self._viewer_subs:
+            self._viewer_subs = [self.create_subscription(Image, topic, cb, qos_profile_sensor_data)
+                                 for _feed, topic, cb in self._viewer_feeds]
+            self.get_logger().info('Camera windows open: raw image feeds subscribed.')
+        elif not wanted and self._viewer_subs:
+            for s in self._viewer_subs:
+                self.destroy_subscription(s)
+            self._viewer_subs = []
+            for feed, _topic, _cb in self._viewer_feeds:
+                self._arrivals.pop(feed, None)          # not watched: no rate, no alert
+            self.get_logger().info('No camera window open: raw image feeds unsubscribed.')
+
     def _health_cb(self) -> None:
         if not self._is_active():
             return
+        self._sync_viewer_subscriptions()
         now = time.monotonic()
         feeds = {}
         for name, times in self._arrivals.items():

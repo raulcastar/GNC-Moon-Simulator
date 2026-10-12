@@ -77,6 +77,25 @@ def emit_map(event, data):
     sio_map.emit(event, data)
 
 
+def _clients(server) -> int:
+    """Browsers connected to one Socket.IO server (all rooms of the default namespace)."""
+    try:
+        return len(server.server.manager.rooms.get('/', {}).get(None, {}))
+    except AttributeError:          # another python-socketio layout: assume someone is
+        return 1
+
+
+def feed_viewers(teleop=True) -> bool:
+    """Whether any window that shows camera feeds is open (overview, camera wall, teleop)."""
+    servers = (socketio, sio_cams, sio_teleop) if teleop else (socketio, sio_cams)
+    return any(_clients(s) for s in servers)
+
+
+def feed_watchers() -> bool:
+    """A window that shows the feeds or their rates (the System window) is open."""
+    return feed_viewers() or _clients(sio_sys) > 0
+
+
 def emit_feeds(event, data, teleop=True):
     """Fan a camera feed out to the screens that show it: overview and the
     camera wall always; teleop too for the driving-relevant views."""
@@ -139,7 +158,7 @@ app.add_url_rule('/snapshot.zip', 'snapshot', _snapshot)
 for _app in (app, app_map):
     _app.add_url_rule('/local_dem.js', 'local_dem_js', _local_dem_js)
     _app.add_url_rule('/lidar_view.js', 'lidar_view_js', _lidar_view_js)
-for _app in (app, app_teleop, app_sys, app_replay):
+for _app in (app, app_teleop, app_sys, app_replay, app_cams):
     _app.add_url_rule('/dash_common.js', 'dash_common_js', _dash_common_js)
 
 

@@ -192,7 +192,8 @@ class RecordingMixin:
         """Latest camera frames, local DEM, lidar cloud and state, as a zip."""
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
-            for feed_id, jpeg in list(self._last_jpeg.items()):
+            jpegs = self.latest_jpegs()
+            for feed_id, jpeg in jpegs.items():
                 z.writestr(f'{feed_id}.jpg', jpeg)
             if self._last_dem is not None:
                 dem, res = self._last_dem
@@ -209,6 +210,6 @@ class RecordingMixin:
             z.writestr('metadata.json', json.dumps({
                 'utc': datetime.now(timezone.utc).isoformat(timespec='seconds'),
                 'odom': self._last_odom, 'mission': self._mission,
-                'nodes': self._node_states, 'feeds': sorted(self._last_jpeg),
+                'nodes': self._node_states, 'feeds': sorted(jpegs),
             }, indent=2))
         return buf.getvalue()

@@ -20,7 +20,7 @@ DEM_MAX_CELLS = 160           # max DEM cells per side sent to the browser
 TRAJ_MAX_POINTS = 1500        # points per driven-path push (decimated)
 TRAJ_MIN_PERIOD = 0.5         # seconds between driven-path frames
 # The event and SPAD cameras publish at ~30 Hz. Relaying every frame to the
-# browser as a base64 JPEG floods the websocket and stalls the UI, so cap their
+# browser as a JPEG floods the websocket and stalls the UI, so cap their
 # browser-facing rate. 0.16 s ~= 6 fps, plenty for these visualisations.
 CAM_PRODUCT_MIN_PERIOD = 0.16
 

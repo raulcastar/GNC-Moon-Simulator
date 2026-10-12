@@ -1,6 +1,5 @@
 """Lidar, the local DEM and its obstacles, and the global elevation map."""
 
-import base64
 import math
 import time
 import warnings
@@ -200,7 +199,7 @@ class MappingMixin:
     def map_response_callback(self, future, sid=None) -> None:
         try:
             response = future.result()
-            # Quantise to uint16 over the valid range and send as base64: the
+            # Quantise to uint16 over the valid range and send as binary: the
             # JSON float list for a 1000x1000 map is ~19 MB and stalls the
             # socket. 65535 marks no-data (planner sentinel >= 9999).
             elev = np.asarray(response.elevation_map.data, dtype=np.float32)
@@ -212,7 +211,7 @@ class MappingMixin:
             q = np.full(elev.shape, 65535, dtype='<u2')
             q[valid] = np.round((elev[valid] - lo) / scale).astype('<u2')
             socketio.emit('map_update', {
-                'data_u16': base64.b64encode(q.tobytes()).decode('ascii'),
+                'data_u16': q.tobytes(),           # little-endian uint16, binary attachment
                 'lo': lo,
                 'scale': scale,
                 'width': response.elevation_map.layout.dim[1].size,

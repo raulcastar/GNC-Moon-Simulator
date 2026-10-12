@@ -1,6 +1,5 @@
 """Camera feeds relayed to the browser, and the planned path drawn on the central navcam."""
 
-import base64
 import json
 import math
 import time
@@ -12,7 +11,7 @@ from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 from std_msgs.msg import String
 
 from .settings import CAMERA_DEFAULTS, MIN_CAMERA_DEPTH, PATH_OVERLAY_AHEAD, PATH_OVERLAY_STEP, ROVER_HALF_WIDTH
-from .web import emit_feeds
+from .web import emit_feeds, feed_viewers
 
 
 class ImageryMixin:
@@ -26,9 +25,9 @@ class ImageryMixin:
             self._mark(feed_id)
             jpeg = bytes(msg.data)
             self._last_jpeg[feed_id] = jpeg
-            emit_feeds('feed', {
-                'id': feed_id,
-                'image': base64.b64encode(jpeg).decode('ascii')})
+            # Sent as a binary attachment (bytes), not base64 text: a third
+            # smaller and no encoding. The pages show it with showJpeg().
+            emit_feeds('feed', {'id': feed_id, 'image': jpeg})
             if feed_id == 'cam_central':
                 self._emit_path_overlay()   # drawn on the frame just sent
         return cb
@@ -40,9 +39,12 @@ class ImageryMixin:
         Always goes to the overview and the camera wall (5003). both=True also
         mirrors it to the teleop screen (used for the stereo depth view).
         min_period caps the browser-facing rate (seconds between frames): the
-        event and SPAD cameras publish at ~30 Hz, and pushing every one as a
-        base64 JPEG over the websocket floods the browser and stalls the UI.
-        The throttle is checked before the JPEG encode, so it also saves CPU.
+        event and SPAD cameras publish at ~30 Hz, and pushing every one over the
+        websocket floods the browser and stalls the UI. The throttle is checked
+        before the JPEG encode, so it also saves CPU.
+
+        The JPEG is encoded only while a window that shows feeds is open; the
+        newest frame is kept either way for the snapshot (encoded on demand).
         """
         def emit(event, data):
             emit_feeds(event, data, teleop=both)
@@ -58,19 +60,39 @@ class ImageryMixin:
                 if now - last[0] < min_period:
                     return
                 last[0] = now
+            self._last_frame[feed_id] = msg
+            if not feed_viewers(teleop=both):
+                self._last_jpeg.pop(feed_id, None)   # stale: the snapshot encodes _last_frame
+                return
             try:
-                img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-                ok, buf = cv2.imencode('.jpg', img,
-                                       [cv2.IMWRITE_JPEG_QUALITY, 80])
-                if ok:
-                    self._last_jpeg[feed_id] = buf.tobytes()
-                    emit('feed', {
-                        'id': feed_id,
-                        'image': base64.b64encode(buf).decode('ascii')})
+                jpeg = self._encode_jpeg(msg)
+                if jpeg is not None:
+                    self._last_jpeg[feed_id] = jpeg
+                    emit('feed', {'id': feed_id, 'image': jpeg})
             except Exception as e:
                 self.get_logger().warn(f"{feed_id} relay fault: {e}",
                                        throttle_duration_sec=10.0)
         return cb
+
+    def _encode_jpeg(self, msg: Image):
+        """A raw Image as JPEG bytes (quality 80), or None."""
+        img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        ok, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        return buf.tobytes() if ok else None
+
+    def latest_jpegs(self) -> dict:
+        """feed id -> JPEG of its newest frame, encoding raw feeds nobody was watching."""
+        out = dict(self._last_jpeg)
+        for feed_id, msg in list(self._last_frame.items()):
+            if feed_id not in out:
+                try:
+                    jpeg = self._encode_jpeg(msg)
+                except Exception as e:
+                    self.get_logger().warn(f"Snapshot: {feed_id} not encoded: {e}")
+                    continue
+                if jpeg is not None:
+                    out[feed_id] = jpeg
+        return out
 
     def _cam_param(self, key: str) -> float:
         value = self._remote.get(key)
