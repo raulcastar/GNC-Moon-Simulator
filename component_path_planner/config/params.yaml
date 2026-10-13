@@ -34,10 +34,13 @@ lc_component_path_planner:
     obstacle_cost_gain: 1.0
     robot_stuck_flag_cons: 0.001
     
-    # Robot Geometry
-    robot_width: 0.35             # [m]
-    robot_length: 0.35            # [m]
-    robot_radius: 0.35            # [m]
+    # Robot Geometry (the DWA's footprint; the Unreal rover's body is ~0.63 m square)
+    robot_width: 0.65             # [m]
+    robot_length: 0.65            # [m]
+    robot_radius: 0.35            # [m] goal tolerance and the obstacle cells kept clear around the rover
+    # The DWA refuses trajectories that bring the footprint this close to an
+    # obstacle (no cost otherwise: the route keeps the distance).
+    obstacle_safety_m: 0.15       # [m]
 
     # ---------------------------------------------------------
     # Lidar obstacle avoidance
@@ -60,6 +63,12 @@ lc_component_path_planner:
     obstacle_max_range_m: 6.0       # [m] ahead; farther returns are ignored
     obstacle_memory_s: 20.0         # [s] an obstacle not seen again is forgotten after this
     obstacle_replan_lookahead_m: 5.0  # [m] of route checked for newly blocked cells
+    obstacle_clearance_m: 1.5       # [m] routes are planned this far from obstacle cells (dropped if no route keeps it)
+
+    # No progress while driving (neither 0.25 m moved nor 20 deg turned in
+    # stall_window_s): plan again; after max_stalls in a row, abort the goal.
+    stall_window_s: 15.0
+    max_stalls: 3
 
     # ---------------------------------------------------------
     # Debug & Visualization

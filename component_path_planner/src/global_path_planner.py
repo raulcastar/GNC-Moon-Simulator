@@ -212,36 +212,31 @@ class Global_Path_Planner:
                                 break
                             
                     gamma = np.vstack((gamma,np.array(nearN).T))
+                    # Step towards the lowest of the 4 neighbours (T was
+                    # computed 4-connected). This used to add the offsets with
+                    # list concatenation (nearN + [0,-1]), so it never looked at
+                    # a neighbour and the NaN step went into the path, e.g.
+                    # with a rock in the cells beside the rover.
                     currentT = totalCostMap[nearN[1],nearN[0]]
-                    for i in range(1,5):
-                        if i == 1:
-                            nodeChild = np.uint32(nearN + [0,-1])
-                        elif i == 2:
-                            nodeChild = np.uint32(nearN + [0,1])
-                        elif i == 3:
-                            nodeChild = np.uint32(nearN + [-1,0])
-                        elif i == 4:
-                            nodeChild = np.uint32(nearN + [1,0])
-                        elif i == 5:
-                            nodeChild = np.uint32(nearN + [-1,-1])
-                        elif i == 6:
-                            nodeChild = np.uint32(nearN + [1,1])
-                        elif i == 7:
-                            nodeChild = np.uint32(nearN + [-1,1])
-                        elif i == 8:
-                            nodeChild = np.uint32(nearN + [1,-1])
-                    
-                        if totalCostMap[nodeChild[1],nodeChild[0]] < currentT:
-                            currentT = totalCostMap[nodeChild[1],nodeChild[0]]
-                            dx = (nearN[0]-nodeChild[0])/tau
-                            dy = (nearN[1]-nodeChild[1])/tau
+                    rows, cols = totalCostMap.shape
+                    for ox, oy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+                        nx_, ny_ = nearN[0] + ox, nearN[1] + oy
+                        if 0 <= nx_ < cols and 0 <= ny_ < rows and totalCostMap[ny_, nx_] < currentT:
+                            currentT = totalCostMap[ny_, nx_]
+                            dx, dy = -ox / tau, -oy / tau
                 except Exception as exc:
                     self.log.warning(f'Path extraction stopped at node {nearN} after '
                                      f'{len(gamma)} points ({type(exc).__name__}: {exc}); '
                                      f'returning the partial path')
                     return gamma
+                if np.isnan(dx) or np.isnan(dy):
+                    # No lower neighbour to step to: walk the cells instead.
+                    return self.getPathDiscrete(totalCostMap, initWaypoint, endWaypoint)
                     
             
+            if dx == 0 and dy == 0:
+                # Flat T here (between blocked cells): no direction to step in.
+                return self.getPathDiscrete(totalCostMap, initWaypoint, endWaypoint)
             if np.linalg.norm([dx,dy]) < 0.01:
                 dnx = dx/math.sqrt(dx**2+dy**2)
                 dny = dy/math.sqrt(dx**2+dy**2)

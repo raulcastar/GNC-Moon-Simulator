@@ -148,6 +148,47 @@ def plan_route(planner: global_path_planner.Global_Path_Planner, cost_map: np.nd
 # Final approach
 # =========================================================================
 
+class ProgressWatch:
+    """
+    Notices a rover that should be driving but makes no progress: it has
+    neither moved min_move_m nor turned min_turn_deg (a spot turn is progress)
+    for window_s. `stalls` counts stalls in a row; only moving resets it, so a
+    rover that turns back and forth on the spot still adds up stalls.
+    """
+
+    def __init__(self, window_s: float = 15.0, min_move_m: float = 0.25, min_turn_deg: float = 20.0):
+        self.window_s, self.min_move_m, self.min_turn_deg = window_s, min_move_m, min_turn_deg
+        self.stalls = 0
+        self._anchor = None                 # (t, x, y, yaw) of the last progress
+
+    def reset(self) -> None:
+        """A new goal: forget everything."""
+        self.stalls, self._anchor = 0, None
+
+    def pause(self) -> None:
+        """Not driving (planning): the window starts again when driving resumes."""
+        self._anchor = None
+
+    def update(self, t: float, x: float, y: float, yaw: float) -> bool:
+        """True once per window without progress."""
+        if self._anchor is None:
+            self._anchor = (t, x, y, yaw)
+            return False
+        t0, x0, y0, yaw0 = self._anchor
+        moved = math.hypot(x - x0, y - y0) >= self.min_move_m
+        turned = abs(math.degrees(math.atan2(math.sin(yaw - yaw0), math.cos(yaw - yaw0)))) >= self.min_turn_deg
+        if moved or turned:
+            self._anchor = (t, x, y, yaw)
+            if moved:
+                self.stalls = 0
+            return False
+        if t - t0 >= self.window_s:
+            self._anchor = (t, x, y, yaw)
+            self.stalls += 1
+            return True
+        return False
+
+
 def stop_tolerance(robot_radius: float, base_tolerance: float) -> float:
     """Distance to the goal at which the rover parks."""
     return max(robot_radius, base_tolerance)
@@ -163,13 +204,20 @@ def approach_speed(base_max_speed: float, dist_to_goal: float, braking_distance:
     return base_max_speed
 
 
+APPROACH_ALIGNED_RAD = math.radians(20.0)
+
+
 def approach_yaw_rate(yaw_rate: float, dist_to_goal: float, braking_distance: float,
-                      tolerance: float) -> float:
+                      tolerance: float, heading_error: float = 0.0) -> float:
     """
     The commanded yaw rate near the goal: damped within the braking distance
     and zero on the final metre, so the DWA does not spin over the goal (atan2
-    turns unstable there).
+    turns unstable there). Only while the rover heads at the goal (within
+    APPROACH_ALIGNED_RAD): arriving off course, it could not turn to the goal
+    and circled it at crawling speed, never within the tolerance.
     """
+    if abs(heading_error) > APPROACH_ALIGNED_RAD:
+        return yaw_rate
     if dist_to_goal < braking_distance:
         yaw_rate *= dist_to_goal / braking_distance
         if dist_to_goal < tolerance + 1.0:
@@ -201,6 +249,7 @@ def robot_config(param: Callable[[str], object]) -> SimpleNamespace:
     conf.robot_width = param('robot_width')
     conf.robot_length = param('robot_length')
     conf.robot_radius = param('robot_radius')
+    conf.obstacle_safety_m = param('obstacle_safety_m')
     return conf
 
 

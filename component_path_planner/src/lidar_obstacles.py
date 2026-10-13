@@ -145,6 +145,54 @@ def keep_clear(cells: set, points, radius_cells: float) -> set:
             if all(math.hypot(c[0] - p[0], c[1] - p[1]) > radius_cells for p in points)}
 
 
+def inflate(cells: set, radius_cells: float) -> set:
+    """`cells` grown by every cell whose centre is within radius_cells of one of them."""
+    r = int(math.floor(radius_cells))
+    offsets = [(dc, dr) for dc in range(-r, r + 1) for dr in range(-r, r + 1)
+               if math.hypot(dc, dr) <= radius_cells]
+    return {(c + dc, w + dr) for c, w in cells for dc, dr in offsets}
+
+
+def route_blocking(cells: set, rover_cell, goal_cell, rover_clear_cells: float,
+                   goal_clear_cells: float) -> set:
+    """
+    The obstacle cells a route may not cross: all of `cells` except the one
+    under the rover and those within rover_clear_cells of it (the rover sits
+    beside what it sees), and those within goal_clear_cells of the goal (a goal
+    beside a rock stays reachable). Cell coordinates (col, row), map cells.
+
+    The planner and the "route ahead blocked?" check both use this, so a route
+    just planned is never blocked by the check at once (a re-plan loop).
+    """
+    under = (int(round(rover_cell[0])), int(round(rover_cell[1])))
+    return {c for c in cells
+            if c != under
+            and math.hypot(c[0] - rover_cell[0], c[1] - rover_cell[1]) > rover_clear_cells
+            and (goal_cell is None
+                 or math.hypot(c[0] - goal_cell[0], c[1] - goal_cell[1]) > goal_clear_cells)}
+
+
+def planning_blocked(cells: set, rover_cell, goal_cell, rover_clear_cells: float,
+                     goal_clear_cells: float, clearance_cells: float) -> set:
+    """
+    The cells closed to the route search: route_blocking's, plus a margin of
+    clearance_cells around every obstacle so routes keep their distance from
+    rocks (a route skirting a rock leaves the DWA stalled beside it). The
+    margin is left open near the rover and the goal, so the rover can leave or
+    reach a spot close to a rock.
+    """
+    core = route_blocking(cells, rover_cell, goal_cell, rover_clear_cells, goal_clear_cells)
+    if clearance_cells <= 0:
+        return core
+    margin = inflate(cells, clearance_cells) - cells
+    open_radius = clearance_cells + 1.0
+    margin = {c for c in margin
+              if math.hypot(c[0] - rover_cell[0], c[1] - rover_cell[1]) > open_radius
+              and (goal_cell is None
+                   or math.hypot(c[0] - goal_cell[0], c[1] - goal_cell[1]) > open_radius)}
+    return core | margin
+
+
 def path_blocked(path: np.ndarray, cells: set, robot_xy, lookahead_m: float,
                  resolution: float = 1.0) -> bool:
     """
@@ -166,9 +214,12 @@ def path_blocked(path: np.ndarray, cells: set, robot_xy, lookahead_m: float,
 
 def mark_blocked(cost_map: np.ndarray, obstacle_map: np.ndarray, cells: set,
                  blocked_cost: float):
-    """Copies of the maps with `cells` (col, row) impassable."""
+    """Copies of the maps with `cells` (col, row) impassable (cells outside the maps ignored)."""
     cost, obstacles = cost_map.copy(), obstacle_map.copy()
+    rows, cols = obstacle_map.shape
     for col, row in cells:
+        if not (0 <= col < cols and 0 <= row < rows):
+            continue
         obstacles[row, col] = 1
         cost[row, col] = blocked_cost
     return cost, obstacles

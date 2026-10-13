@@ -116,6 +116,14 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         # until a new session.
         self._obstacle_memory = lidar_obstacles.ObstacleMemory()
         self._blocked_cells = set()
+        # The blocked cells the current route was planned with. Only cells
+        # found since then can make the route ahead blocked: planning again
+        # with the same cells gives the same route (which may clip a known
+        # cell's corner), so re-planning for them would loop.
+        self._route_known_cells = set()
+        # No progress while driving (stalled beside a rock, stuck on terrain):
+        # re-plan, and after max_stalls in a row abort instead of waiting forever.
+        self._progress = mission.ProgressWatch()
         self._sub_lidar: Optional[Subscription] = None
         self._pub_obstacles: Optional[Publisher] = None
         self.trajectory_history = []
@@ -167,9 +175,10 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 ('robot_stuck_flag_cons', 0.001),
 
                 # Physical Footprint
-                ('robot_width', 0.35),
-                ('robot_length', 0.35),
+                ('robot_width', 0.65),
+                ('robot_length', 0.65),
                 ('robot_radius', 0.35),
+                ('obstacle_safety_m', 0.15),
 
                 # Lidar obstacle avoidance (read every cycle: can be switched live)
                 ('lidar_obstacle_avoidance', True),
@@ -180,6 +189,11 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 ('obstacle_max_range_m', 6.0),
                 ('obstacle_memory_s', 20.0),
                 ('obstacle_replan_lookahead_m', 5.0),
+                ('obstacle_clearance_m', 1.5),
+
+                # No-progress watchdog
+                ('stall_window_s', 15.0),
+                ('max_stalls', 3),
             ])
 
         if self._param('enable_path_visualization'):
@@ -218,6 +232,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 self.goal_reached = False
                 self._blocked_cells = set()
             self._obstacle_memory.clear()
+            self._progress.reset()
             self._stop_robot()
             self._publish_clear()
             self._set_state('idle', 'new session')
@@ -258,18 +273,36 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 np.column_stack((xy, np.zeros(len(xy)))).tolist())
             self._pub_obstacles.publish(cloud)
 
-    def _planning_maps(self, start_pos: list, goal: list):
-        """
-        The cost and obstacle maps for planning: with the lidar's blocked cells
-        marked impassable, except around the rover and the goal (the rover sits
-        next to what it sees; a goal beside a rock stays reachable).
-        """
-        if not self._lidar_enabled() or not self._blocked_cells:
-            return self.costMap, self.obstacleMap
+    def _cell_radii(self):
+        """(map resolution, rover clear radius, goal clear radius) in cells: see route_blocking."""
+        res = self._param('global_res')
+        radius = self.robot_conf.robot_radius
+        return res, radius / res, (radius + 1.0) / res
+
+    def _route_cells(self, rover_xy, goal) -> set:
+        """The lidar cells a route may not cross (lidar_obstacles.route_blocking), rover at rover_xy (m)."""
+        res, rover_clear, goal_clear = self._cell_radii()
         with self._plan_lock:
             cells = set(self._blocked_cells)
-        cells = lidar_obstacles.keep_clear(cells, [start_pos, goal], self.robot_conf.robot_radius + 1.0)
-        return lidar_obstacles.mark_blocked(self.costMap, self.obstacleMap, cells,
+        return lidar_obstacles.route_blocking(
+            cells, (rover_xy[0] / res, rover_xy[1] / res),
+            None if goal is None else (goal[0] / res, goal[1] / res), rover_clear, goal_clear)
+
+    def _planning_maps(self, rover_xy, goal: list, cells: set, clearance: bool = True):
+        """
+        The cost and obstacle maps for planning: the lidar's obstacle cells
+        impassable (the same cells the route-ahead check uses, so a new route
+        is never blocked at once), with a clearance margin around them unless
+        clearance is False. None when there are no lidar obstacles to add.
+        """
+        if not self._lidar_enabled() or not cells:
+            return None
+        res, rover_clear, goal_clear = self._cell_radii()
+        margin = self._param('obstacle_clearance_m') / res if clearance else 0.0
+        blocked = lidar_obstacles.planning_blocked(
+            cells, (rover_xy[0] / res, rover_xy[1] / res), (goal[0] / res, goal[1] / res),
+            rover_clear, goal_clear, margin)
+        return lidar_obstacles.mark_blocked(self.costMap, self.obstacleMap, blocked,
                                             2 * self._param('slope_threshold'))
 
     def _set_state(self, state: str, reason: str = '') -> None:
@@ -294,6 +327,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             self.current_goal = [new_x, new_y]
             self.global_path = None
             self.goal_reached = False
+        self._progress.reset()
         self._set_state('planning')
 
         # Invalidate the previous mission completion state across the ROS 2 network
@@ -342,11 +376,22 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         """Computes the route (worker thread), then applies it if still wanted."""
         planner = self.path_planner
         planner.should_stop = lambda: generation != self._plan_generation
+        rover_xy = (float(self.robot_pose[0]), float(self.robot_pose[1]))
+        with self._plan_lock:
+            known = set(self._blocked_cells)        # what this route is planned with
         try:
-            cost_map, obstacle_map = self._planning_maps(start_pos, goal)
-            outcome = mission.plan_route(
-                planner, cost_map, obstacle_map, self.freeRegions, start_pos, goal,
+            plan = lambda maps: mission.plan_route(
+                planner, *maps, self.freeRegions, start_pos, goal,
                 self._param('slope_threshold'), self.get_logger().info)
+            maps = self._planning_maps(rover_xy, goal, known)
+            if maps is None:
+                outcome = plan((self.costMap, self.obstacleMap))
+            else:
+                outcome = plan(maps)
+                if outcome[0] != 'driving':
+                    # No route keeps the clearance from the rocks: try without it.
+                    self.get_logger().info("No route keeps the obstacle clearance; planning without it.")
+                    outcome = plan(self._planning_maps(rover_xy, goal, known, clearance=False))
         except global_path_planner.PlanningCancelled:
             self.get_logger().info(f"Planning to {goal} stopped: the goal changed.")
             return
@@ -366,6 +411,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 self.get_logger().info(message)
                 self.current_goal = new_goal
                 self.global_path = path
+                self._route_known_cells = known
             else:
                 self.get_logger().warn(message)
                 self.current_goal = None
@@ -404,6 +450,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         # (planned in a worker thread: this callback returns at once).
         if self.global_path is None:
             self._stop_robot()
+            self._progress.pause()
             self._start_planning([int(round(self.robot_pose[0])), int(round(self.robot_pose[1]))])
             return
 
@@ -433,11 +480,35 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             self.current_goal = None
             return
 
+        # No progress for a while (stalled beside a rock, stuck on terrain):
+        # plan again; after max_stalls in a row, give the goal up.
+        self._progress.window_s = self._param('stall_window_s')
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if self._progress.update(now, *self.robot_pose[:3]):
+            stalls, limit = self._progress.stalls, self._param('max_stalls')
+            if stalls >= limit:
+                self.get_logger().warn(
+                    f"No progress towards {self.current_goal} after {stalls} attempts: goal aborted.")
+                with self._plan_lock:
+                    self._plan_generation += 1
+                    self._set_state('aborted', f'no progress ({stalls} stalls): blocked near an obstacle?')
+                    self.current_goal = None
+                    self.global_path = None
+                self._stop_robot()
+                return
+            self.get_logger().warn(
+                f"No progress for {self._progress.window_s:.0f} s ({stalls}/{limit}): planning again.")
+            with self._plan_lock:
+                self.global_path = None
+            self._set_state('planning', 'no progress')
+            self._stop_robot()
+            return
+
         # A lidar obstacle on the route ahead: plan the route again around it.
         if self._lidar_enabled():
             with self._plan_lock:
-                cells = set(self._blocked_cells)
-            cells = lidar_obstacles.keep_clear(cells, [self.robot_pose[:2]], self.robot_conf.robot_radius)
+                known = self._route_known_cells
+            cells = self._route_cells(self.robot_pose[:2], self.current_goal) - known
             if lidar_obstacles.path_blocked(self.global_path, cells, self.robot_pose[:2],
                                             self._param('obstacle_replan_lookahead_m'),
                                             self._param('global_res')):
@@ -464,8 +535,11 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             cmd_vel_arr, predicted_trajectory = self.local_planner.dwa_control(
                 state, self.robot_conf, np.array(local_goal), self.obstacles
             )
+            heading_error = math.atan2(self.current_goal[1] - self.robot_pose[1],
+                                       self.current_goal[0] - self.robot_pose[0]) - self.robot_pose[2]
+            heading_error = math.atan2(math.sin(heading_error), math.cos(heading_error))
             cmd_vel_arr[1] = mission.approach_yaw_rate(cmd_vel_arr[1], dist_to_goal,
-                                                       braking_distance, tolerance)
+                                                       braking_distance, tolerance, heading_error)
 
             twist_msg = Twist()
             twist_msg.linear.x = float(cmd_vel_arr[0])

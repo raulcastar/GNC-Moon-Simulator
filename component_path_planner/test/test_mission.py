@@ -107,7 +107,7 @@ def test_robot_config_from_parameters():
                   max_delta_yaw_rate_deg=17.0, yaw_rate_resolution_deg=0.5, v_resolution=0.005,
                   dt=0.1, predict_time=1.5, to_goal_cost_gain=1.0, speed_cost_gain=1.0,
                   obstacle_cost_gain=1.0, robot_stuck_flag_cons=0.001, robot_width=0.35,
-                  robot_length=0.35, robot_radius=0.35)
+                  robot_length=0.35, robot_radius=0.35, obstacle_safety_m=0.15)
     conf = mission.robot_config(params.__getitem__)
     assert conf.max_yaw_rate == pytest.approx(math.radians(8.0))
     assert conf.v_resolution == 0.005 and conf.robot_type == 1

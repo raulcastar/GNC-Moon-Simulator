@@ -140,25 +140,27 @@ class Local_Trajectory_Controller():
 
     def calc_obstacle_cost(self, trajectory, ob, robot_description):
         """
-        calc obstacle cost inf: collision
+        Obstacle cost of a trajectory: inf if it brings the footprint within
+        obstacle_safety_m of an obstacle, else 0.
+
+        It used to be 1 / (closest distance). Any cost that grows as the rover
+        nears a rock outweighs the speed reward the dynamic window offers from
+        rest (it only reaches max_accel * dt), so the rover stopped beside
+        rocks and stayed there. Keeping a distance from rocks is the route's
+        job (planned with a clearance); the DWA only refuses to hit them.
         """
         if len(ob) == 0:
             return 0.0              # nothing to avoid
-        ox = ob[:, 0]
-        oy = ob[:, 1]
-        dx = trajectory[:, 0] - ox[:, None]
-        dy = trajectory[:, 1] - oy[:, None]
-        r = np.hypot(dx, dy)
+        safety = getattr(robot_description, 'obstacle_safety_m', 0.0)
+        half_l = robot_description.robot_length / 2 + safety
+        half_w = robot_description.robot_width / 2 + safety
+        r = np.hypot(trajectory[:, 0] - ob[:, 0, None], trajectory[:, 1] - ob[:, 1, None])
         min_r = np.min(r)
 
-        # No collision is possible beyond the footprint's half-diagonal, so
-        # skip the per-pose rotation check when all obstacles are farther.
-        half_diag = math.hypot(robot_description.robot_length,
-                               robot_description.robot_width) / 2
-        if robot_description.robot_type == 1 and min_r > half_diag:
-            return 1.0 / min_r
-
-        if robot_description.robot_type == 1: # Rectangle
+        if robot_description.robot_type == 1:   # Rectangle
+            # No collision is possible beyond the footprint's half-diagonal.
+            if min_r > math.hypot(half_l, half_w):
+                return 0.0
             yaw = trajectory[:, 2]
             rot = np.array([[np.cos(yaw), -np.sin(yaw)], [np.sin(yaw), np.cos(yaw)]])
             rot = np.transpose(rot, [2, 0, 1])
@@ -166,19 +168,10 @@ class Local_Trajectory_Controller():
             local_ob = local_ob.reshape(-1, local_ob.shape[-1])
             local_ob = np.array([local_ob @ x for x in rot])
             local_ob = local_ob.reshape(-1, local_ob.shape[-1])
-            upper_check = local_ob[:, 0] <= robot_description.robot_length / 2
-            right_check = local_ob[:, 1] <= robot_description.robot_width / 2
-            bottom_check = local_ob[:, 0] >= -robot_description.robot_length / 2
-            left_check = local_ob[:, 1] >= -robot_description.robot_width / 2
-            if (np.logical_and(np.logical_and(upper_check, right_check),
-                            np.logical_and(bottom_check, left_check))).any():
-                return float("Inf")
-        elif robot_description.robot_type  == 0: # Circle
-            if np.array(r <= robot_description.robot_radius).any():
-                return float("Inf")
-
-        return 1.0 / min_r  # OK
-
+            inside = ((np.abs(local_ob[:, 0]) <= half_l) & (np.abs(local_ob[:, 1]) <= half_w))
+            return float("Inf") if inside.any() else 0.0
+        # Circle
+        return float("Inf") if min_r <= robot_description.robot_radius + safety else 0.0
 
     def calc_to_goal_cost(self, trajectory, goal):
         """
