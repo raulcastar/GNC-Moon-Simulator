@@ -10,9 +10,10 @@ lc_component_imu:
     # through from odom, so when the rover starts publishing real roll/pitch this
     # IMU reports them automatically.
 
-    # Surface gravity. Moon = 1.62 m/s^2; use 9.81 to emulate an Earth test rig.
+    # Surface gravity: must match Unreal's (Project Settings > Physics >
+    # Default Gravity Z, now Earth: -980 cm/s^2). Moon = 1.62 m/s^2.
     # A level, stationary accelerometer reads (0, 0, +gravity).
-    gravity:            1.62
+    gravity:            9.81
 
     # Frame the IMU is reported in (the rover base; add an imu_link + TF if you
     # mount it elsewhere).

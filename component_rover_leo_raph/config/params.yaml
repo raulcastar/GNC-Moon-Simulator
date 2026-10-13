@@ -37,28 +37,29 @@ lc_component_rover_leo_raph:
     # Wildcard here is correct: accept telemetry on every interface.
     listen_ip:                       0.0.0.0
     listen_port:                        3001
-    # m/s -> Unreal wheel input units. Measured under Moon gravity with physics
-    # substepping and low body damping: 0.2 m/s commanded -> 0.196 m/s driven.
+    # m/s -> Unreal wheel input units. Measured with physics substepping and low
+    # body damping: 0.2 m/s commanded -> 0.196 m/s (Moon) / 0.201 m/s (Earth)
+    # driven, so gravity barely changes it (the damping did).
     wheel_speed_scale:                  1.82
     # Centimeters, effective skid-steer track (physical: 38; skid-steer slip makes
-    # the effective one wider). Calibrated on level ground (< 4 deg): with 80,
-    # 0.2 rad/s commanded -> 0.166 rad/s turned, so 80 / 0.83. On slopes over
-    # ~10 deg spot turns scrub, slide downhill and turn slower, as skid-steer does.
-    rover_width:                        96.0
+    # the effective one wider). Calibrated on level ground under Earth gravity:
+    # with 96, 0.3 rad/s commanded -> 0.31-0.34 rad/s turned, so 96 * 0.3 / 0.3235.
+    # (Moon gravity needed 96: less grip, more slip.) On slopes over ~10 deg spot
+    # turns scrub, slide downhill and turn slower, as skid-steer does.
+    rover_width:                        89.0
     # Headlights at start. Sent to Unreal whenever it (re)connects, so every
     # Play session starts with this state; the dashboard toggles them.
     headlights_on:                      false
 
 
     # Acceleration limits: a commanded velocity STEP (manual `ros2 topic pub`,
-    # the planner, teleop) is ramped to these rates instead of jumping. Under
-    # Moon gravity the wheels' reaction lifts the light body easily: at 0.6
-    # m/s^2 a step to 0.3 m/s flipped the rover, at 0.1 it stays within ~1 deg
-    # of pitch. These caps sit below the planner's own ~0.4 m/s^2 ramp, so they
-    # set the rover's acceleration.
-    max_linear_accel:                    0.1  # m/s^2
-    max_angular_accel:                   0.3  # rad/s^2
+    # the planner, teleop) is ramped to these rates instead of jumping (per
+    # simulated second). Earth gravity (Unreal DefaultGravityZ -980). Under Moon
+    # gravity (-162) the wheels' reaction lifted the light body: 0.6 m/s^2 to
+    # 0.3 m/s flipped it and 0.1 was needed; Earth gravity holds it down.
+    max_linear_accel:                    0.4  # m/s^2
+    max_angular_accel:                   1.0  # rad/s^2
 
     # Deceleration limits. The ramp completes even if cmd_vel stops arriving.
-    max_linear_decel:                    0.1  # m/s^2
-    max_angular_decel:                   0.5  # rad/s^2
+    max_linear_decel:                    0.4  # m/s^2
+    max_angular_decel:                   1.5  # rad/s^2

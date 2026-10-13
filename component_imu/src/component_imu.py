@@ -94,7 +94,7 @@ class LifecycleImu(rclpy.lifecycle.Node):
         self.declare_parameters(
             namespace='',
             parameters=[
-                ('gravity',          1.62),        # m/s^2 (Moon; 9.81 for Earth)
+                ('gravity',          9.81),        # m/s^2 (Earth, as Unreal; 1.62 for the Moon)
                 ('imu_frame_id',     'base_link'),
                 ('odom_topic',       'odom'),
                 ('imu_topic',        'imu/data'),
