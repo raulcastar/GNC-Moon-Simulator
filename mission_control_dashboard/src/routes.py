@@ -3,9 +3,10 @@ ROS node in web.node (set by main())."""
 
 import threading
 
-from flask import render_template, request
+from flask import jsonify, render_template, request
 
 from . import web
+from .viewport_camera import VIEWPORT
 from .web import (app, app_cams, app_hub, app_map, app_replay, app_sys, app_teleop, sio_cams, sio_replay,
                   sio_sys, sio_teleop, socketio)
 
@@ -238,6 +239,23 @@ def handle_headlights(json_data):
         web.node.set_headlights(json_data.get('on', False))
 
 
+@socketio.on('viewport_camera')
+def handle_viewport_camera(json_data):
+    """The Unreal viewport's camera requested on the overview (follow / orbit)."""
+    if VIEWPORT.request(str(json_data.get('mode', ''))):
+        web.emit_all('viewport_camera', VIEWPORT.status())
+
+
+@app.route('/viewport_camera')
+def viewport_camera_poll():
+    """Unreal's rover_cameras.py polls this: what to show, and (?applied=) what it shows."""
+    before = VIEWPORT.status()
+    answer = VIEWPORT.poll(request.args.get('applied'))
+    if VIEWPORT.status() != before:
+        web.emit_all('viewport_camera', VIEWPORT.status())
+    return jsonify(answer)
+
+
 @socketio.on('obstacle_avoidance')
 def handle_obstacle_avoidance(json_data):
     if web.node is not None:
@@ -277,6 +295,7 @@ def _send_cached(server, sid):
         server.emit('mask_classes', web.node._mask_classes, to=sid)
     server.emit('mission', web.node._mission, to=sid)
     server.emit('avoidance', {'on': web.node._avoidance}, to=sid)
+    server.emit('viewport_camera', VIEWPORT.status(), to=sid)
 
 
 @sio_cams.on('connect')

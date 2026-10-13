@@ -12,6 +12,7 @@ from .settings import (AVOIDANCE_PARAM, FEED_NAMES, FEED_STALE_S, HEALTH_WINDOW,
 from sensor_msgs.msg import Image
 from rclpy.qos import qos_profile_sensor_data
 
+from .viewport_camera import VIEWPORT
 from .web import emit_all, feed_watchers, sio_cams, sio_map, sio_replay, sio_sys, sio_teleop, socketio
 
 
@@ -112,6 +113,10 @@ class HealthMixin:
             return
         self._sync_viewer_subscriptions()
         self._poll_avoidance()
+        viewport = VIEWPORT.status()               # notices Unreal's link stopping
+        if viewport != getattr(self, '_viewport_sent', None):
+            self._viewport_sent = viewport
+            emit_all('viewport_camera', viewport)
         now = time.monotonic()
         feeds = {}
         for name, times in self._arrivals.items():
