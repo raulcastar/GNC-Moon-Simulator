@@ -3,6 +3,8 @@ Optional matplotlib windows of the planner node (enable_path_visualization):
 a preview of the maps at configure time and a live plot of the drive.
 """
 
+import math
+
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -35,8 +37,8 @@ def preview_maps(elevation: np.ndarray, cost: np.ndarray, goal=None) -> None:
     plt.pause(3.0)
 
 
-def update_live_plot(local_planner, robot_conf, robot_pose, elevation, global_path,
-                     predicted_trajectory, trajectory_history, obstacles, goal) -> None:
+def update_live_plot(config, robot_pose, elevation, global_path, predicted_trajectory,
+                     trajectory_history, obstacles, goal) -> None:
     """Redraws the live plot: maps, routes, the rover and its footprint."""
     plt.cla()
 
@@ -66,8 +68,9 @@ def update_live_plot(local_planner, robot_conf, robot_pose, elevation, global_pa
     if len(obstacles) > 0:
         plt.plot(obstacles[:, 0], obstacles[:, 1], "sk")
 
-    local_planner.plot_robot(robot_pose[0], robot_pose[1], robot_pose[2], robot_conf)
-    local_planner.plot_arrow(robot_pose[0], robot_pose[1], robot_pose[2])
+    plot_footprint(robot_pose[0], robot_pose[1], robot_pose[2], config.robot_length, config.robot_width)
+    plt.arrow(robot_pose[0], robot_pose[1], 0.5 * math.cos(robot_pose[2]), 0.5 * math.sin(robot_pose[2]),
+              head_length=0.1, head_width=0.1)
 
     if elevation is not None:
         plt.xlim(0, elevation.shape[1])
@@ -76,6 +79,15 @@ def update_live_plot(local_planner, robot_conf, robot_pose, elevation, global_pa
     plt.grid(True)
     plt.legend(loc='upper right')
     plt.pause(0.001)
+
+
+def plot_footprint(x, y, yaw, length, width) -> None:
+    """The rover's rectangular footprint at (x, y, yaw)."""
+    corners = np.array([[-length / 2, length / 2, length / 2, -length / 2, -length / 2],
+                        [width / 2, width / 2, -width / 2, -width / 2, width / 2]])
+    rotation = np.array([[math.cos(yaw), math.sin(yaw)], [-math.sin(yaw), math.cos(yaw)]])
+    corners = (corners.T.dot(rotation)).T
+    plt.plot(corners[0, :] + x, corners[1, :] + y, "-k")
 
 
 def close_all() -> None:

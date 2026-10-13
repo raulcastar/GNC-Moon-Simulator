@@ -1,133 +1,191 @@
-"""Mission logic (mission), map building (planner_maps) and messages (ros_conversions)."""
+"""The mission logic (mission): states and decisions, cycle by cycle."""
 
 import json
 import math
-import types
 
 import numpy as np
 import pytest
 
-from src import global_path_planner as gpp
-from src import mission
-from src.planner_maps import build_maps
-from src.ros_conversions import finite_cost_map, matrix_msg, path_msg
+from src import mission as m
+from src.global_planner import Route
+
+SETTINGS = m.MissionSettings(stop_tolerance=0.7, max_tilt_deg=25.0, replan_lookahead_m=5.0,
+                             stall_window_s=15.0, max_stalls=3)
+ROUTE = np.column_stack((np.arange(0.0, 21.0), np.zeros(21)))
+GOAL = [20.0, 0.0]
 
 
-def bordered_soil(shape):
-    """Drivable soil (1) with the no-go border (0) the real soil maps have: the
-    planner's search does not check the map bounds and relies on it."""
-    soil = np.ones(shape)
-    soil[0, :] = soil[-1, :] = soil[:, 0] = soil[:, -1] = 0
-    return soil
+class Checker:
+    """A stand-in for GlobalPlanner.blocks_route: blocked when told, and records the cells it saw."""
+    def __init__(self):
+        self.blocked, self.seen = False, []
+
+    def __call__(self, path, rover_xy, goal, cells, lookahead_m):
+        self.seen.append(set(cells))
+        return self.blocked
 
 
-def quat(roll=0.0, pitch=0.0, yaw=0.0):
-    cr, sr = math.cos(roll / 2), math.sin(roll / 2)
-    cp, sp = math.cos(pitch / 2), math.sin(pitch / 2)
-    cy, sy = math.cos(yaw / 2), math.sin(yaw / 2)
-    return types.SimpleNamespace(x=sr * cp * cy - cr * sp * sy, y=cr * sp * cy + sr * cp * sy,
-                                 z=cr * cp * sy - sr * sp * cy, w=cr * cp * cy + sr * sp * sy)
+def driving(cells=frozenset()):
+    """A mission driving ROUTE to GOAL, planned with `cells`."""
+    checker = Checker()
+    mission = m.Mission(SETTINGS, checker)
+    mission.set_goal(GOAL)
+    goal, generation = mission.planning_request()
+    event = mission.route_planned(generation, Route(True, ROUTE, goal, message='ok'), cells)
+    assert event.state == m.DRIVING and mission.state == m.DRIVING
+    return mission, checker
 
 
-def test_yaw_and_tilt_from_the_attitude():
-    assert mission.yaw_from_quaternion(quat(yaw=1.2)) == pytest.approx(1.2)
-    assert mission.tilt_deg(quat(yaw=2.0)) == pytest.approx(0.0, abs=1e-6)
-    assert mission.tilt_deg(quat(pitch=math.radians(20))) == pytest.approx(20.0)
-    assert mission.tilt_deg(quat(roll=math.radians(10), yaw=0.5)) == pytest.approx(10.0)
+# --- goals and plans --------------------------------------------------------
+
+def test_no_goal_does_nothing():
+    assert m.Mission(SETTINGS, Checker()).step((0, 0, 0), 0.0, 0.0).action == m.DO_NOTHING
 
 
-def test_session_jump():
-    assert not mission.is_session_jump(None, 5.0, 5.0, 2.0)
-    assert not mission.is_session_jump([0.0, 0.0], 1.0, 1.0, 2.0)
-    assert mission.is_session_jump([0.0, 0.0], 3.0, 0.0, 2.0)
+def test_a_goal_is_planned_then_driven():
+    mission = m.Mission(SETTINGS, Checker())
+    event = mission.set_goal((20, 0))
+    assert event.state == m.PLANNING and event.goal == GOAL
+    assert mission.step((0, 0, 0), 0.0, 0.0).action == m.PLAN
+    goal, generation = mission.planning_request()
+    mission.route_planned(generation, Route(True, ROUTE, goal), frozenset())
+    assert mission.step((0, 0, 0), 0.0, 1.0).action == m.DRIVE
 
 
-def test_trajectory_points_are_spaced():
-    history = []
-    for x in np.arange(0.0, 1.0, 0.03):
-        mission.record_point(history, float(x), 0.0)
-    gaps = np.diff([p[0] for p in history])
-    assert len(history) > 5 and (gaps > mission.TRAJECTORY_SPACING_M).all()
+def test_a_plan_for_an_old_goal_is_dropped():
+    mission = m.Mission(SETTINGS, Checker())
+    mission.set_goal((20, 0))
+    _, old = mission.planning_request()
+    mission.set_goal((5, 5))
+    assert mission.route_planned(old, Route(True, ROUTE, GOAL), frozenset()) is None
+    assert mission.route is None and mission.goal == [5.0, 5.0]
+
+
+def test_an_impossible_goal_is_aborted():
+    mission = m.Mission(SETTINGS, Checker())
+    mission.set_goal((20, 0))
+    _, generation = mission.planning_request()
+    event = mission.route_planned(generation, Route(False, reason='goal not reachable', message='no'), frozenset())
+    assert event.state == m.ABORTED and event.reason == 'goal not reachable' and event.goal == GOAL
+    assert mission.goal is None and mission.step((0, 0, 0), 0.0, 0.0).action == m.DO_NOTHING
+
+
+def test_the_snapped_goal_is_the_one_driven_to():
+    mission = m.Mission(SETTINGS, Checker())
+    mission.set_goal((20.4, 0.3))
+    _, generation = mission.planning_request()
+    mission.route_planned(generation, Route(True, ROUTE, [20.0, 0.0]), frozenset())
+    assert mission.goal == [20.0, 0.0]
+
+
+# --- the control cycle ------------------------------------------------------
+
+def test_arrival():
+    mission, _ = driving()
+    step = mission.step((19.5, 0.2, 0.0), 0.0, 0.0)
+    assert step.action == m.STOP and step.event.state == m.REACHED and step.event.goal == GOAL
+    assert mission.goal is None
+
+
+def test_tilt_aborts_before_anything_else():
+    mission, _ = driving()
+    step = mission.step((19.9, 0.0, 0.0), 30.0, 0.0)       # even at the goal
+    assert step.action == m.STOP and step.event.state == m.ABORTED and step.event.level == 'error'
+    assert 'tilt' in step.event.reason and mission.goal is None
+
+
+def test_a_stall_replans_then_aborts():
+    mission, _ = driving()
+    t = 0.0
+    for attempt in (1, 2):
+        assert mission.step((1.0, 0.0, 0.0), 0.0, t).action == m.DRIVE
+        step = mission.step((1.0, 0.0, 0.0), 0.0, t + 15.0)
+        assert step.action == m.PLAN and step.event.reason == 'no progress'
+        assert mission.step((1.0, 0.0, 0.0), 0.0, t + 15.1).action == m.PLAN    # route gone: plan
+        goal, generation = mission.planning_request()
+        mission.route_planned(generation, Route(True, ROUTE, goal), frozenset())
+        t += 20.0
+    mission.step((1.0, 0.0, 0.0), 0.0, t)
+    step = mission.step((1.0, 0.0, 0.0), 0.0, t + 15.0)
+    assert step.action == m.STOP and step.event.state == m.ABORTED and 'no progress' in step.event.reason
+
+
+def test_moving_clears_the_stalls():
+    mission, _ = driving()
+    mission.step((1.0, 0.0, 0.0), 0.0, 0.0)
+    mission.step((1.0, 0.0, 0.0), 0.0, 15.0)                # stall 1: re-plan
+    goal, generation = mission.planning_request()
+    mission.route_planned(generation, Route(True, ROUTE, goal), frozenset())
+    mission.step((1.0, 0.0, 0.0), 0.0, 16.0)
+    mission.step((3.0, 0.0, 0.0), 0.0, 20.0)                # it moved
+    assert mission.progress.stalls == 0
+
+
+def test_only_new_obstacle_cells_can_block_the_route():
+    """Re-planning for the cells the route was planned with gives the same route: a loop."""
+    known = frozenset({(5, 1), (6, 1)})
+    mission, checker = driving(known)
+    checker.blocked = True
+    assert mission.step((1.0, 0.0, 0.0), 0.0, 0.0, known).action == m.DRIVE
+    assert checker.seen == []                               # nothing new: not even checked
+    step = mission.step((1.0, 0.0, 0.0), 0.0, 1.0, known | {(4, 0)})
+    assert step.action == m.PLAN and step.event.reason == 'obstacle on the route'
+    assert checker.seen == [{(4, 0)}]
+
+
+def test_a_new_cell_off_the_route_keeps_driving():
+    mission, checker = driving()
+    checker.blocked = False
+    assert mission.step((1.0, 0.0, 0.0), 0.0, 0.0, {(4, 9)}).action == m.DRIVE
+
+
+# --- the operator and sessions ----------------------------------------------
+
+def test_cancel():
+    mission, _ = driving()
+    event = mission.cancel()
+    assert event.state == m.CANCELLED and event.goal == GOAL and event.level == 'warn'
+    assert mission.goal is None and mission.cancel() is None      # nothing left to cancel
+
+
+def test_a_new_session_drops_everything():
+    mission, _ = driving()
+    _, generation = mission.planning_request()
+    event = mission.new_session()
+    assert event.state == m.IDLE and event.reason == 'new session' and event.goal is None
+    assert mission.route_planned(generation, Route(True, ROUTE, GOAL), frozenset()) is None
+
+
+# --- progress and messages --------------------------------------------------
+
+def test_progress_watch_counts_stalls_and_resets_on_moving():
+    w = m.ProgressWatch(window_s=10.0, min_move_m=0.25, min_turn_deg=20.0)
+    assert not w.update(0.0, 0.0, 0.0, 0.0)
+    assert not w.update(9.0, 0.1, 0.0, 0.0)
+    assert w.update(10.5, 0.1, 0.0, 0.0) and w.stalls == 1
+    assert w.update(21.0, 0.1, 0.0, 0.0) and w.stalls == 2
+    assert not w.update(25.0, 0.6, 0.0, 0.0) and w.stalls == 0      # it moved
+
+
+def test_progress_watch_spot_turns_are_progress_but_do_not_clear_stalls():
+    w = m.ProgressWatch(window_s=10.0)
+    w.update(0.0, 0.0, 0.0, 0.0)
+    assert w.update(11.0, 0.0, 0.0, 0.0) and w.stalls == 1
+    assert not w.update(20.0, 0.0, 0.0, math.radians(30))           # a spot turn: progress
+    assert w.stalls == 1
+    w.pause()                                                         # planning: the window restarts
+    assert not w.update(100.0, 0.0, 0.0, math.radians(30))
+    assert not w.update(105.0, 0.0, 0.0, math.radians(30))
+    w.reset()
+    assert w.stalls == 0
 
 
 def test_state_json():
-    assert json.loads(mission.state_json('driving', [1.234, 5.678])) == \
+    assert json.loads(m.state_json('driving', [1.234, 5.678])) == \
         {'state': 'driving', 'goal': [1.23, 5.68], 'reason': ''}
-    assert json.loads(mission.state_json('idle', None, 'new session'))['goal'] is None
+    assert json.loads(m.state_json('idle', None, 'new session'))['goal'] is None
 
 
-def test_goal_snapping_on_a_small_map():
-    obstacles = np.zeros((20, 20), int)
-    obstacles[8:13, 8:13] = 1                        # a block
-    obstacles[:, 16] = 1                             # a wall cutting off columns 17+
-    regions = np.where(obstacles == 1, 0, 1)
-    regions[:, 17:] = 2
-    assert mission.drivable_goal(obstacles, regions, [2, 2], [0, 0]) == [2, 2]
-    moved = mission.drivable_goal(obstacles, regions, [10, 10], [0, 0])
-    assert moved is not None and obstacles[moved[1], moved[0]] == 0
-    assert math.dist(moved, [10, 10]) <= mission.GOAL_SNAP_RADIUS_CELLS
-    moved = mission.drivable_goal(obstacles, regions, [16, 5], [0, 0])
-    assert moved == [15, 5]                          # not [17, 5]: the far side is unreachable
-    assert mission.drivable_goal(obstacles, regions, [25, 5], [0, 0]) is None
-
-
-def test_plan_route_on_a_small_map():
-    elevation = np.zeros((40, 40))
-    soil = bordered_soil((40, 40))
-    planner = gpp.Global_Path_Planner()
-    maps = build_maps(planner, elevation, soil, 1.0, 15.0)
-    state, path, goal, reason, _message = mission.plan_route(
-        planner, maps.cost, maps.obstacles, maps.free_regions, [5, 5], [30, 20], 15.0)
-    assert state == 'driving' and reason == '' and goal == [30, 20]
-    assert len(path) >= 2 and math.dist(path[-1], [30, 20]) < 2.0
-
-
-def test_plan_route_refuses_an_unreachable_goal():
-    planner = gpp.Global_Path_Planner()
-    maps = build_maps(planner, np.zeros((30, 30)), bordered_soil((30, 30)), 1.0, 15.0)
-    state, path, _goal, reason, _message = mission.plan_route(
-        planner, maps.cost, maps.obstacles, maps.free_regions, [5, 5], [50, 5], 15.0)
-    assert state == 'aborted' and path is None and reason == 'goal on impassable ground'
-
-
-@pytest.mark.parametrize("dist, expected", [(10.0, 0.5), (4.5, 0.5), (2.25, 0.25), (0.5, 0.2)])
-def test_approach_speed(dist, expected):
-    assert mission.approach_speed(0.5, dist, 4.5) == pytest.approx(expected)
-
-
-def test_approach_yaw_rate():
-    assert mission.approach_yaw_rate(0.2, 10.0, 4.5, 0.7) == 0.2       # far: unchanged
-    assert mission.approach_yaw_rate(0.2, 3.0, 4.5, 0.7) == pytest.approx(0.2 * 3.0 / 4.5)
-    assert mission.approach_yaw_rate(0.2, 1.5, 4.5, 0.7) == 0.0       # final metre: locked
-    assert mission.stop_tolerance(0.35, 0.7) == 0.7 and mission.stop_tolerance(0.9, 0.7) == 0.9
-
-
-def test_robot_config_from_parameters():
-    params = dict(max_speed=0.5, min_speed=0.0, max_accel=0.1, max_yaw_rate_deg=8.0,
-                  max_delta_yaw_rate_deg=17.0, yaw_rate_resolution_deg=0.5, v_resolution=0.005,
-                  dt=0.1, predict_time=1.5, to_goal_cost_gain=1.0, speed_cost_gain=1.0,
-                  obstacle_cost_gain=1.0, robot_stuck_flag_cons=0.001, robot_width=0.35,
-                  robot_length=0.35, robot_radius=0.35, obstacle_safety_m=0.15)
-    conf = mission.robot_config(params.__getitem__)
-    assert conf.max_yaw_rate == pytest.approx(math.radians(8.0))
-    assert conf.v_resolution == 0.005 and conf.robot_type == 1
-
-
-def test_planner_maps_regions_follow_the_obstacles():
-    planner = gpp.Global_Path_Planner()
-    soil = bordered_soil((20, 20))
-    elevation = np.zeros((20, 20))
-    elevation[:, 10] = 50.0                          # a cliff splits the map
-    maps = build_maps(planner, elevation, soil, 1.0, 15.0)
-    left, right = maps.free_regions[5, 2], maps.free_regions[5, 17]
-    assert left and right and left != right
-    assert (maps.obstacles[:, 9:12] == 1).any()
-
-
-def test_messages():
-    path = path_msg(np.array([[1.0, 2.0], [3.0, 4.0]]), None)
-    assert path.header.frame_id == 'map' and [p.pose.position.y for p in path.poses] == [2.0, 4.0]
-    assert path_msg([], None).poses == []
-    m = matrix_msg(np.arange(6, dtype=float).reshape(2, 3))
-    assert [d.size for d in m.layout.dim] == [2, 3] and list(m.data) == [0, 1, 2, 3, 4, 5]
-    assert finite_cost_map(np.array([1.0, np.inf])).tolist() == [1.0, 9999.0]
+@pytest.mark.parametrize("state", [m.IDLE, m.PLANNING, m.DRIVING, m.REACHED, m.ABORTED, m.CANCELLED])
+def test_states_are_the_published_names(state):
+    assert state in ('idle', 'planning', 'driving', 'reached', 'aborted', 'cancelled')

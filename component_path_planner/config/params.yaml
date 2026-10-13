@@ -31,7 +31,6 @@ lc_component_path_planner:
     predict_time: 1.5             # [s]
     to_goal_cost_gain: 1.0
     speed_cost_gain: 1.0
-    obstacle_cost_gain: 1.0
     robot_stuck_flag_cons: 0.001
     
     # Robot Geometry (the DWA's footprint; the Unreal rover's body is ~0.63 m square)

@@ -1,13 +1,11 @@
-"""Obstacles from the lidar by height (lidar_obstacles), and the DWA with and without them."""
+"""Obstacles from the lidar by height (lidar_obstacles): detection, memory and map cells."""
 
 import math
-import types
 
 import numpy as np
 import pytest
 
 from src import lidar_obstacles as lo
-from src.local_trajectory_controller import Local_Trajectory_Controller
 
 PITCH = -20.0
 LIDAR_HEIGHT = 0.56
@@ -87,61 +85,8 @@ def test_memory_keeps_recent_nearby_points():
     assert len(memory) == 0 and memory.points().shape == (0, 2)
 
 
-def test_cells_keep_clear_and_blocked_route():
+def test_grid_cells_under_odom_points():
     cells = lo.grid_cells(np.array([[5.2, 3.9], [-1.0, 2.0], [100.0, 1.0]]), 1.0, (50, 50))
-    assert cells == {(5, 4)}
-    assert lo.keep_clear({(5, 4), (20, 20)}, [(5, 5)], 1.5) == {(20, 20)}
-    path = np.column_stack((np.arange(0, 20, dtype=float), np.full(20, 4.0)))
-    assert lo.path_blocked(path, {(5, 4)}, (0.0, 4.0), 6.0)
-    assert not lo.path_blocked(path, {(5, 4)}, (0.0, 4.0), 4.0)        # beyond the look-ahead
-    assert not lo.path_blocked(path, {(5, 4)}, (8.0, 4.0), 6.0)        # already passed
-    assert not lo.path_blocked(path, set(), (0.0, 4.0), 6.0)
-
-
-def test_mark_blocked_copies_the_maps():
-    cost, obstacles = np.ones((5, 5)), np.zeros((5, 5))
-    new_cost, new_obstacles = lo.mark_blocked(cost, obstacles, {(1, 3)}, 30.0)
-    assert new_obstacles[3, 1] == 1 and new_cost[3, 1] == 30.0
-    assert obstacles[3, 1] == 0 and cost[3, 1] == 1.0                   # originals untouched
-
-
-def dwa_config():
-    return types.SimpleNamespace(
-        max_speed=0.5, min_speed=0.0, max_accel=0.5, max_yaw_rate=math.radians(40),
-        max_delta_yaw_rate=math.radians(40), yaw_rate_resolution=math.radians(1.0),
-        v_resolution=0.05, dt=0.1, predict_time=2.0, to_goal_cost_gain=1.0, speed_cost_gain=1.0,
-        obstacle_cost_gain=1.0, robot_stuck_flag_cons=0.001, robot_type=1,
-        robot_width=0.35, robot_length=0.35, robot_radius=0.35)
-
-
-def test_dwa_without_obstacles_drives_straight_at_the_goal():
-    dwa = Local_Trajectory_Controller()
-    u, _trajectory = dwa.dwa_control(np.array([0.0, 0.0, 0.0, 0.3, 0.0]), dwa_config(),
-                                     np.array([5.0, 0.0]), np.empty((0, 2)))
-    assert u[0] > 0.0 and abs(u[1]) < math.radians(2)
-
-
-def rock_at(x0, y0=0.0, half=0.15):
-    return lo.thin(np.array([[x0 + dx, y0 + dy] for dx in np.arange(-half, half, 0.05)
-                             for dy in np.arange(-half, half, 0.05)]), 0.1)
-
-
-def test_dwa_steers_away_from_a_rock_ahead():
-    dwa = Local_Trajectory_Controller()
-    config = dwa_config()
-    # A turn window wide enough to clear it (+-30 deg/s reachable this step)
-    config.predict_time, config.max_delta_yaw_rate = 4.0, math.radians(300)
-    rock = rock_at(1.15)
-    state = np.array([0.0, 0.0, 0.0, 0.3, 0.0])
-    u, trajectory = dwa.dwa_control(state, config, np.array([5.0, 0.0]), rock)
-    clearance = np.min(np.hypot(trajectory[:, 0, None] - rock[:, 0], trajectory[:, 1, None] - rock[:, 1]))
-    assert abs(u[1]) > math.radians(2)               # turns, where it drove straight without the rock
-    assert clearance > 0.175                         # the chosen path keeps the footprint off the rock
-
-
-def test_dwa_stops_when_every_path_hits():
-    dwa = Local_Trajectory_Controller()
-    wall = np.array([[0.5, y] for y in np.arange(-3.0, 3.0, 0.1)])
-    u, trajectory = dwa.dwa_control(np.array([0.0, 0.0, 0.0, 0.3, 0.0]), dwa_config(),
-                                    np.array([5.0, 0.0]), wall)
-    assert u == [0.0, 0.0] and len(trajectory) == 1
+    assert cells == {(5, 4)}                        # off-map points dropped
+    assert lo.grid_cells(np.array([[5.2, 3.9]]), 0.5, (50, 50)) == {(10, 8)}
+    assert lo.grid_cells(np.empty((0, 2)), 1.0, (50, 50)) == set()

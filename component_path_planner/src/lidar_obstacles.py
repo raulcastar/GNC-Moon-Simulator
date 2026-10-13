@@ -8,9 +8,9 @@ obstacle. Detections are thinned on a grid, moved to the odom frame with the
 rover's pose, and remembered for a while: the lidar looks forward, so a rock
 passed while turning leaves its view but must not be forgotten.
 
-The planner uses them twice: the DWA avoids the remembered points, and the
-global map's cells under them are marked impassable, so a route that runs
-into a newly seen obstacle is planned again around it.
+The planner uses them twice: the local planner avoids the remembered points,
+and the map cells under them (grid_cells) go to the global planner, which
+routes around them and re-plans when a new one blocks the route.
 """
 
 import math
@@ -137,89 +137,3 @@ def grid_cells(xy_odom: np.ndarray, resolution: float, shape) -> set:
     rows, cols = shape
     inside = (cells[:, 0] >= 0) & (cells[:, 0] < cols) & (cells[:, 1] >= 0) & (cells[:, 1] < rows)
     return set(map(tuple, cells[inside]))
-
-
-def keep_clear(cells: set, points, radius_cells: float) -> set:
-    """`cells` without those within radius_cells of any of `points` (the rover, the goal)."""
-    return {c for c in cells
-            if all(math.hypot(c[0] - p[0], c[1] - p[1]) > radius_cells for p in points)}
-
-
-def inflate(cells: set, radius_cells: float) -> set:
-    """`cells` grown by every cell whose centre is within radius_cells of one of them."""
-    r = int(math.floor(radius_cells))
-    offsets = [(dc, dr) for dc in range(-r, r + 1) for dr in range(-r, r + 1)
-               if math.hypot(dc, dr) <= radius_cells]
-    return {(c + dc, w + dr) for c, w in cells for dc, dr in offsets}
-
-
-def route_blocking(cells: set, rover_cell, goal_cell, rover_clear_cells: float,
-                   goal_clear_cells: float) -> set:
-    """
-    The obstacle cells a route may not cross: all of `cells` except the one
-    under the rover and those within rover_clear_cells of it (the rover sits
-    beside what it sees), and those within goal_clear_cells of the goal (a goal
-    beside a rock stays reachable). Cell coordinates (col, row), map cells.
-
-    The planner and the "route ahead blocked?" check both use this, so a route
-    just planned is never blocked by the check at once (a re-plan loop).
-    """
-    under = (int(round(rover_cell[0])), int(round(rover_cell[1])))
-    return {c for c in cells
-            if c != under
-            and math.hypot(c[0] - rover_cell[0], c[1] - rover_cell[1]) > rover_clear_cells
-            and (goal_cell is None
-                 or math.hypot(c[0] - goal_cell[0], c[1] - goal_cell[1]) > goal_clear_cells)}
-
-
-def planning_blocked(cells: set, rover_cell, goal_cell, rover_clear_cells: float,
-                     goal_clear_cells: float, clearance_cells: float) -> set:
-    """
-    The cells closed to the route search: route_blocking's, plus a margin of
-    clearance_cells around every obstacle so routes keep their distance from
-    rocks (a route skirting a rock leaves the DWA stalled beside it). The
-    margin is left open near the rover and the goal, so the rover can leave or
-    reach a spot close to a rock.
-    """
-    core = route_blocking(cells, rover_cell, goal_cell, rover_clear_cells, goal_clear_cells)
-    if clearance_cells <= 0:
-        return core
-    margin = inflate(cells, clearance_cells) - cells
-    open_radius = clearance_cells + 1.0
-    margin = {c for c in margin
-              if math.hypot(c[0] - rover_cell[0], c[1] - rover_cell[1]) > open_radius
-              and (goal_cell is None
-                   or math.hypot(c[0] - goal_cell[0], c[1] - goal_cell[1]) > open_radius)}
-    return core | margin
-
-
-def path_blocked(path: np.ndarray, cells: set, robot_xy, lookahead_m: float,
-                 resolution: float = 1.0) -> bool:
-    """
-    Whether the route (N, 2 map cells, start first) passes through a blocked
-    cell within lookahead_m ahead of the rover's nearest point on it.
-    """
-    if not cells or path is None or len(path) == 0:
-        return False
-    path = np.asarray(path, dtype=float)
-    start = int(np.argmin(np.hypot(path[:, 0] - robot_xy[0], path[:, 1] - robot_xy[1])))
-    ahead = path[start:]
-    steps = np.hypot(np.diff(ahead[:, 0]), np.diff(ahead[:, 1])) * resolution
-    reach = np.concatenate(([0.0], np.cumsum(steps)))
-    for point in ahead[reach <= lookahead_m]:
-        if (int(round(point[0])), int(round(point[1]))) in cells:
-            return True
-    return False
-
-
-def mark_blocked(cost_map: np.ndarray, obstacle_map: np.ndarray, cells: set,
-                 blocked_cost: float):
-    """Copies of the maps with `cells` (col, row) impassable (cells outside the maps ignored)."""
-    cost, obstacles = cost_map.copy(), obstacle_map.copy()
-    rows, cols = obstacle_map.shape
-    for col, row in cells:
-        if not (0 <= col < cols and 0 <= row < rows):
-            continue
-        obstacles[row, col] = 1
-        cost[row, col] = blocked_cost
-    return cost, obstacles
