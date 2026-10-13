@@ -868,8 +868,11 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         """
         base, cam, ground = (self.get_parameter(n).value for n in
                              ('base_frame', 'camera_frame', 'ground_frame'))
+        # A helper node spins the listener: spin_thread adds the node it is given
+        # to its own executor, which takes it out of the main one for good.
+        helper = rclpy.create_node(f'{self.get_name()}_tf_mount')
         buffer = Buffer()
-        listener = TransformListener(buffer, self, spin_thread=True)
+        listener = TransformListener(buffer, helper, spin_thread=True)
         try:
             mount = buffer.lookup_transform(base, cam, rclpy.time.Time(), timeout=Duration(seconds=5.0))
             floor = buffer.lookup_transform(base, ground, rclpy.time.Time(), timeout=Duration(seconds=1.0))
@@ -878,6 +881,7 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
             return
         finally:
             listener.unregister()
+            helper.destroy_node()
         t, q = mount.transform.translation, mount.transform.rotation
         R = _quat_to_rot(q.x, q.y, q.z, q.w)          # columns: the camera's x (view), y (left), z (up)
         pitch_down = math.degrees(math.asin(max(-1.0, min(1.0, -R[2, 0]))))

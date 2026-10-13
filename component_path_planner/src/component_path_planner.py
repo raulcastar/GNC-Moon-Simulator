@@ -435,8 +435,11 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         and lidar_x_offset_m. Without TF within 5 s the YAML values stay.
         """
         base, lidar = self._param('base_frame'), self._param('lidar_frame')
+        # A helper node spins the listener: spin_thread adds the node it is given
+        # to its own executor, which takes it out of the main one for good.
+        helper = rclpy.create_node(f'{self.get_name()}_tf_mount')
         buffer = Buffer()
-        listener = TransformListener(buffer, self, spin_thread=True)
+        listener = TransformListener(buffer, helper, spin_thread=True)
         try:
             mount = buffer.lookup_transform(base, lidar, rclpy.time.Time(), timeout=Duration(seconds=5.0))
         except Exception as exc:
@@ -444,6 +447,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
             return
         finally:
             listener.unregister()
+            helper.destroy_node()
         q = mount.transform.rotation
         view_z = 2.0 * (q.x * q.z - q.w * q.y)          # z of the lidar's x axis in base_link
         pitch_deg = math.degrees(math.asin(max(-1.0, min(1.0, view_z))))     # negative = looking down
