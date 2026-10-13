@@ -35,6 +35,9 @@ from geometry_msgs.msg import Pose, Point, Quaternion
 from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSReliabilityPolicy
 
 from cv_bridge import CvBridge
+from rclpy.duration import Duration
+from rclpy.parameter import Parameter
+from tf2_ros import Buffer, TransformListener
 
 # Odometry kept for placing depth frames at their capture time (about 30 s at
 # the rover's ~13 Hz), and how far a frame stamp may fall outside it.
@@ -212,6 +215,11 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
                 # Camera optical centre relative to the odom origin, body frame (m).
                 # Defaults of 0 keep the previous behaviour.
                 ('camera_offset_forward_m', 0.0),
+                # The camera mount from TF overrides the camera_* values when found.
+                ('mount_from_tf', True),
+                ('base_frame', 'base_link'),
+                ('camera_frame', 'navcam_central_link'),
+                ('ground_frame', 'base_footprint'),
                 ('camera_offset_lateral_m', 0.0),
                 ('camera_offset_up_m',      0.0),
                 # Outlier rejection per DEM cell (see _compute_dem). Defaults of
@@ -851,8 +859,40 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
     # Lifecycle callbacks
     # =========================================================================
 
+    def _mount_from_tf(self) -> None:
+        """
+        The camera mount from TF (component_robot_description: the URDF exported
+        from the Unreal Blueprint), written into the camera_* parameters this
+        node already uses, so they show the values in effect (the dashboard reads
+        them too). Without TF within 5 s the YAML values stay.
+        """
+        base, cam, ground = (self.get_parameter(n).value for n in
+                             ('base_frame', 'camera_frame', 'ground_frame'))
+        buffer = Buffer()
+        listener = TransformListener(buffer, self, spin_thread=True)
+        try:
+            mount = buffer.lookup_transform(base, cam, rclpy.time.Time(), timeout=Duration(seconds=5.0))
+            floor = buffer.lookup_transform(base, ground, rclpy.time.Time(), timeout=Duration(seconds=1.0))
+        except Exception as exc:
+            self.get_logger().warn(f"Camera mount not in TF ({base} -> {cam}: {exc}); using the YAML values.")
+            return
+        finally:
+            listener.unregister()
+        t, q = mount.transform.translation, mount.transform.rotation
+        R = _quat_to_rot(q.x, q.y, q.z, q.w)          # columns: the camera's x (view), y (left), z (up)
+        pitch_down = math.degrees(math.asin(max(-1.0, min(1.0, -R[2, 0]))))
+        roll_right = -math.degrees(math.atan2(R[2, 1], R[2, 2]))       # + = right side up
+        values = {'camera_offset_forward_m': t.x, 'camera_offset_lateral_m': t.y,
+                  'camera_offset_up_m': t.z, 'camera_angle': pitch_down, 'camera_roll': roll_right,
+                  'camera_height_m': t.z - floor.transform.translation.z}
+        self.set_parameters([Parameter(k, value=float(v)) for k, v in values.items()])
+        self.get_logger().info(
+            f"Camera mount from TF ({base} -> {cam}): " + ", ".join(f"{k} {v:.3f}" for k, v in values.items()))
+
     def on_configure(self, state: State) -> TransitionCallbackReturn:
         self.get_logger().info("Lifecycle: CONFIGURED.")
+        if self.get_parameter('mount_from_tf').value:
+            self._mount_from_tf()
 
         self.camera_topic    = self.get_parameter('camera_topic').value
         self.use_camera_info = self.get_parameter('use_camera_info').value

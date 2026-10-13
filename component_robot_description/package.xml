@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>component_robot_description</name>
+  <version>0.0.0</version>
+  <description>The simulated rover's frames (URDF exported from its Unreal Blueprint), published as static TF.</description>
+  <maintainer email="raul.castilla@uni.lu">Raul Castilla-Arquillo</maintainer>
+  <license>MIT License</license>
+
+  <exec_depend>robot_state_publisher</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

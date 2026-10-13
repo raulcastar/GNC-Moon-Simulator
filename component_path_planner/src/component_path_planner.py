@@ -20,6 +20,7 @@ obstacles are avoided by the local planner, routed around by the global
 planner, and a route a new one blocks is planned again.
 """
 
+import math
 import os
 import threading
 import warnings
@@ -40,6 +41,9 @@ from nav_msgs.msg import Odometry, Path
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
 from std_msgs.msg import Bool, Empty, Header, String
+from rclpy.duration import Duration
+from rclpy.parameter import Parameter
+from tf2_ros import Buffer, TransformListener
 
 from custom_map_interfaces.srv import GetMatrices
 
@@ -147,6 +151,9 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 ('lidar_topic', 'lidar/points'),
                 ('lidar_pitch_deg', -20.0),
                 ('lidar_x_offset_m', 0.0),
+                ('lidar_mount_from_tf', True),   # pitch and offset from TF (base_link -> lidar_frame)
+                ('base_frame', 'base_link'),
+                ('lidar_frame', 'lidar'),
                 ('obstacle_min_height_m', 0.15),
                 ('obstacle_max_range_m', 6.0),
                 ('obstacle_memory_s', 20.0),
@@ -421,9 +428,36 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
     # Lifecycle
     # =========================================================================
 
+    def _lidar_mount_from_tf(self) -> None:
+        """
+        The lidar's pitch and forward offset from TF (component_robot_description:
+        the URDF exported from the Unreal Blueprint), written into lidar_pitch_deg
+        and lidar_x_offset_m. Without TF within 5 s the YAML values stay.
+        """
+        base, lidar = self._param('base_frame'), self._param('lidar_frame')
+        buffer = Buffer()
+        listener = TransformListener(buffer, self, spin_thread=True)
+        try:
+            mount = buffer.lookup_transform(base, lidar, rclpy.time.Time(), timeout=Duration(seconds=5.0))
+        except Exception as exc:
+            self.get_logger().warn(f"Lidar mount not in TF ({base} -> {lidar}: {exc}); using the YAML values.")
+            return
+        finally:
+            listener.unregister()
+        q = mount.transform.rotation
+        view_z = 2.0 * (q.x * q.z - q.w * q.y)          # z of the lidar's x axis in base_link
+        pitch_deg = math.degrees(math.asin(max(-1.0, min(1.0, view_z))))     # negative = looking down
+        x_offset = mount.transform.translation.x
+        self.set_parameters([Parameter('lidar_pitch_deg', value=float(pitch_deg)),
+                             Parameter('lidar_x_offset_m', value=float(x_offset))])
+        self.get_logger().info(f"Lidar mount from TF ({base} -> {lidar}): pitch {pitch_deg:.1f} deg, "
+                               f"{x_offset:.3f} m ahead of {base}.")
+
     def on_configure(self, state: State) -> TransitionCallbackReturn:
         """Loads the maps, builds the planners and the mission, creates the interfaces."""
         self.get_logger().info("Lifecycle transition: CONFIGURED. Standing by for UI coordinates.")
+        if self._param('lidar_mount_from_tf'):
+            self._lidar_mount_from_tf()
         share = get_package_share_directory('component_path_planner')
         try:
             self.maps = load_planner_maps(

@@ -7,6 +7,7 @@
   <maintainer email="raul.castilla@uni.lu">Raul Castilla-Arquillo</maintainer>
   <license>MIT License</license>
 
+  <exec_depend>tf2_ros</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>lifecycle_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>

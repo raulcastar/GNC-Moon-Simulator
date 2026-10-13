@@ -23,7 +23,8 @@ from rclpy.lifecycle import Publisher, State, TransitionCallbackReturn
 from rclpy.subscription import Subscription
 
 # Standard ROS 2 messages for kinematics and state estimation
-from geometry_msgs.msg import Twist, Quaternion
+from geometry_msgs.msg import Twist, Quaternion, TransformStamped
+from tf2_ros import TransformBroadcaster
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
 
@@ -137,6 +138,7 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self._sub_cmd_vel: Optional[Subscription] = None
         self._sub_headlights: Optional[Subscription] = None 
         self._pub_odom:    Optional[Publisher] = None
+        self._tf: Optional[TransformBroadcaster] = None    # odom -> base_link
         
         # Rover State
         self.headlights_on: bool = False
@@ -209,6 +211,8 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self.declare_parameter('max_linear_decel', 0.4)    # m/s^2
         self.declare_parameter('max_angular_decel', 3.0)   # rad/s^2
         self.declare_parameter('wheel_speed_scale', 1.0)   # m/s -> Unreal wheel units
+        # Broadcast odom -> base_link on /tf with every odometry message.
+        self.declare_parameter('publish_tf', True)
         self.wheel_speed_scale: float = 1.0
 
         # Body-tilt recovery from Unreal telemetry (see _publish_transform).
@@ -569,6 +573,19 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
             odom_msg.twist.covariance = [1e-4 if i % 7 == 0 else 0.0 for i in range(36)]
 
         self._pub_odom.publish(odom_msg)
+        self._broadcast_tf(odom_msg)
+
+    def _broadcast_tf(self, odom_msg: Odometry) -> None:
+        """odom -> base_link, the dynamic link of the TF tree (the rest: component_robot_description)."""
+        if self._tf is None:
+            return
+        t = TransformStamped()
+        t.header = odom_msg.header
+        t.child_frame_id = odom_msg.child_frame_id
+        p = odom_msg.pose.pose.position
+        t.transform.translation.x, t.transform.translation.y, t.transform.translation.z = p.x, p.y, p.z
+        t.transform.rotation = odom_msg.pose.pose.orientation
+        self._tf.sendTransform(t)
 
     # =========================================================================
     # TCP Transport
@@ -750,6 +767,8 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
 
         # Allocate standard pub/sub endpoints
         self._pub_odom    = self.create_lifecycle_publisher(Odometry, 'odom', 10)
+        if self.get_parameter('publish_tf').value:
+            self._tf = TransformBroadcaster(self)
         self._sub_cmd_vel = self.create_subscription(Twist, 'cmd_vel', self.cmd_vel_callback, 10)
         self._ramp_timer  = self.create_timer(0.05, self._ramp_tick)
 

@@ -56,8 +56,12 @@ lc_component_path_planner:
     #   ros2 param set /lc_component_path_planner lidar_obstacle_avoidance false
     lidar_obstacle_avoidance: true
     lidar_topic: "lidar/points"
+    # The lidar's mount: read from TF at configure (base_frame -> lidar_frame,
+    # component_robot_description) when lidar_mount_from_tf; these values are
+    # the fallback without TF.
+    lidar_mount_from_tf: true
     lidar_pitch_deg: -20.0          # [deg] the lidar's mounting pitch (negative = down)
-    lidar_x_offset_m: 0.0           # [m] lidar ahead of the rover's odometry point
+    lidar_x_offset_m: 0.171         # [m] lidar ahead of the rover's odometry point (base_link)
     obstacle_min_height_m: 0.15     # [m] above the local ground: the rover's body clears less
     obstacle_max_range_m: 6.0       # [m] ahead; farther returns are ignored
     obstacle_memory_s: 20.0         # [s] an obstacle not seen again is forgotten after this

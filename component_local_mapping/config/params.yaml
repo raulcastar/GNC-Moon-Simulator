@@ -26,6 +26,10 @@ lc_component_local_mapping:
     camera_cy: 240.0   # Cv in reference — image centre y  (= height / 2)
 
     # ── Physical camera mounting ───────────────────────────────────────────────
+    # Read from TF at configure (base_link -> navcam_central_link, base_footprint;
+    # component_robot_description: the URDF exported from the Unreal Blueprint)
+    # when mount_from_tf; the camera_* values below are the fallback without TF.
+    mount_from_tf: true
     # camera_height_m: distance from the ground plane to the camera optical
     #   centre (= physical_height in CameraTransform). Used by rotateRefSystem
     #   to set the absolute elevation of z_w = 0 at the ground.
