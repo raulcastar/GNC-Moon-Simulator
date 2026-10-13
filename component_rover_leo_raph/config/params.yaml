@@ -49,8 +49,6 @@ lc_component_rover_leo_raph:
     # Play session starts with this state; the dashboard toggles them.
     headlights_on:                      false
 
-    # Body roll sign.
-    tilt_roll_sign:                     -1.0
 
     # Acceleration limits: a commanded velocity STEP (manual `ros2 topic pub`,
     # the planner, teleop) is ramped to these rates instead of jumping. Under

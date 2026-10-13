@@ -10,7 +10,7 @@
     <visual><origin rpy="1.5708 0 0"/><geometry><cylinder radius="0.0885" length="0.0836"/></geometry></visual>
   </link>
   <joint name="wheel_fl_link_joint" type="fixed">
-    <origin xyz="0.1812 0.1827 -0.1812" rpy="0.000000 0.000000 0.000000"/>
+    <origin xyz="0.1950 0.1898 -0.0000" rpy="0.000000 0.000000 0.000000"/>
     <parent link="base_link"/>
     <child link="wheel_fl_link"/>
   </joint>
@@ -18,7 +18,7 @@
     <visual><origin rpy="1.5708 0 0"/><geometry><cylinder radius="0.0885" length="0.0836"/></geometry></visual>
   </link>
   <joint name="wheel_fr_link_joint" type="fixed">
-    <origin xyz="0.1812 -0.1973 -0.1812" rpy="0.000000 0.000000 0.000000"/>
+    <origin xyz="0.1950 -0.1902 0.0000" rpy="0.000000 0.000000 0.000000"/>
     <parent link="base_link"/>
     <child link="wheel_fr_link"/>
   </joint>
@@ -26,7 +26,7 @@
     <visual><origin rpy="1.5708 0 0"/><geometry><cylinder radius="0.0885" length="0.0836"/></geometry></visual>
   </link>
   <joint name="wheel_rl_link_joint" type="fixed">
-    <origin xyz="-0.2088 0.1827 -0.1812" rpy="0.000000 0.000000 0.000000"/>
+    <origin xyz="-0.1950 0.1898 0.0000" rpy="0.000000 0.000000 0.000000"/>
     <parent link="base_link"/>
     <child link="wheel_rl_link"/>
   </joint>
@@ -34,20 +34,20 @@
     <visual><origin rpy="1.5708 0 0"/><geometry><cylinder radius="0.0885" length="0.0836"/></geometry></visual>
   </link>
   <joint name="wheel_rr_link_joint" type="fixed">
-    <origin xyz="-0.2088 -0.1973 -0.1812" rpy="0.000000 0.000000 0.000000"/>
+    <origin xyz="-0.1950 -0.1902 0.0000" rpy="0.000000 0.000000 0.000000"/>
     <parent link="base_link"/>
     <child link="wheel_rr_link"/>
   </joint>
   <link name="base_footprint"/>
   <joint name="base_footprint_joint" type="fixed">
-    <origin xyz="0.0000 0.0000 -0.2697" rpy="0.000000 0.000000 0.000000"/>
+    <origin xyz="0.0000 0.0000 -0.0885" rpy="0.000000 0.000000 0.000000"/>
     <parent link="base_link"/>
     <child link="base_footprint"/>
   </joint>
   <link name="navcam_left_link"/>
   <link name="navcam_left"/>
   <joint name="navcam_left_joint" type="fixed">
-    <origin xyz="0.1712 0.0928 0.2838" rpy="-0.000000 0.349066 -0.000000"/>
+    <origin xyz="0.1850 0.1000 0.4650" rpy="-0.000000 0.349066 -0.000000"/>
     <parent link="base_link"/>
     <child link="navcam_left_link"/>
   </joint>
@@ -59,7 +59,7 @@
   <link name="navcam_central_link"/>
   <link name="navcam_central"/>
   <joint name="navcam_central_joint" type="fixed">
-    <origin xyz="0.1712 -0.0072 0.2838" rpy="-0.000000 0.349066 -0.000000"/>
+    <origin xyz="0.1850 0.0000 0.4650" rpy="-0.000000 0.349066 -0.000000"/>
     <parent link="base_link"/>
     <child link="navcam_central_link"/>
   </joint>
@@ -71,7 +71,7 @@
   <link name="navcam_right_link"/>
   <link name="navcam_right"/>
   <joint name="navcam_right_joint" type="fixed">
-    <origin xyz="0.1712 -0.1072 0.2838" rpy="-0.000000 0.349066 -0.000000"/>
+    <origin xyz="0.1850 -0.1000 0.4650" rpy="-0.000000 0.349066 -0.000000"/>
     <parent link="base_link"/>
     <child link="navcam_right_link"/>
   </joint>
@@ -83,7 +83,7 @@
   <link name="rear_cam_link"/>
   <link name="rear_cam"/>
   <joint name="rear_cam_joint" type="fixed">
-    <origin xyz="-0.2488 -0.0072 0.1488" rpy="0.000000 0.349066 -3.141593"/>
+    <origin xyz="-0.2350 0.0000 0.3300" rpy="0.000000 0.349066 -3.141593"/>
     <parent link="base_link"/>
     <child link="rear_cam_link"/>
   </joint>
@@ -95,7 +95,7 @@
   <link name="event_camera_link"/>
   <link name="event_camera"/>
   <joint name="event_camera_joint" type="fixed">
-    <origin xyz="0.1712 -0.0072 0.2838" rpy="-0.000000 0.349066 -0.000000"/>
+    <origin xyz="0.1850 0.0000 0.4650" rpy="-0.000000 0.349066 -0.000000"/>
     <parent link="base_link"/>
     <child link="event_camera_link"/>
   </joint>
@@ -107,7 +107,7 @@
   <link name="spad_link"/>
   <link name="spad"/>
   <joint name="spad_joint" type="fixed">
-    <origin xyz="0.1712 -0.0072 0.2838" rpy="-0.000000 0.349066 -0.000000"/>
+    <origin xyz="0.1850 0.0000 0.4650" rpy="-0.000000 0.349066 -0.000000"/>
     <parent link="base_link"/>
     <child link="spad_link"/>
   </joint>
@@ -118,7 +118,7 @@
   </joint>
   <link name="lidar"/>
   <joint name="lidar_joint" type="fixed">
-    <origin xyz="0.1712 -0.0072 0.2838" rpy="-0.000000 0.349066 -0.000000"/>
+    <origin xyz="0.1850 0.0000 0.4650" rpy="-0.000000 0.349066 -0.000000"/>
     <parent link="base_link"/>
     <child link="lidar"/>
   </joint>

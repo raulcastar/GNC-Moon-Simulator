@@ -10,10 +10,11 @@ component_robot_description/urdf/leo_raph.urdf next to this folder. Regenerate
 it whenever a sensor or wheel moves in the Blueprint.
 
 Frames (ROS conventions, REP-103/105):
-    base_link        the point the rover's telemetry reports, i.e. odometry:
-                     the payload_sensor component's origin. Axes: x forward,
-                     y left, z up (the Blueprint's +Y, +X and +Z: Unreal is
-                     left-handed, so two axes swap).
+    base_link        the Blueprint's base_link component, which the rover's
+                     telemetry reports (odometry): centred between the wheels
+                     at axle height. Axes: x forward, y left, z up (the
+                     Blueprint's +Y, +X and +Z: Unreal is left-handed, so two
+                     axes swap).
     base_footprint   on the ground under base_link (the wheels' radius below their centres)
     wheel_*_link     wheel centres (fixed: no joint states are published)
     <camera>_link    camera body frames: x along the view, z up
@@ -44,7 +45,7 @@ WHEELS = {
     "Raph_Rover_BR_Wheel": "wheel_rr_link",
 }
 BODY = "Raph_Rover_Body"
-ODOMETRY_POINT = "payload_sensor"       # what the telemetry reports (base_link)
+ODOMETRY_POINT = "base_link"            # the component the telemetry reports (odometry)
 LIDAR_CLASS = "UnrealLidarCam"
 
 try:

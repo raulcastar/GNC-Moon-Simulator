@@ -82,4 +82,4 @@ def test_ground_is_a_wheel_radius_below_the_wheels(poses):
     wheels = [poses[w][1][2] for w in ('wheel_fl_link', 'wheel_fr_link', 'wheel_rl_link', 'wheel_rr_link')]
     radius = float(ET.parse(URDF).getroot().find(".//link[@name='wheel_fl_link']//cylinder").get('radius'))
     assert ground == pytest.approx(np.mean(wheels) - radius, abs=1e-3)
-    assert 0.2 < -ground < 0.35
+    assert 0.0 < -ground < 0.35                          # base_link above the ground, below the body top

@@ -23,7 +23,7 @@ from rclpy.lifecycle import Publisher, State, TransitionCallbackReturn
 from rclpy.subscription import Subscription
 
 # Standard ROS 2 messages for kinematics and state estimation
-from geometry_msgs.msg import Twist, Quaternion, TransformStamped
+from geometry_msgs.msg import Twist, TransformStamped
 from tf2_ros import TransformBroadcaster
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
@@ -32,9 +32,9 @@ import warnings
 warnings.filterwarnings("ignore")
 
 
-# ── Quaternion helpers (tuples, x, y, z, w), for the body-tilt recovery ──────
+# ── Quaternion helpers (tuples, x, y, z, w) ─────────────────────────────────
 def _q_from_euler(roll_deg, pitch_deg, yaw_deg):
-    """Degrees, ZYX aerospace — identical convention to euler_to_quaternion."""
+    """Degrees, ZYX aerospace (roll about x, pitch about y, yaw about z)."""
     r, p, y = map(math.radians, (roll_deg, pitch_deg, yaw_deg))
     cy, sy = math.cos(y * 0.5), math.sin(y * 0.5)
     cp, sp = math.cos(p * 0.5), math.sin(p * 0.5)
@@ -59,19 +59,57 @@ def _q_inv(q):
     return (-x, -y, -z, w)
 
 
-def _q_to_euler(q):
-    """Return (roll, pitch, yaw) in degrees, ZYX aerospace."""
-    x, y, z, w = q
-    roll = math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
-    pitch = math.asin(max(-1.0, min(1.0, 2 * (w * y - z * x))))
-    yaw = math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
-    return math.degrees(roll), math.degrees(pitch), math.degrees(yaw)
-
-
 def _q_unrotate(q, v):
     """The world vector v expressed in the frame q (rotates v by q's inverse)."""
     x, y, z, w = _q_mul(_q_mul(_q_inv(q), (v[0], v[1], v[2], 0.0)), q)
     return (x, y, z)
+
+
+def pose_from_telemetry(transform: dict):
+    """
+    The telemetry's pose in the ROS odom frame: (x, y, z) metres and the
+    quaternion (x, y, z, w) of base_link.
+
+    The telemetry is the world transform of the Blueprint's base_link component
+    (centred between the wheels at axle height, its X forward and Z up), in
+    Unreal's world: centimetres, left-handed, rotation as roll/pitch/yaw degrees.
+    Positions map as (-x, y, z) / 100. The frame's forward and up axes (Unreal's
+    rotation matrix) map the same way; the mirror makes Unreal's left-handed
+    axes right-handed, and left = up x forward completes base_link (REP-103:
+    x forward, y left, z up). No offsets: whatever the rover's attitude, this
+    is its heading, roll and pitch.
+    """
+    position = (-transform['x'] / 100.0, transform['y'] / 100.0, transform['z'] / 100.0)
+    r, p, y = (math.radians(transform[k]) for k in ('roll', 'pitch', 'yaw'))
+    cr, sr, cp, sp, cy, sy = math.cos(r), math.sin(r), math.cos(p), math.sin(p), math.cos(y), math.sin(y)
+    fwd_ue = (cp * cy, cp * sy, sp)                                  # FRotationMatrix X axis
+    up_ue = (-(cr * sp * cy + sr * sy), cy * sr - cr * sp * sy, cr * cp)   # Z axis
+    fwd = (-fwd_ue[0], fwd_ue[1], fwd_ue[2])
+    up = (-up_ue[0], up_ue[1], up_ue[2])
+    left = (up[1] * fwd[2] - up[2] * fwd[1], up[2] * fwd[0] - up[0] * fwd[2], up[0] * fwd[1] - up[1] * fwd[0])
+    return position, _q_from_axes(fwd, left, up)
+
+
+def _q_from_axes(x, y, z):
+    """Quaternion (x, y, z, w) of the rotation whose matrix columns are x, y, z."""
+    m00, m10, m20 = x
+    m01, m11, m21 = y
+    m02, m12, m22 = z
+    trace = m00 + m11 + m22
+    if trace > 0.0:
+        s = 0.5 / math.sqrt(trace + 1.0)
+        q = ((m21 - m12) * s, (m02 - m20) * s, (m10 - m01) * s, 0.25 / s)
+    elif m00 > m11 and m00 > m22:
+        s = 2.0 * math.sqrt(1.0 + m00 - m11 - m22)
+        q = (0.25 * s, (m01 + m10) / s, (m02 + m20) / s, (m21 - m12) / s)
+    elif m11 > m22:
+        s = 2.0 * math.sqrt(1.0 + m11 - m00 - m22)
+        q = ((m01 + m10) / s, 0.25 * s, (m12 + m21) / s, (m02 - m20) / s)
+    else:
+        s = 2.0 * math.sqrt(1.0 + m22 - m00 - m11)
+        q = ((m02 + m20) / s, (m12 + m21) / s, 0.25 * s, (m10 - m01) / s)
+    n = math.sqrt(sum(c * c for c in q))
+    return tuple(c / n for c in q)
 
 
 # Optional telemetry fields: the physics body's velocity, world frame, Unreal
@@ -87,7 +125,7 @@ def twist_from_telemetry(transform: dict, orientation):
     w). The world axes map as the position does (x negated). Unreal is
     left-handed, so an angular velocity also flips sign with that mirror:
     (wx, -wy, -wz). A yaw rate turning Unreal's X towards +Y is a negative
-    heading rate, as heading = -yaw - 90.
+    heading rate: the mirror that maps Unreal's x to -x reverses rotation senses.
     """
     v_world = (-transform['vx'] / 100.0, transform['vy'] / 100.0, transform['vz'] / 100.0)
     w_world = (transform['wx'], -transform['wy'], -transform['wz'])
@@ -215,45 +253,10 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self.declare_parameter('publish_tf', True)
         self.wheel_speed_scale: float = 1.0
 
-        # Body-tilt recovery from Unreal telemetry (see _publish_transform).
-        # publish_body_tilt: off -> pure-yaw odom (flat-ground only); on ->
-        # recover real roll/pitch relative to the level baseline.
-        # tilt_*_offset: the telemetry roll/pitch when the rover is LEVEL
-        # (measured: roll=-90, pitch=0). tilt_*_sign: flip if a known tilt comes
-        # out inverted during verification.
-        self.declare_parameter('publish_body_tilt', True)
-        self.declare_parameter('tilt_roll_offset', -90.0)   # deg, telemetry roll when level
-        self.declare_parameter('tilt_pitch_offset', 0.0)    # deg, telemetry pitch when level
-        self.declare_parameter('tilt_roll_sign', 1.0)
-        self.declare_parameter('tilt_pitch_sign', -1.0)   # nose-down -> +DEM pitch
 
     # =========================================================================
     # Kinematics & Coordinate Transformation Helpers
     # =========================================================================
-
-    def euler_to_quaternion(self, roll_deg: float, pitch_deg: float, yaw_deg: float) -> Quaternion:
-        """
-        Translates Euler angles (degrees) into a ROS 2 compliant Quaternion.
-        """
-        # Convert degrees to radians to satisfy standard trigonometric functions
-        roll_rad = math.radians(roll_deg)
-        pitch_rad = math.radians(pitch_deg)
-        yaw_rad = math.radians(yaw_deg)
-
-        cy = math.cos(yaw_rad * 0.5)
-        sy = math.sin(yaw_rad * 0.5)
-        cp = math.cos(pitch_rad * 0.5)
-        sp = math.sin(pitch_rad * 0.5)
-        cr = math.cos(roll_rad * 0.5)
-        sr = math.sin(roll_rad * 0.5)
-
-        # Construct quaternion using standard aerospace sequence (Z-Y-X)
-        q = Quaternion()
-        q.w = cr * cp * cy + sr * sp * sy
-        q.x = sr * cp * cy - cr * sp * sy
-        q.y = cr * sp * cy + sr * cp * sy
-        q.z = cr * cp * sy - sr * sp * cy
-        return q
 
     @staticmethod
     def _slew(cur: float, target: float, up_step: float, down_step: float) -> float:
@@ -528,37 +531,12 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         odom_msg.header.frame_id = "odom"
         odom_msg.child_frame_id = "base_link"
 
-        # Position Translation: Unreal Engine (cm) -> ROS 2 (m)
-        odom_msg.pose.pose.position.x = -transform['x'] / 100.0
-        odom_msg.pose.pose.position.y = transform['y'] / 100.0
-        odom_msg.pose.pose.position.z = transform['z'] / 100.0
-
-        # Heading is reliable from Unreal's yaw (measured by driving).
-        heading_deg = -transform['yaw'] - 90.0
-
-        # Body tilt: Unreal's telemetry attitude is in a non-standard left-handed
-        # frame (reads roll=-90 when the rover is level), so the numbers cannot be
-        # used directly. But the rotation RELATIVE to that level baseline is
-        # convention-independent and recovers true tilt (verified against 10 deg
-        # and 20 deg reference tilts). q_rel = q_level^-1 * q_current, with q_level
-        # = the level attitude at the current heading. The -90 roll offset lands
-        # the pitch component on q_rel's yaw axis, so body_pitch = q_rel.yaw.
-        # Signs/axis mapping are parameterised for one-shot verification.
-        if self.publish_body_tilt:
-            q_level = _q_from_euler(self.tilt_roll_offset, self.tilt_pitch_offset,
-                                    transform['yaw'])
-            q_cur = _q_from_euler(transform['roll'], transform['pitch'], transform['yaw'])
-            rr, _resid, yy = _q_to_euler(_q_mul(_q_inv(q_level), q_cur))
-            # Verified against a known nose-down tilt: the -90 telemetry roll
-            # offset maps body PITCH onto q_rel.roll and body ROLL onto q_rel.yaw
-            # (a nose-down 15 deg showed up on q_rel.roll and rammed the DEM).
-            body_roll  = self.tilt_roll_sign  * yy
-            body_pitch = self.tilt_pitch_sign * rr
-            odom_msg.pose.pose.orientation = self.euler_to_quaternion(
-                body_roll, body_pitch, heading_deg)
-        else:
-            # Pure-yaw fallback: flat-ground-correct, ignores body tilt.
-            odom_msg.pose.pose.orientation = self.euler_to_quaternion(0.0, 0.0, heading_deg)
+        # base_link's pose (see pose_from_telemetry).
+        position, q = pose_from_telemetry(transform)
+        p = odom_msg.pose.pose.position
+        p.x, p.y, p.z = position
+        o = odom_msg.pose.pose.orientation
+        o.x, o.y, o.z, o.w = q
 
         # Velocities, when the Blueprint sends them: straight from the physics
         # body, so the IMU differentiates them once instead of the pose twice.
@@ -716,11 +694,6 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self.max_angular_accel = self.get_parameter('max_angular_accel').value
         self.max_linear_decel  = self.get_parameter('max_linear_decel').value
         self.max_angular_decel = self.get_parameter('max_angular_decel').value
-        self.publish_body_tilt = self.get_parameter('publish_body_tilt').value
-        self.tilt_roll_offset  = self.get_parameter('tilt_roll_offset').value
-        self.tilt_pitch_offset = self.get_parameter('tilt_pitch_offset').value
-        self.tilt_roll_sign    = self.get_parameter('tilt_roll_sign').value
-        self.tilt_pitch_sign   = self.get_parameter('tilt_pitch_sign').value
         self.transport   = self.get_parameter('transport').value.strip().lower()
         self.tcp_role    = self.get_parameter('tcp_role').value.strip().lower()
         self.tcp_port    = self.get_parameter('tcp_port').value
