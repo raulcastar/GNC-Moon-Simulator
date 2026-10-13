@@ -356,10 +356,20 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
 
     def _send_light_state(self) -> None:
         """
-        Tells a freshly (re)connected Unreal the headlight state, with the wheels
-        stopped: Unreal only learns it from drive packets, and an idle rover
-        sends none, so a new Play session would otherwise keep its own default.
+        A new Play session (Unreal (re)connected): the wheels start stopped,
+        and Unreal is told the headlight state (it only learns it from drive
+        packets, and an idle rover sends none, so a new Play session would
+        otherwise keep its own default).
+
+        The ramp is reset first. It runs on simulation time, which stands still
+        between Play sessions, so a ramp cut short by Stop (the rover still
+        driving) would otherwise carry on in the next session and spin the
+        wheels while the rover lands at spawn: it rolled over.
         """
+        self._v_cmd = self._w_cmd = 0.0
+        self._v_tgt = self._w_tgt = 0.0
+        self._last_cmd_t = None
+        self._last_wheels = {"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0}
         self._send({"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0,
                     "headlights_on": self.headlights_on}, "headlight state")
         self.get_logger().info(

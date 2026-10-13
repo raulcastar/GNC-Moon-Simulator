@@ -1,6 +1,6 @@
 """
 The Unreal viewport's camera, chosen on the dashboard: the rover's follow
-camera or an orbit around it. Unreal applies it: its rover_cameras.py
+camera, an orbit around it, or a top-down view. Unreal applies it: its rover_cameras.py
 (unreal/python) polls GET /viewport_camera on the overview's port about twice
 a second, passing the mode it has applied (?applied=), and switches the Play
 viewport when the requested mode differs.
@@ -9,7 +9,7 @@ viewport when the requested mode differs.
 import threading
 import time
 
-MODES = ('follow', 'orbit')
+MODES = ('follow', 'orbit', 'top')
 LINK_TIMEOUT_S = 3.0          # no poll for this long: Unreal's link is not running
 
 

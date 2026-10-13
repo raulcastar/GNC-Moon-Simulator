@@ -6,7 +6,8 @@ from src.viewport_camera import LINK_TIMEOUT_S, ViewportCamera
 def test_requests_only_known_modes():
     v = ViewportCamera()
     assert v.request('orbit') and v.mode == 'orbit'
-    assert not v.request('drone') and v.mode == 'orbit'
+    assert v.request('top') and v.mode == 'top'
+    assert not v.request('drone') and v.mode == 'top'
 
 
 def test_unreal_polls_link_it_and_report_what_it_shows():

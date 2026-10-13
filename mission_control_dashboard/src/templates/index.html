@@ -363,7 +363,7 @@
         <button id="btn-lon">☀ LIGHTS ON</button>
         <button id="btn-loff">● LIGHTS OFF</button>
         <button id="btn-stop">■ ALL STOP</button>
-        <button id="btn-view" title="Unreal's Play viewport: the rover's follow camera or an orbit around it (applied by rover_cameras.py in the editor). Click to switch.">🎥 VIEW —</button>
+        <button id="btn-view" title="Unreal's Play viewport: the rover's follow camera, an orbit around it, or top-down (applied by rover_cameras.py in the editor). Click for the next one.">🎥 VIEW —</button>
         <button id="btn-avoid" title="Lidar obstacle avoidance: the planner steers and re-plans around rocks the lidar sees (its lidar_obstacle_avoidance parameter). Click to switch.">⛰ AVOID —</button>
       </div>
       <div id="tele">
@@ -717,7 +717,7 @@ let viewMode = 'follow';
 function showView(m) {
   viewMode = m.mode || 'follow';
   const b = $('btn-view');
-  const label = viewMode === 'orbit' ? 'ORBIT' : 'FOLLOW';
+  const label = { follow: 'FOLLOW', orbit: 'ORBIT', top: 'TOP' }[viewMode] || 'FOLLOW';
   if (!m.linked) {
     b.textContent = `🎥 ${label} (Unreal not linked)`;
   } else if (m.applied === 'idle') {
@@ -727,12 +727,12 @@ function showView(m) {
   } else {
     b.textContent = `🎥 ${label}`;
   }
-  b.classList.toggle('lit', !!m.linked && viewMode === 'orbit');
+  b.classList.toggle('lit', !!m.linked && viewMode !== 'follow');
   b.classList.toggle('off', !m.linked);
 }
 socket.on('viewport_camera', showView);
 $('btn-view').onclick = () => {
-  const next = viewMode === 'orbit' ? 'follow' : 'orbit';
+  const next = { follow: 'orbit', orbit: 'top', top: 'follow' }[viewMode] || 'follow';   /* cycles */
   socket.emit('viewport_camera', { mode: next });
   addLocal('INFO', `Unreal viewport: ${next} camera requested.`);
 };
