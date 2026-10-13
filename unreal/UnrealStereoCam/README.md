@@ -67,7 +67,8 @@ This folder **is** the plugin — copy it whole.
    `component_stereo_depth/config/params.yaml`; they are under the details
    panel's *Advanced* arrow if you ever change those.
 7. Leave `ServerIp` at `127.0.0.1`, `ServerPort` at 3004. `SendHz` 5 is ample
-   for the 1 Hz stereo pipeline.
+   for the 1 Hz stereo pipeline. Rates are per simulated (game) second, so they
+   hold relative to physics and `/clock` when the editor runs below real time.
 8. On the ROS side set `image_source: stream` in the stereo node's params and
    restart it. Start order does not matter — the node listens and Unreal
    connects at BeginPlay (re-Play after restarting the node, as with the rover

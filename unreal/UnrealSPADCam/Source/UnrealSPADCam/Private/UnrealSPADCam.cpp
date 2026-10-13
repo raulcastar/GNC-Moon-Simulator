@@ -257,7 +257,15 @@ void UUnrealSPADCam::TickComponent(float DeltaTime, ELevelTick TickType,
 		return;
 	}
 
-	const double Now = FPlatformTime::Seconds();
+	// Game time, not wall time: MaxSampleHz is samples per simulated second,
+	// so the rate holds relative to physics and /clock when the editor runs
+	// slower than real time (fixed frame rate). A new Play session restarts
+	// game time at 0.
+	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	if (Now < LastSampleTime)
+	{
+		LastSampleTime = -1.0e9;
+	}
 	if (MaxSampleHz > 0.0f && Now - LastSampleTime < 1.0 / MaxSampleHz)
 	{
 		return;

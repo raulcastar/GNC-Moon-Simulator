@@ -33,6 +33,12 @@ Console variables (read when Play begins): `simclock.Host` (127.0.0.1),
 `simclock.Port` (3008), `simclock.MaxRateHz` (200: at most that many records a
 second; one per tick below it).
 
+**For Blueprints** (`UGncSimTimeLibrary`, category *GNC | Sim Time*): **Get Sim
+Time Ns String** (exact ns since the Unix epoch, as text: a JSON number cannot
+hold 19 digits) and **Get Sim Time Seconds**. The rover Blueprint puts the first
+in its telemetry as `"t_ns"`, so `component_rover_leo_raph` stamps odometry with
+the time Unreal measured the pose instead of its arrival.
+
 Install: copy this folder into `<Project>/Plugins/` with the other sensor
 plugins and build (the editor offers to, or `Build.bat UnrealEditor Win64
 Development -Project=<.uproject>` with the editor closed).

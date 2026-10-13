@@ -104,7 +104,8 @@ public:
 	// consumes is still fully parsed and BGRA->RGB converted by the receiver
 	// for nothing — at 640x480x4 bytes x3 cameras, each extra Hz here is
 	// ~3.7 MB/s of wasted work. Keep this close to (a small margin above)
-	// the consumer's real rate, not high "for safety".
+	// the consumer's real rate, not high "for safety". Frames per simulated
+	// (game) second, so the rate holds when the editor runs below real time.
 	UPROPERTY(EditAnywhere, Category = "StereoCam", meta = (ClampMin = "0.5", ClampMax = "30"))
 	float SendHz = 2.0f;
 

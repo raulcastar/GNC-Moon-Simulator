@@ -421,7 +421,15 @@ void UUnrealStereoCam::TickComponent(float DeltaTime, ELevelTick TickType,
 		return;
 	}
 
-	const double Now = FPlatformTime::Seconds();
+	// Game time, not wall time: SendHz is frames per simulated second, so the
+	// cameras keep their rate relative to physics and /clock when the editor
+	// runs slower than real time (fixed frame rate). A new Play session
+	// restarts game time at 0.
+	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	if (Now < LastSendTime)
+	{
+		LastSendTime = -1.0e9;
+	}
 	if (Now - LastSendTime >= 1.0 / FMath::Max(SendHz, 0.5f))
 	{
 		LastSendTime = Now;

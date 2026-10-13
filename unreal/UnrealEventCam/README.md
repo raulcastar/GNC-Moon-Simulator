@@ -70,7 +70,8 @@ This folder **is** the plugin — copy it whole.
 - `CaptureWidth` / `CaptureHeight` — render-target size if none is assigned. Keep
   modest; the model is O(W·H) per frame on the CPU.
 - `MaxSampleHz` — cap on how often frames are sampled for events (0 = every
-  rendered frame). Higher is better for event fidelity.
+  rendered frame). Higher is better for event fidelity. Per simulated (game)
+  second, so it holds when the editor runs below real time.
 
 **EventCam | Model** (ESIM)
 - `ContrastThresholdPos` / `ContrastThresholdNeg` — C+ / C- in log-intensity

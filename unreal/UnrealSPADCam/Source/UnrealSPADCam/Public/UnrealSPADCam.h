@@ -104,7 +104,8 @@ public:
 	UPROPERTY(EditAnywhere, Category = "SPADCam|Camera")
 	int32 CaptureHeight = 256;
 
-	// Upper bound on how often frames are sampled and sent (Hz). The capture
+	// Upper bound on how often frames are sampled and sent (Hz, per simulated
+	// (game) second, so it holds when the editor runs below real time). The capture
 	// still renders every frame; this only caps the send rate. 0 = every
 	// rendered frame. The SPAD model's effective exposure is set on the ROS side.
 	UPROPERTY(EditAnywhere, Category = "SPADCam|Camera", meta = (ClampMin = "0", ClampMax = "1000"))

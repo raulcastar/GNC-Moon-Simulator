@@ -68,7 +68,8 @@ This folder **is** the plugin — copy it whole.
 - `CaptureName` — the SceneCapture2D to render from (dropdown).
 - `CaptureWidth` / `CaptureHeight` — render-target size if none is assigned.
 - `MaxSampleHz` — cap on how often frames are sampled and sent (0 = every
-  rendered frame). The SPAD exposure / photon parameters are set on the ROS side.
+  rendered frame), per simulated (game) second. The SPAD exposure / photon
+  parameters are set on the ROS side.
 
 ## Wire format
 

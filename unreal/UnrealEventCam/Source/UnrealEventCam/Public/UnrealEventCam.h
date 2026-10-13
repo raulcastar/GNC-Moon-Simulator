@@ -111,7 +111,8 @@ public:
 	UPROPERTY(EditAnywhere, Category = "EventCam|Camera")
 	int32 CaptureHeight = 260;
 
-	// Upper bound on how often frames are sampled for event generation (Hz).
+	// Upper bound on how often frames are sampled for event generation (Hz, per
+	// simulated (game) second, so it holds when the editor runs below real time).
 	// The capture still renders every frame; this only caps the readback/event
 	// rate. 0 = every rendered frame (most accurate, most CPU). Higher is better
 	// for event fidelity — unlike an RGB stream, undersampling here loses events.

@@ -15,6 +15,7 @@ import threading
 import time
 import math
 import re
+from decimal import Decimal, InvalidOperation
 
 import rclpy
 import rclpy.lifecycle
@@ -92,6 +93,28 @@ def twist_from_telemetry(transform: dict, orientation):
     return _q_unrotate(orientation, v_world), _q_unrotate(orientation, w_world)
 
 
+# Optional telemetry field: the simulation time Unreal measured the pose at, in
+# ns since the Unix epoch, as text or an integer (UnrealSimClock's Get Sim Time
+# Ns String in the rover Blueprint). The clock every sensor plugin stamps with.
+_STAMP_KEY = 't_ns'
+
+
+def stamp_ns_from_telemetry(transform: dict) -> Optional[int]:
+    """
+    The telemetry's capture time (ns since the Unix epoch), or None when it has
+    none or it is unreadable. Without it, odometry is stamped on arrival.
+    """
+    value = transform.get(_STAMP_KEY)
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        # Decimal, not float: 19 digits are more than a double holds exactly.
+        ns = int(Decimal(str(value).strip()).to_integral_value())
+    except (InvalidOperation, ValueError):
+        return None
+    return ns if ns > 0 else None
+
+
 class LifecycleRoverController(rclpy.lifecycle.Node):
     """
     Lifecycle node handling asynchronous UDP communication with Unreal Engine.
@@ -131,6 +154,7 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self._v_tgt: float = 0.0
         self._w_tgt: float = 0.0
         self._ramp_timer = None
+        self._warned_no_stamp = False
         
         # Network Utilities: Transmission
         self.udp_send_socket: Optional[socket.socket] = None
@@ -239,10 +263,19 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
             return target       # exact, so _ramp_tick can detect completion
         return cur + step if target > cur else cur - step
 
+    def _now_s(self) -> float:
+        """The node's clock (simulation time with use_sim_time), in seconds."""
+        return self.get_clock().now().nanoseconds * 1e-9
+
     def _ramp_step(self) -> None:
-        """Advance (v, w) toward the latest target by one rate-limited step and send it."""
-        now = time.monotonic()
-        dt = 0.1 if self._last_cmd_t is None else min(now - self._last_cmd_t, 0.2)
+        """
+        Advance (v, w) toward the latest target by one rate-limited step and send it.
+        On the node's clock, so the limits are per simulated second: the planner
+        and the physics run on simulation time, which falls behind the wall
+        clock when Unreal renders below its fixed frame rate.
+        """
+        now = self._now_s()
+        dt = 0.1 if self._last_cmd_t is None else max(0.0, min(now - self._last_cmd_t, 0.2))
         self._last_cmd_t = now
 
         self._v_cmd = self._slew(self._v_cmd, self._v_tgt,
@@ -258,7 +291,7 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         """Complete an unfinished ramp when cmd_vel is not arriving (e.g. a single stop)."""
         if self._v_cmd == self._v_tgt and self._w_cmd == self._w_tgt:
             return
-        if self._last_cmd_t is not None and time.monotonic() - self._last_cmd_t < 0.05:
+        if self._last_cmd_t is not None and self._now_s() - self._last_cmd_t < 0.05:
             return      # cmd_vel is already stepping the ramp
         self._ramp_step()
 
@@ -474,7 +507,20 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
     def _publish_transform(self, transform: dict) -> None:
         """Publish one Unreal pose as Odometry. Transport agnostic."""
         odom_msg = Odometry()
-        odom_msg.header.stamp = self.get_clock().now().to_msg()
+        # The time Unreal measured the pose at, when the telemetry carries it;
+        # else its arrival (rounded to the last /clock tick, so consecutive
+        # poses can share a stamp or skip one).
+        stamp_ns = stamp_ns_from_telemetry(transform)
+        if stamp_ns is not None:
+            odom_msg.header.stamp.sec, odom_msg.header.stamp.nanosec = divmod(stamp_ns, 1_000_000_000)
+        else:
+            odom_msg.header.stamp = self.get_clock().now().to_msg()
+            if not self._warned_no_stamp:
+                self._warned_no_stamp = True
+                self.get_logger().info(
+                    f"Telemetry has no '{_STAMP_KEY}' field: odometry is stamped on arrival. "
+                    f"Add it in the rover Blueprint (UnrealSimClock: Get Sim Time Ns String) "
+                    f"to stamp it with the time Unreal measured the pose.")
         odom_msg.header.frame_id = "odom"
         odom_msg.child_frame_id = "base_link"
 
