@@ -90,8 +90,8 @@ REMOTE_PARAMS = {
     'camera_offset_up_m': ('lc_component_local_mapping', 'camera_offset_up_m'),
 }
 # Fallbacks until the mapper's parameters have been read.
-CAMERA_DEFAULTS = {'camera_angle': 20.0, 'camera_height_m': 0.577,
-                    'camera_offset_forward_m': 0.171, 'camera_offset_up_m': 0.284}
+CAMERA_DEFAULTS = {'camera_angle': 20.0, 'camera_height_m': 0.553,
+                    'camera_offset_forward_m': 0.185, 'camera_offset_up_m': 0.465}
 
 PATH_OVERLAY_AHEAD = 30.0     # m of planned path projected onto the navcam
 PATH_OVERLAY_STEP = 0.25      # m between projected path samples

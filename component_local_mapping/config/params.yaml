@@ -9,7 +9,7 @@ lc_component_local_mapping:
     #
     # image_depth is the stereo result reprojected into the central camera, not
     # Unreal's depth buffer: sparse, with occlusion holes, accuracy degrading as
-    # Z²/(fx·B). navcam/central/depth_gt carries the exact buffer.
+    # Z²/(fx·B). navcam/central/depth_ground_truth carries the exact buffer.
     camera_topic: navcam/central
 
     # ── Pinhole camera intrinsics (pixels) ────────────────────────────────────
@@ -33,16 +33,16 @@ lc_component_local_mapping:
     # camera_height_m: distance from the ground plane to the camera optical
     #   centre (= physical_height in CameraTransform). Used by rotateRefSystem
     #   to set the absolute elevation of z_w = 0 at the ground.
-    # Measured in Unreal: Navcam_Center is 0.577 m above the ground
-    # (0.284 m above the odom origin, itself 0.293 m above the ground).
-    camera_height_m: 0.577  # metres
+    # From the URDF: navcam_central_link is 0.465 m above base_link, which is at
+    # axle height (0.0885 m above the ground under base_footprint).
+    camera_height_m: 0.553  # metres
 
-    # camera_offset_*: Navcam_Center optical centre relative to the odom origin,
-    #   rover body frame (forward, left, up), metres. Places the point cloud and
-    #   elevation grid in the odom frame. Measured in Unreal.
-    camera_offset_forward_m: 0.171
+    # camera_offset_*: Navcam_Center optical centre relative to base_link (the
+    #   odometry point), rover body frame (forward, left, up), metres. Places
+    #   the point cloud and elevation grid in the odom frame.
+    camera_offset_forward_m: 0.185
     camera_offset_lateral_m: 0.0
-    camera_offset_up_m:      0.284
+    camera_offset_up_m:      0.465
 
     # camera_angle: tilt of the camera from horizontal in degrees.
     #   0   = camera looking straight ahead (horizontal)
@@ -101,11 +101,9 @@ lc_component_local_mapping:
     min_points_per_cell: 2
     drop_highest:        1
 
-    # Apply live rover roll/pitch from /odom to the DEM. Now TRUE: the rover node
-    # recovers real body tilt from Unreal telemetry (relative-to-level method) and
-    # publishes it in a clean REP-103 odom, so the roll/pitch here are genuine and
-    # correct rough-terrain compensation. (It was disabled while odom carried the
-    # spurious ~-84° roll from the raw non-standard frame.)
+    # Apply live rover roll/pitch from /odom (at each frame's capture time) to
+    # the DEM: the rover node publishes base_link's true attitude (REP-103), so
+    # this compensates rough terrain.
     apply_rover_tilt: true
 
     # ── Debug DEM visualisation ───────────────────────────────────────────────

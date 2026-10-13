@@ -1,11 +1,14 @@
 """
 ROS 2 Lifecycle Node for Unreal Engine Rover Control and Odometry.
 
-This module provides a bi-directional bridge between standard ROS 2 navigation stacks 
-and the Unreal Engine simulator. It subscribes to geometry_msgs/Twist messages to 
-dispatch low-latency UDP motor commands, and utilizes a dedicated background thread 
-to ingest UDP telemetry, translating Unreal Engine's coordinate system into standard 
-ROS 2 nav_msgs/Odometry (Meters, Right-Handed, Quaternions).
+A bi-directional bridge between ROS 2 and the rover Blueprint in Unreal Engine.
+geometry_msgs/Twist commands on cmd_vel are ramped to the acceleration limits
+and sent as skid-steer wheel inputs; a background thread reads Unreal's pose
+telemetry and publishes it as nav_msgs/Odometry (REP-103: metres, right-handed,
+quaternions) and TF odom -> base_link.
+
+Transport: one bidirectional TCP connection (the default, port 3003: Unreal
+dials, this node listens), or the legacy pair of UDP sockets.
 """
 
 from typing import Optional
@@ -156,11 +159,10 @@ def stamp_ns_from_telemetry(transform: dict) -> Optional[int]:
 
 class LifecycleRoverController(rclpy.lifecycle.Node):
     """
-    Lifecycle node handling asynchronous UDP communication with Unreal Engine.
+    Lifecycle node handling the link with Unreal Engine (TCP, or legacy UDP).
 
-    Manages a non-blocking transmission socket for motor commands and a dedicated 
-    background thread for receiving high-frequency telemetry. Strictly enforces 
-    ROS 2 REP-103 standards for units and coordinate frames.
+    Sends wheel commands and receives telemetry in a dedicated background
+    thread. Strictly enforces ROS 2 REP-103 standards for units and frames.
     """
 
     def __init__(self, node_name: str, **kwargs):
@@ -426,7 +428,7 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
 
     def cmd_vel_callback(self, msg: Twist) -> None:
         """
-        Processes incoming linear/angular velocity commands and dispatches them via UDP.
+        Processes incoming linear/angular velocity commands: sets the ramp's target and steps it.
         """
         # Set the target; _ramp_step applies the accel/decel limits.
         self._v_tgt = msg.linear.x
