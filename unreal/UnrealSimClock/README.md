@@ -39,6 +39,13 @@ hold 19 digits) and **Get Sim Time Seconds**. The rover Blueprint puts the first
 in its telemetry as `"t_ns"`, so `component_rover_leo_raph` stamps odometry with
 the time Unreal measured the pose instead of its arrival.
 
+**Bytes for the rover link** (`UGncBytesLibrary`, category *GNC | Bytes*): **GNC
+Bytes To String** (UTF-8, or UTF-16 with a byte-order mark) and **GNC String To
+Bytes** (UTF-8). The rover Blueprint's TCP component receives and emits byte
+arrays: the first turns the bytes from `component_rover_leo_raph` into the JSON
+it parses, the second its telemetry JSON into bytes to emit. They replace the
+SocketIO plugin's CoreUtility nodes, so that plugin is not needed.
+
 Install: copy this folder into `<Project>/Plugins/` with the other sensor
 plugins and build (the editor offers to, or `Build.bat UnrealEditor Win64
 Development -Project=<.uproject>` with the editor closed).
