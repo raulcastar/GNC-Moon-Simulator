@@ -163,6 +163,10 @@ services:
     volumes:
       - ./mission_control_dashboard:/opt/ros/jazzy/src/mission_control_dashboard
       - ./custom_map_interfaces:/opt/ros/jazzy/src/custom_map_interfaces
+      # The rover-dependent configs, read by the overview's ROVER selector (src/rovers.py)
+      - ./component_rover_leo_raph/config:/opt/gnc/rovers/component_rover_leo_raph:ro
+      - ./component_path_planner/config:/opt/gnc/rovers/component_path_planner:ro
+      - ./component_robot_description/urdf:/opt/gnc/rovers/urdf:ro
 
   # Interactive shell with the ROS 2 tools (rviz2, rqt) on the host display:
   #   docker compose exec debug_cli bash

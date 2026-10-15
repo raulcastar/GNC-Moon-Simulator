@@ -38,6 +38,7 @@ import math
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 
 import unreal
@@ -294,10 +295,15 @@ def _link():
 
 
 def _poll_loop(link):
-    """Background thread: asks the dashboard which mode it wants, tells it what is shown."""
+    """
+    Background thread: asks the dashboard which mode it wants, tells it what is
+    shown and which rover plays (its class name; the overview's ROVER selector
+    warns when the stack drives another).
+    """
     while not link["stop"].is_set():
         try:
-            with urllib.request.urlopen(f"{link['url']}?applied={link['applied']}", timeout=1.0) as reply:
+            query = urllib.parse.urlencode({"applied": link["applied"], "rover": link.get("rover", "none")})
+            with urllib.request.urlopen(f"{link['url']}?{query}", timeout=1.0) as reply:
                 mode = json.loads(reply.read().decode()).get("mode")
             link["wanted"] = mode if mode in ("follow", "orbit", "top") else None
         except Exception:
@@ -314,7 +320,13 @@ def _link_tick(delta_seconds):
         world = unreal.EditorLevelLibrary.get_game_world()
         if world is None:
             link["applied"], link["world"] = "idle", None
+            link["rover"], link["rover_world"] = "none", None
             return
+        if world != link.get("rover_world") and time.monotonic() - link.get("rover_tried", 0.0) >= RETRY_S:
+            link["rover_tried"] = time.monotonic()           # once per session (retried until it spawned)
+            rover = _rover(world)
+            if rover is not None:
+                link["rover"], link["rover_world"] = rover.get_class().get_name(), world
         wanted = link["wanted"]
         if wanted is None:
             return
@@ -340,6 +352,7 @@ def start_dashboard_link(url=DASHBOARD_URL):
     if _link():
         return
     link = {"url": url, "wanted": None, "applied": "idle", "world": None, "tried": 0.0,
+            "rover": "none", "rover_world": None, "rover_tried": 0.0,
             "stop": threading.Event(), "handle": None}
     setattr(builtins, LINK, link)
     threading.Thread(target=_poll_loop, args=(link,), name="rover_cameras_link", daemon=True).start()

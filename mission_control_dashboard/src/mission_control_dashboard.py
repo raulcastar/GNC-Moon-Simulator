@@ -48,6 +48,7 @@ from .imagery import ImageryMixin
 from .mapping import MappingMixin
 from .recording import RecordingMixin
 from .replay import ReplayMixin
+from .rover_switch import RoverSwitchMixin
 from .settings import (CAM_PRODUCT_MIN_PERIOD, LIDAR_SELF_RADIUS, DEFAULT_BAG_PRESET, HEALTH_PERIOD, INSPECT_PERIOD,
                        LIFECYCLE_NODES, PLANNER_NODE, REMOTE_PARAMS, TIMELINE_MAX)
 from .telemetry import TelemetryMixin
@@ -58,7 +59,8 @@ from . import routes  # noqa: F401  (registers the page / socket handlers)
 
 
 class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, TopicsMixin,
-                                HealthMixin, RecordingMixin, ReplayMixin, CommandsMixin, rclpy.lifecycle.Node):
+                                HealthMixin, RecordingMixin, ReplayMixin, CommandsMixin, RoverSwitchMixin,
+                                rclpy.lifecycle.Node):
     """Bridges the ROS graph to the browser over SocketIO. The work is split over
     the mixins (one module each); this class owns construction and the lifecycle."""
 
@@ -87,6 +89,7 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
         self._inspect_lock = threading.Lock()
         self._inspect_timer = None
         self._init_replay()
+        self._init_rover()              # the active rover (GNC_ROVER; the overview's ROVER selector)
 
         # Latest data, for the snapshot export and for browsers that join late.
         self._last_jpeg = {}            # feed id -> JPEG bytes (as last sent)
@@ -118,7 +121,7 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
         self._overlay_shown = False     # a non-empty path overlay is on screen
         self._mask_legend = {}          # stencil id -> class name
         self._mask_classes = []         # [{id, name, group, rgb}] (object_mask_classes)
-        self._remote = {k: None for k in REMOTE_PARAMS}   # + rover_width_m (own parameter, set at configure)
+        self._remote = {k: None for k in REMOTE_PARAMS}   # + rover_width_m, teleop_max_angular (own, set at configure)
         self._node_states = {n: 'unknown' for n in LIFECYCLE_NODES}
         self._cli_get_state, self._cli_change_state, self._cli_params = {}, {}, {}
         self._pending = set()           # outstanding async service calls
@@ -157,14 +160,16 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
         self.declare_parameter('lidar_self_radius_m', LIDAR_SELF_RADIUS)
         self.declare_parameter('rover_width_m', 0.96)
         self.declare_parameter('lidar_height_m', 0.55)  # Navcam_Center above the ground (ground-plane fit while driving)
+        self.declare_parameter('teleop_max_angular', 0.35)  # rad/s: the teleop turn limit (Yutu rocks above ~0.15)
         self.declare_parameter('bag_directory', '/opt/ros/jazzy/src/mission_control_dashboard/bags')
         self.map_resolution = self.get_parameter('global_res').value
 
     def on_configure(self, state: State) -> TransitionCallbackReturn:
         self.get_logger().info("Lifecycle: configuring mission control interfaces.")
         ns = self.get_parameter('camera_namespace').value
-        # Sent to the browsers with the remote parameters (config): the map's rover icon.
-        self._remote['rover_width_m'] = self.get_parameter('rover_width_m').value
+        # Sent to the browsers with the remote parameters (config): the map's rover icon, the teleop turn limit.
+        for key in ('rover_width_m', 'teleop_max_angular'):
+            self._remote[key] = self.get_parameter(key).value
 
         self._pub_goal = self.create_lifecycle_publisher(PoseStamped, 'goal_pose', 10)
         self._pub_lights = self.create_lifecycle_publisher(Bool, 'headlights_cmd', 10)
@@ -178,6 +183,7 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
         for n in {node for node, _ in REMOTE_PARAMS.values()} | {PLANNER_NODE}:
             self._cli_params[n] = self.create_client(GetParameters, f'/{n}/get_parameters')
         self._cli_planner_set = self.create_client(SetParameters, f'/{PLANNER_NODE}/set_parameters')
+        self._configure_rover()
 
         sub = self.create_subscription
         self._subs = [
@@ -266,11 +272,11 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
             if p:
                 self.destroy_publisher(p)
         clients = [self._cli_get_maps, *self._cli_get_state.values(),
-                   *self._cli_change_state.values(), *self._cli_params.values()]
+                   *self._cli_change_state.values(), *self._cli_params.values(), *self._cli_set.values()]
         for c in clients:
             if c:
                 self.destroy_client(c)
-        self._cli_get_state, self._cli_change_state, self._cli_params = {}, {}, {}
+        self._cli_get_state, self._cli_change_state, self._cli_params, self._cli_set = {}, {}, {}, {}
         return TransitionCallbackReturn.SUCCESS
 
     def _is_active(self) -> bool:

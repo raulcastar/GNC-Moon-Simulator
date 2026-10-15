@@ -227,6 +227,14 @@
   .hbtn.on { color: var(--accent); border-color: var(--accent); }
   #btn-rec.rec { color: var(--red); border-color: var(--red); animation: blink 1.2s infinite; }
   @keyframes blink { 50% { opacity: .55; } }
+  /* ROVER selector: the rover the stack drives, and Unreal's (from its camera link) */
+  #rover-ctl { display: flex; align-items: center; gap: 6px; font-size: calc(9px * var(--fs, 1));
+               letter-spacing: 1px; color: var(--dim); white-space: nowrap; }
+  #rover-ctl { text-decoration: none; }
+  #rover-name { color: var(--text); font-weight: normal; font-size: calc(10px * var(--fs, 1)); }
+  #rover-unreal { padding: 2px 6px; border: 1px solid var(--line); border-radius: 3px; }
+  #rover-unreal.ok { color: var(--accent); border-color: var(--accent); }
+  #rover-unreal.bad { color: var(--amber); border-color: var(--amber); animation: blink 1.2s infinite; }
   /* ============ MISSION + ATTITUDE ============ */
   .badge { font-size: calc(10px * var(--fs, 1)); letter-spacing: 1px; padding: 1px 7px; border-radius: 3px;
            border: 1px solid currentColor; }
@@ -262,6 +270,9 @@
     <button data-view="lidar">LIDAR 3D</button>
   </div>
   <div class="spacer"></div>
+  <a id="rover-ctl" href="#" title="The rover the stack drives; change it on the menu (port 5000). Unreal must play the rover's level">
+    ROVER <b id="rover-name">—</b><span id="rover-unreal">Unreal: —</span>
+  </a>
   <div class="lights">
     <div class="light"><div class="dot" id="li-link"></div>LINK</div>
     <div class="light"><div class="dot" id="li-odom"></div>ODOM</div>
@@ -742,6 +753,23 @@ function showView(m) {
   b.classList.toggle('off', !m.linked);
 }
 socket.on('viewport_camera', showView);
+
+/* The rover the stack drives (chosen on the menu, rovers.py) and Unreal's rover in Play */
+$('rover-ctl').href = 'http://' + (window.location.hostname || 'localhost') + ':5000/';
+function showRover(r) {
+  $('rover-name').textContent = r.label;
+  const chip = $('rover-unreal');
+  chip.className = '';
+  if (r.busy) { chip.textContent = 'switching…'; }
+  else if (!r.unreal_linked) { chip.textContent = 'Unreal: not linked'; chip.title = ''; }
+  else if (!r.unreal) { chip.textContent = 'Unreal: not playing'; chip.title = ''; }
+  else if (r.match) { chip.textContent = `Unreal: ${r.unreal_label} ✓`; chip.className = 'ok'; chip.title = ''; }
+  else {
+    chip.textContent = `Unreal: ${r.unreal_label} ≠`; chip.className = 'bad';
+    chip.title = `Unreal plays ${r.unreal_label}: open ${r.level} for ${r.label}, or select ${r.unreal_label} on the menu`;
+  }
+}
+socket.on('rover', showRover);
 $('btn-view').onclick = () => {
   const next = { follow: 'orbit', orbit: 'top', top: 'follow' }[viewMode] || 'follow';   /* cycles */
   socket.emit('viewport_camera', { mode: next });

@@ -423,6 +423,15 @@
     maxLin = +e.target.value; $('lin-val').textContent = maxLin.toFixed(2); if (loop) tick(); });
   $('ang-max').addEventListener('input', e => {
     maxAng = +e.target.value; $('ang-val').textContent = maxAng.toFixed(2); if (loop) tick(); });
+  // The rover's turn limit (the dashboard's teleop_max_angular: Leo_Raph 0.35, Yutu 0.15).
+  socket.on('config', c => {
+    if (!c || !c.teleop_max_angular) return;
+    const s = $('ang-max');
+    s.max = c.teleop_max_angular;
+    if (+s.value > c.teleop_max_angular) s.value = c.teleop_max_angular;   // the browser clamps too
+    maxAng = Math.min(+s.value, c.teleop_max_angular);
+    $('ang-val').textContent = maxAng.toFixed(2);
+  });
 
   // ---- E-STOP / headlights ----
   $('estop').addEventListener('click', () => {

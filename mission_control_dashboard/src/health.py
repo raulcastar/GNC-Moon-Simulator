@@ -13,6 +13,8 @@ from sensor_msgs.msg import Image
 from rclpy.qos import qos_profile_sensor_data
 
 from .viewport_camera import VIEWPORT
+
+AUTO_ACTIVATE_WAIT_S = 5.0      # s for a node's launch file to activate it after configure
 from .web import emit_all, feed_watchers, sio_cams, sio_map, sio_replay, sio_sys, sio_teleop, socketio
 
 
@@ -48,25 +50,34 @@ class HealthMixin:
         else:
             logger.info(text)
 
-    def _restart_node_impl(self, name: str) -> None:
+    def _restart_node_impl(self, name: str) -> bool:
         """
-        deactivate -> cleanup -> configure -> activate on `name`.
+        deactivate -> cleanup -> configure -> activate on `name`; True once it is active again.
 
         Equivalent to restarting its container (for the stereo node, cleanup
         closes the frame-stream server and configure opens it again). The first two
         steps may legitimately fail if the node is already inactive, so only
         configure and activate are load-bearing.
+
+        Every node's launch file activates it whenever it reaches inactive
+        (OnStateTransition configuring -> inactive), so after configure this
+        waits for that and sends activate only if it does not come: a second
+        activate is refused inside the node, and the error raised there ends
+        its executor (the node stops answering).
         """
         client = self._cli_change_state[name]
         try:
             if not client.wait_for_service(timeout_sec=3.0):
                 self._console('ERROR', f'{name}: lifecycle service unreachable — '
                                        f'is its container running?')
-                return
+                return False
             self._console('INFO', f'Restarting {name}...')
             steps = [(4, 'deactivate', False), (2, 'cleanup', False),
                      (1, 'configure', True), (3, 'activate', True)]
             for tid, label, required in steps:
+                if label == 'activate' and self._await_state(name, 'active', AUTO_ACTIVATE_WAIT_S):
+                    self._console('INFO', f'{name}: activated (by its launch file).')
+                    continue
                 req = ChangeState.Request()
                 req.transition.id = tid
                 fut = client.call_async(req)
@@ -79,13 +90,37 @@ class HealthMixin:
                 elif required:
                     self._console('ERROR', f'{name}: {label} FAILED — check its log; '
                                            f'is Unreal playing?')
-                    return
+                    return False
                 else:
                     self._console('WARN', f'{name}: {label} skipped (already past '
                                           f'that state).')
             self._console('INFO', f'{name} restarted.')
+            return True
         finally:
             self._restart_busy.discard(name)
+
+    def _await_state(self, name: str, label: str, timeout: float) -> bool:
+        """Polls the node's lifecycle state until it is `label` (True) or `timeout` passes."""
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < timeout:
+            if self._lifecycle_state(name) == label:
+                return True
+            time.sleep(0.2)
+        return False
+
+    def _lifecycle_state(self, name: str, timeout: float = 3.0):
+        """The node's lifecycle state label (blocking; call from a worker thread), or None."""
+        client = self._cli_get_state.get(name)
+        if client is None or not client.service_is_ready():
+            return None
+        fut = client.call_async(GetState.Request())
+        t0 = time.monotonic()
+        while not fut.done() and time.monotonic() - t0 < timeout:
+            time.sleep(0.05)
+        try:
+            return fut.result().current_state.label if fut.done() else None
+        except Exception:
+            return None
 
     def _mark(self, feed: str) -> None:
         self._arrivals[feed].append(time.monotonic())
@@ -117,6 +152,7 @@ class HealthMixin:
         if viewport != getattr(self, '_viewport_sent', None):
             self._viewport_sent = viewport
             emit_all('viewport_camera', viewport)
+        self._emit_rover()                         # Unreal's rover, as its link reports it
         now = time.monotonic()
         feeds = {}
         for name, times in self._arrivals.items():

@@ -1,0 +1,8 @@
+# The dashboard's rover-dependent settings, for Leo_Raph (the default rover);
+# params_<rover>.yaml overrides them for another (GNC_ROVER, or the ROVER selector).
+mission_control_dashboard:
+  ros__parameters:
+    lidar_height_m: 0.55          # the central navcam, which the lidar follows, above the ground
+    lidar_self_radius_m: 0.6      # lidar returns this close hit the rover itself
+    rover_width_m: 0.96           # the map's rover icon
+    teleop_max_angular: 0.35      # rad/s, the teleop page's turn limit (spot turns rock the rover)

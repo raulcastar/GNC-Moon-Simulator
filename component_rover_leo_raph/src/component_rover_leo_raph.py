@@ -285,6 +285,31 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         # headlights_intensity topic changes it.
         self.declare_parameter('headlights_intensity', 1.0)
         self.wheel_speed_scale: float = 1.0
+        self.max_linear_accel = self.max_angular_accel = 0.0
+        self.max_linear_decel = self.max_angular_decel = 0.0
+        # The drive calibration applies live (the dashboard's rover switch sets it):
+        # reconfiguring would drop Unreal's TCP link, which Unreal does not redial.
+        self.add_on_set_parameters_callback(self._on_parameters)
+
+    # Parameters applied as soon as they are set: name -> (attribute, factor).
+    _LIVE = {'wheel_speed_scale': ('wheel_speed_scale', 1.0), 'rover_width': ('rover_width', 0.01),
+             'max_linear_accel': ('max_linear_accel', 1.0), 'max_angular_accel': ('max_angular_accel', 1.0),
+             'max_linear_decel': ('max_linear_decel', 1.0), 'max_angular_decel': ('max_angular_decel', 1.0)}
+
+    def _on_parameters(self, params):
+        from rcl_interfaces.msg import SetParametersResult
+        for p in params:
+            if p.name in self._LIVE:
+                attr, factor = self._LIVE[p.name]
+                try:
+                    value = float(p.value) * factor
+                except (TypeError, ValueError):
+                    return SetParametersResult(successful=False, reason=f'{p.name} must be a number')
+                if value <= 0.0:
+                    return SetParametersResult(successful=False, reason=f'{p.name} must be positive')
+                setattr(self, attr, value)
+                self.get_logger().info(f'{p.name} set to {p.value} (live).')
+        return SetParametersResult(successful=True)
 
 
     # =========================================================================

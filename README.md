@@ -203,14 +203,34 @@ The stack drives either rover; one runs at a time (they use the same ports):
 
 | | Leo_Raph | Yutu |
 |---|---|---|
-| Unreal level | `Lunar_Terrain_1` | `Lunar_Terrain_Yutu` |
-| Blueprint | `/Game/Blueprints/Leo_Raph` | `/Game/Yutu/Yutu_Rover` |
+| Unreal level | `Lunar_Terrain_Raph` | `Lunar_Terrain_Yutu` |
+| Blueprint | `/Game/Blueprints/Leo_Raph` | `/Game/Blueprints/Yutu_Rover` |
+| Meshes, materials | `/Game/RoverAssets/Leo_Raph` | `/Game/RoverAssets/Yutu` |
 | Wheels | 4, 0.18 m | 6, 0.34 m (rigid chassis, no suspension yet) |
 | Size, mass | ~0.5 m, 210 kg | 1.85 x 1.9 m with the solar wings out, 1.2 m tall, 140 kg |
 | Navcams, lidar | 0.55 m up, on the body | 1.13 m up, on the mast |
 | `GNC_ROVER` | `leo_raph` (default) | `yutu` |
 
-**To switch:** open the rover's level in Unreal; set `GNC_ROVER` in `.env` (repo
+**To switch from the dashboard:** the menu (port 5000) has a **ROVER** selector.
+Open the rover's level in Unreal and pick the rover there; no container restarts.
+The rover stops first.
+The selector:
+
+- applies the rover node's drive calibration live (Unreal's TCP link stays up);
+- sets the planner's footprint and limits;
+- gives `robot_state_publisher` the rover's URDF, so `/tf_static` changes;
+- sets the dashboard's own values;
+- re-configures the planner and local mapping, which read their sensor mounts
+  from TF. A goal in progress is dropped.
+
+The values come from the same config files, mounted read-only into the
+dashboard's container (`mission_control_dashboard/src/rovers.py`). Next to the
+selector, a line shows the rover Unreal is playing (reported by the viewport
+camera link, `rover_cameras.py`), in amber when it differs. The overview's header
+shows the active rover and the same check (`Unreal: Yutu ✓`, or amber `≠`). The choice lasts until the containers restart; then `.env`
+decides again.
+
+**To switch for good:** open the rover's level in Unreal; set `GNC_ROVER` in `.env` (repo
 root); `docker compose up -d` (recreates, and rebuilds, the four containers that
 use it: rover node, planner, robot description, dashboard); press Play.
 
@@ -224,28 +244,29 @@ description loads `urdf/<GNC_ROVER>.urdf`. Yutu's overrides:
   1.0 (the mast lidar sees the wings and arm), and `max_yaw_rate_deg` 8: spot turns
   rock the rigid six-wheel chassis (pitch/roll swing 2-4 deg at 0.1 rad/s, 5-8 at
   0.15, 8-10 at 0.2, 18-24 at 0.3). A rocker-bogie suspension would allow faster
-  turns. The dashboard's teleop cap is shared (0.2 rad/s by default): drive Yutu's
-  spot turns gently.
+  turns.
 - **dashboard:** `lidar_height_m` 1.13, `lidar_self_radius_m` 1.0, `rover_width_m`
-  1.11 (the map icon).
+  1.11 (the map icon), `teleop_max_angular` 0.15 (the teleop turn slider's
+  limit; Leo_Raph 0.35).
 
 **How Yutu was built** (to repeat for another model): the glTF was prepared in
-Blender (`Content/Yutu/Source/prepare_yutu.py` in the Unreal project: turned to
+Blender (`Content/RoverAssets/Yutu/Source/prepare_yutu.py` in the Unreal project: turned to
 face +X, scaled x2 to real size, the six wheels separated with their pivots on
-their axles), imported to `/Game/Yutu`, and `Yutu_Rover` made from a **copy of
+their axles), imported to `/Game/RoverAssets/Yutu`, and `Yutu_Rover` made from a **copy of
 Leo_Raph**, so it keeps its graph (TCP link, telemetry, lights, sensors) and
 component names; the meshes, wheel and joint positions, masses, sensor mounts and
 collision (a chassis box, sphere wheels) were changed, and two middle wheels and
 joints added and driven like the front ones. Its URDF comes from the same
 exporter (`export_rover_urdf.py`, run with the Yutu level open). For its wheel
-tracks and rover-shadow tag, send the masks from Terrain Studio once with
-`Yutu_Rover` / `Navcam_Mask` as the mask camera.
+tracks and rover-shadow tag, send the masks from Terrain Studio once with the
+level open (Find lists the level's cameras, and the mask camera defaults to its
+rover's `Navcam_Mask`).
 
 **Credit (CC-BY-4.0, required):** This work is based on "Yutu"
 (https://sketchfab.com/3d-models/yutu-d9564c9a60c14b85a880cc0bfcf1a6b5) by tashtego
 (https://sketchfab.com/tashtego) licensed under CC-BY-4.0
 (http://creativecommons.org/licenses/by/4.0/). The original `license.txt` and a
-`CREDITS.txt` (with the changes made) are in the Unreal project's `Content/Yutu/`,
+`CREDITS.txt` (with the changes made) are in the Unreal project's `Content/RoverAssets/Yutu/`,
 and every Yutu asset carries the author, license and source as metadata.
 
 ## The rover

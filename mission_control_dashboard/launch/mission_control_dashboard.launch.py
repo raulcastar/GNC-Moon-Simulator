@@ -14,7 +14,7 @@ from ament_index_python.packages import get_package_share_directory
 def rover_parameters(package):
     """params.yaml, then params_<GNC_ROVER>.yaml (the rover's overrides) when it exists."""
     share = get_package_share_directory(package)
-    files = []
+    files = [os.path.join(share, 'config', 'params.yaml')]
     override = os.path.join(share, 'config', f"params_{os.environ.get('GNC_ROVER', 'leo_raph')}.yaml")
     if os.path.exists(override):
         files.append(override)

@@ -12,12 +12,14 @@ def test_requests_only_known_modes():
 
 def test_unreal_polls_link_it_and_report_what_it_shows():
     v = ViewportCamera()
-    assert v.status(now=100.0) == {'mode': 'follow', 'applied': None, 'linked': False}
+    assert v.status(now=100.0) == {'mode': 'follow', 'applied': None, 'linked': False, 'rover': None}
     v.request('orbit')
-    assert v.poll('follow', now=100.0) == {'mode': 'orbit'}
-    assert v.status(now=100.5) == {'mode': 'orbit', 'applied': 'follow', 'linked': True}
-    v.poll('orbit', now=101.0)
-    assert v.status(now=101.2)['applied'] == 'orbit'
+    assert v.poll('follow', now=100.0, rover='Yutu_Rover_C') == {'mode': 'orbit'}
+    assert v.status(now=100.5) == {'mode': 'orbit', 'applied': 'follow', 'linked': True, 'rover': 'Yutu_Rover_C'}
+    v.poll('orbit', now=101.0)                          # an older link without ?rover= keeps the last one
+    assert v.status(now=101.2)['applied'] == 'orbit' and v.status(now=101.2)['rover'] == 'Yutu_Rover_C'
+    v.poll('idle', now=102.0, rover='none')             # Play stopped
+    assert v.status(now=102.1)['rover'] is None
 
 
 def test_link_is_lost_without_polls():

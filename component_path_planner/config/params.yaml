@@ -65,6 +65,7 @@ lc_component_path_planner:
     lidar_x_offset_m: 0.185        # [m] lidar ahead of the rover's odometry point (base_link)
     obstacle_min_height_m: 0.15     # [m] above the local ground: the rover's body clears less
     obstacle_max_range_m: 6.0       # [m] ahead; farther returns are ignored
+    lidar_self_radius_m: 0.45       # [m] returns this close are the rover itself (Yutu's mast lidar: 1.0)
     obstacle_memory_s: 20.0         # [s] an obstacle not seen again is forgotten after this
     obstacle_replan_lookahead_m: 5.0  # [m] of route checked for newly blocked cells
     obstacle_clearance_m: 1.5       # [m] routes are planned this far from obstacle cells (dropped if no route keeps it)

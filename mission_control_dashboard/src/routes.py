@@ -20,6 +20,16 @@ def hub():
     return render_template('hub.html')
 
 
+@app_hub.route('/rover', methods=['GET', 'POST'])
+def hub_rover():
+    """The menu's ROVER selector: GET the status (rovers.status), POST {rover} to switch the stack."""
+    if web.node is None:
+        return jsonify({'error': 'dashboard node not running'}), 503
+    if request.method == 'POST':
+        web.node.select_rover(str((request.get_json(silent=True) or {}).get('rover', '')))
+    return jsonify(web.node.rover_status())
+
+
 # =========================================================================
 # Flask routing — teleop (5002)
 # =========================================================================
@@ -262,7 +272,7 @@ def handle_viewport_camera(json_data):
 def viewport_camera_poll():
     """Unreal's rover_cameras.py polls this: what to show, and (?applied=) what it shows."""
     before = VIEWPORT.status()
-    answer = VIEWPORT.poll(request.args.get('applied'))
+    answer = VIEWPORT.poll(request.args.get('applied'), rover=request.args.get('rover'))
     if VIEWPORT.status() != before:
         web.emit_all('viewport_camera', VIEWPORT.status())
     return jsonify(answer)
@@ -308,6 +318,7 @@ def _send_cached(server, sid):
     server.emit('mission', web.node._mission, to=sid)
     server.emit('avoidance', {'on': web.node._avoidance}, to=sid)
     server.emit('viewport_camera', VIEWPORT.status(), to=sid)
+    server.emit('rover', web.node.rover_status(), to=sid)
     if web.node._light_level is not None:
         server.emit('light_level', {'level': web.node._light_level}, to=sid)
 

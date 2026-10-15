@@ -55,12 +55,45 @@
   .themes .sw:last-of-type { margin-right: 5px; }
   #fonts button { min-width: 34px; justify-content: center; }
   footer .clock { color: var(--cyan); }
+
+  /* Active rover: a status bar as wide as the card grid (a setting of the whole
+     stack, not a window): the switch, what the rover is, and what Unreal plays. */
+  .rover {
+    width: 100%; max-width: 1064px; display: flex; align-items: center; gap: 22px; flex-wrap: wrap;
+    background: linear-gradient(180deg, var(--panel2), var(--panel));
+    border: 1px solid var(--line); border-radius: 8px; padding: 14px 20px; margin-bottom: -12px;
+  }
+  .rover .lbl { font-size: calc(10px * var(--fs, 1)); letter-spacing: 3px; color: var(--dim); white-space: nowrap; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+  .seg button { cursor: pointer; font-family: var(--mono); font-size: calc(12px * var(--fs, 1)); letter-spacing: 2px;
+                color: var(--dim); background: transparent; border: 0; padding: 7px 16px; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button:hover:not(:disabled) { color: var(--text); background: rgba(127,127,127,.08); }
+  .seg button.on { color: var(--bg); background: var(--accent); cursor: default; }
+  .seg button:disabled:not(.on) { cursor: default; opacity: .5; }
+  #rover-summary { flex: 1 1 260px; font-size: calc(11px * var(--fs, 1)); color: var(--dim); line-height: 1.5; }
+  #rover-unreal { display: flex; align-items: center; gap: 8px; white-space: nowrap;
+                  font-size: calc(11px * var(--fs, 1)); letter-spacing: 1px; color: var(--dim); }
+  #rover-unreal .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+  #rover-unreal.ok { color: var(--accent); }
+  #rover-unreal.ok .dot { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  #rover-unreal.bad { color: var(--amber); }
+  #rover-unreal.bad .dot { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+  #rover-unreal.busy .dot { background: var(--cyan); animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
 </style>
 </head>
 <body>
   <header class="hero">
     <div class="brand">GNC&nbsp;MOON&nbsp;SIMULATOR<small>MISSION CONTROL</small></div>
   </header>
+
+  <section class="rover" title="The rover the stack drives: wheel calibration, planner footprint and limits, frames (URDF), dashboard values. Switching restarts the planner and local mapping; GNC_ROVER in .env decides at start">
+    <span class="lbl">ACTIVE ROVER</span>
+    <div class="seg" id="rovers"></div>
+    <div id="rover-summary"></div>
+    <div id="rover-unreal"><span class="dot"></span><span id="rover-unreal-text">UNREAL —</span></div>
+  </section>
 
   <div class="cards">
     <a class="card" id="link-overview">
@@ -179,6 +212,55 @@
     const now = GNCTheme.current() + '/' + GNCTheme.currentFont();
     if (now !== shown) { shown = now; renderThemes(); renderFonts(); }
   }, 1000);
+
+  // ROVER selector (rovers.py): switches the stack live; Unreal's rover from its camera link.
+  const roversEl = document.getElementById('rovers'), unrealEl = document.getElementById('rover-unreal');
+  const unrealText = document.getElementById('rover-unreal-text'), summaryEl = document.getElementById('rover-summary');
+  let rover = null;
+  function showRover(r) {
+    rover = r;
+    if (roversEl.children.length !== r.rovers.length) {
+      roversEl.innerHTML = '';
+      for (const o of r.rovers) {
+        const b = document.createElement('button');
+        b.dataset.key = o.key;
+        b.textContent = o.label.toUpperCase();
+        b.title = `Unreal level ${o.level}`;
+        b.onclick = () => selectRover(o);
+        roversEl.appendChild(b);
+      }
+    }
+    for (const b of roversEl.children) {
+      b.classList.toggle('on', b.dataset.key === r.active);
+      b.disabled = r.busy || b.dataset.key === r.active;
+    }
+    const active = r.rovers.find(o => o.key === r.active);
+    summaryEl.textContent = active ? active.summary : "";
+    summaryEl.title = active ? `Unreal level ${active.level}` : "";
+    let cls = '', text, tip = '';
+    if (r.busy) { cls = 'busy'; text = 'SWITCHING…'; tip = 'The planner and local mapping restart'; }
+    else if (!r.unreal_linked) text = 'UNREAL NOT LINKED';
+    else if (!r.unreal) text = 'UNREAL NOT PLAYING';
+    else if (r.match) { cls = 'ok'; text = `UNREAL PLAYS ${r.unreal_label.toUpperCase()}`; }
+    else {
+      cls = 'bad'; text = `UNREAL PLAYS ${r.unreal_label.toUpperCase()}`;
+      tip = `Open ${r.level} in Unreal for ${r.label}, or select ${r.unreal_label} here`;
+    }
+    unrealEl.className = cls; unrealText.textContent = text; unrealEl.title = tip;
+  }
+  function selectRover(o) {
+    if (!rover || rover.busy || o.key === rover.active) return;
+    if (!confirm(`Switch the stack to ${o.label}? The rover stops, and the planner and local mapping restart (a goal in progress is dropped).`)) return;
+    fetch('/rover', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ rover: o.key }) })
+      .then(r => r.json()).then(showRover).catch(() => {});
+  }
+  function pollRover() {
+    fetch('/rover').then(r => r.ok ? r.json() : null).then(r => { if (r) showRover(r); })
+      .catch(() => { unrealEl.className = ''; unrealText.textContent = 'DASHBOARD NODE NOT REACHABLE'; });
+  }
+  pollRover();
+  setInterval(pollRover, 1000);
 
   const clk = document.getElementById('clock');
   setInterval(() => { clk.textContent = new Date().toISOString().substr(11, 8); }, 1000);
