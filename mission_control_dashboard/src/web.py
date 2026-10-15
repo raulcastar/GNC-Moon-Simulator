@@ -3,6 +3,7 @@ helpers that fan events out to them, and the static files they share."""
 
 import json
 import os
+import time
 from datetime import datetime
 
 from ament_index_python.packages import get_package_share_directory
@@ -91,9 +92,20 @@ def feed_viewers(teleop=True) -> bool:
     return any(_clients(s) for s in servers)
 
 
+_api_watch_until = 0.0          # the JSON API wants the raw feeds until then (api.py)
+
+
+def api_watch(seconds: float) -> None:
+    """Keeps the raw image feeds subscribed for `seconds` (an API camera request)."""
+    global _api_watch_until
+    _api_watch_until = max(_api_watch_until, time.monotonic() + seconds)
+    if node is not None:
+        node._sync_viewer_subscriptions()
+
+
 def feed_watchers() -> bool:
-    """A window that shows the feeds or their rates (the System window) is open."""
-    return feed_viewers() or _clients(sio_sys) > 0
+    """A window that shows the feeds or their rates (the System window) is open, or the API asked for them."""
+    return feed_viewers() or _clients(sio_sys) > 0 or time.monotonic() < _api_watch_until
 
 
 def emit_feeds(event, data, teleop=True):

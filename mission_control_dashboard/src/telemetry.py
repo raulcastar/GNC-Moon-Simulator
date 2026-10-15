@@ -176,9 +176,11 @@ class TelemetryMixin:
         # appears in the raw ROS log, just not on any dashboard.
         if 'received depth' in msg.msg and 'matched' in msg.msg:
             return
-        emit_all('log', {
+        entry = {
             'level': LOG_LEVELS.get(msg.level, str(msg.level)),
             'node': msg.name,
             'text': msg.msg,
             'stamp': msg.stamp.sec + msg.stamp.nanosec * 1e-9,
-        })
+        }
+        self._log_lines.append(entry)           # for the JSON API (/api/log)
+        emit_all('log', entry)

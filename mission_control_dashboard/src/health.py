@@ -159,8 +159,9 @@ class HealthMixin:
             recent = sum(1 for t in times if now - t <= HEALTH_WINDOW)
             feeds[name] = {'hz': round(recent / HEALTH_WINDOW, 1),
                            'age': round(now - times[-1], 1) if times else None}
+        self._last_alerts = self._alerts(feeds)       # also for the JSON API (/api/status)
         payload = {'feeds': feeds, 'nodes': dict(self._node_states), 'bag': self._bag_status(),
-                   'alerts': self._alerts(feeds)}
+                   'alerts': self._last_alerts}
         for server in (socketio, sio_cams, sio_teleop, sio_map, sio_sys, sio_replay):
             server.emit('health', payload)
 

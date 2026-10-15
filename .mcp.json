@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "gnc": {
+      "command": "py",
+      "args": ["mcp/gnc_mcp.py"],
+      "env": {"GNC_DASHBOARD_URL": "http://localhost:5001"}
+    }
+  }
+}

@@ -1,0 +1,4 @@
+# The MCP server (gnc_mcp.py) runs on the host, not in a container:
+#     py -m pip install -r mcp/requirements.txt
+mcp==2.3.0
+pytest==9.1.1     # for mcp/test_gnc_mcp.py

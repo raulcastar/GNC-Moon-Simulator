@@ -574,6 +574,30 @@ button cycles follow → orbit → top in every Play session. From the editor's
 Python console: `rc.orbit(radius=6, height=2.5, period=45)`, `rc.top(height=15)`,
 `rc.follow()` (`import rover_cameras as rc`).
 
+## AI agents (MCP)
+
+`mcp/gnc_mcp.py` is an MCP server that lets an AI agent (Claude Code, Claude
+Desktop or any MCP client) use the running simulator:
+
+- **Read:** status, log, camera images, the rover.
+- **Drive:** goals (and waiting for them), timed manual drives, stop.
+- **Settings and maintenance:** headlights, obstacle avoidance, viewport
+  camera, rover switch, node restarts, rosbag recording.
+
+It wraps the dashboard's JSON API (`mission_control_dashboard/src/api.py`,
+`http://localhost:5001/api/...`), which scripts can also call directly:
+
+```bash
+py -m pip install -r mcp/requirements.txt         # once, on the host
+claude mcp add gnc -- py "<repo>/mcp/gnc_mcp.py"  # or use the repo's .mcp.json
+curl localhost:5001/api/status                    # the API without MCP
+```
+
+Commands that move the rover are refused while Unreal is not in Play. Manual
+drives are clamped to the teleop limits and always end stopped. Terrain Studio
+has its own server for building terrain and starting or stopping Play.
+`AGENTS.md` has guidance for coding agents working in this repo.
+
 ## Tests
 
 Unit tests run inside each package's container, on the mounted source (start the
@@ -592,38 +616,41 @@ Checks that need the simulation running (Unreal in Play) are in
 `tools/scenarios/` (see its README): a traverse to a goal with a drive log,
 lidar against the stereo DEM, and lidar against Unreal's ground-truth depth.
 
-`send_movement_command.sh` collects one-line `ros2 topic pub` examples (drive,
-headlights, goal).
+To command the rover by hand, use the dashboard, its JSON API or the MCP tools
+(see [AI agents (MCP)](#ai-agents-mcp)). Or publish directly from a container
+(`docker compose exec debug_cli bash`):
+
+```bash
+ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped "{header: {frame_id: 'map'}, pose: {position: {x: 300.0, y: 350.0}}}"
+ros2 topic pub --once /headlights_intensity std_msgs/msg/Float32 "{data: 0.3}"
+```
+
+A single `/cmd_vel` message keeps the rover driving: the rover node holds the
+last command. Send a zero twist to stop it, or use the dashboard.
 
 ## ⚙️ WSL2 System Configuration (`.wslconfig`)
 
-A reference copy lives at the repo root as [`.wslconfig`](.wslconfig). Copy it to
-your Windows profile:
-
-    C:\Users\<YourUsername>\.wslconfig
-
-(replace `<YourUsername>` with your Windows login), then run `wsl --shutdown` for
-it to take effect.
+WSL reads its settings only from your Windows profile, `%UserProfile%\.wslconfig`.
+Put this there (or merge it into an existing one), then run `wsl --shutdown` for
+it to take effect:
 
 ```ini
 [wsl2]
-# Merges the WSL network with the Windows network
+# Required. Windows and WSL share one network, so Unreal on Windows reaches
+# the containers on 127.0.0.1 (and the browser reaches the dashboard).
 networkingMode=mirrored
 
-# Ensures localhost ports are shared between Windows and WSL
-localhostForwarding=true
-
-# (Optional) Forces WSL to use the exact same DNS as Windows
-dnsTunneling=true
-
-# Resource caps. Every component container runs `colcon build` on startup, so a
-# full `docker compose up` triggers ~10 simultaneous builds; an unbounded WSL VM
-# can grab all host RAM/CPU and destabilise it (a contributor to VM reboot
-# loops). Leave a few GB and cores for Windows; tune to your machine.
+# Resource caps. Every component container runs `colcon build` on its first
+# start, so a full `docker compose up` runs ~10 builds at once; an unbounded
+# WSL VM can take all the host's RAM and CPU and destabilise it. Leave enough
+# for Windows and Unreal (these suit a 32 GB, 22-thread machine).
 memory=10GB
 processors=6
 swap=4GB
 ```
+
+`localhostForwarding` is not needed: mirrored networking ignores it. DNS
+tunnelling is on by default in current WSL.
 
 ### ⚠️ Keep a WSL terminal open while running
 
@@ -635,7 +662,7 @@ it, restarts docker and re-runs every container.
 
 **Keep an interactive WSL session open the whole time the stack is running:**
 
-    wsl -d Ubuntu-24.04
+    wsl -d <distro>      # the distribution Docker runs in (wsl -l -v lists them)
 
 Leave that window open in the background. As long as it is, the distro (and so
 docker + all containers) stays alive and the dashboard stays up. If drops

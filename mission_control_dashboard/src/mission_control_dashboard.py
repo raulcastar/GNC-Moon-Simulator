@@ -56,6 +56,7 @@ from .topics import TopicsMixin
 from .web import (app, app_cams, app_hub, app_map, app_replay, app_sys, app_teleop, sio_cams, sio_hub,
                   sio_map, sio_replay, sio_sys, sio_teleop, socketio)
 from . import routes  # noqa: F401  (registers the page / socket handlers)
+from . import api  # noqa: F401  (registers the JSON API, /api/ on 5001)
 
 
 class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, TopicsMixin,
@@ -89,7 +90,9 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
         self._inspect_lock = threading.Lock()
         self._inspect_timer = None
         self._init_replay()
-        self._init_rover()              # the active rover (GNC_ROVER; the overview's ROVER selector)
+        self._init_rover()              # the active rover (GNC_ROVER; the menu's ROVER selector)
+        self._log_lines = collections.deque(maxlen=500)   # recent /rosout lines, for the JSON API
+        self._last_alerts = []          # the health tick's alerts, for the JSON API
 
         # Latest data, for the snapshot export and for browsers that join late.
         self._last_jpeg = {}            # feed id -> JPEG bytes (as last sent)
