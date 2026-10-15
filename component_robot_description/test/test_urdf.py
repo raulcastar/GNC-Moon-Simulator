@@ -1,7 +1,7 @@
 """
-The exported URDF (urdf/leo_raph.urdf): every frame the nodes stamp with is in
-it, and the geometry they rely on holds (stereo baseline, optical frames,
-lidar mount, ground under base_link).
+The exported URDFs (urdf/leo_raph.urdf, urdf/yutu.urdf): every frame the nodes
+stamp with is in each, and the geometry they rely on holds (stereo baseline,
+optical frames, lidar mount, ground under base_link).
 """
 import math
 import os
@@ -10,7 +10,8 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import pytest
 
-URDF = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'urdf', 'leo_raph.urdf')
+URDF_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'urdf')
+ROVERS = ['leo_raph', 'yutu']
 
 # frame_id of each publisher (component configs and the stereo node's naming)
 FRAMES = ['base_link', 'base_footprint', 'navcam_left', 'navcam_central', 'navcam_right',
@@ -24,11 +25,16 @@ def rotation(roll, pitch, yaw):
                      [-sp, cp * sr, cp * cr]])
 
 
+@pytest.fixture(scope='module', params=ROVERS)
+def urdf(request):
+    return os.path.join(URDF_DIR, f'{request.param}.urdf')
+
+
 @pytest.fixture(scope='module')
-def poses():
+def poses(urdf):
     """Every link's pose in base_link: {name: (R 3x3, t 3)}."""
     joints = {}
-    for j in ET.parse(URDF).getroot().iter('joint'):
+    for j in ET.parse(urdf).getroot().iter('joint'):
         o = j.find('origin')
         xyz = [float(v) for v in o.get('xyz', '0 0 0').split()]
         rpy = [float(v) for v in o.get('rpy', '0 0 0').split()]
@@ -77,9 +83,9 @@ def test_lidar_rides_on_the_central_navcam(poses):
     np.testing.assert_allclose(poses['lidar'][0], poses['navcam_central_link'][0], atol=1e-4)
 
 
-def test_ground_is_a_wheel_radius_below_the_wheels(poses):
+def test_ground_is_a_wheel_radius_below_the_wheels(poses, urdf):
     ground = poses['base_footprint'][1][2]
-    wheels = [poses[w][1][2] for w in ('wheel_fl_link', 'wheel_fr_link', 'wheel_rl_link', 'wheel_rr_link')]
-    radius = float(ET.parse(URDF).getroot().find(".//link[@name='wheel_fl_link']//cylinder").get('radius'))
+    wheels = [poses[w][1][2] for w in poses if w.startswith('wheel_')]
+    radius = float(ET.parse(urdf).getroot().find(".//link[@name='wheel_fl_link']//cylinder").get('radius'))
     assert ground == pytest.approx(np.mean(wheels) - radius, abs=1e-3)
     assert 0.0 < -ground < 0.35                          # base_link above the ground, below the body top

@@ -1,0 +1,11 @@
+# Overrides for the Yutu rover (GNC_ROVER=yutu, Unreal level Lunar_Terrain_Yutu), loaded
+# after params.yaml. Yutu: 6 wheels of 0.34 m (Leo_Raph: 4 of 0.18 m), 0.94 m track.
+lc_component_rover_leo_raph:
+  ros__parameters:
+    # m/s -> wheel input: the wheels are ~1.9x Leo_Raph's, so ~1.9x fewer units per m/s.
+    # Measured with Leo_Raph's 1.82: 0.2 m/s commanded -> 0.379 m/s driven, so 1.82 * 0.2 / 0.379.
+    wheel_speed_scale:                  0.96
+    # Centimetres, effective skid-steer track (physical: 94). Six wheels scrub harder than
+    # four, so it is ~3.5x the physical track (Leo_Raph: ~2.3x). Calibrated on level ground:
+    # with 308, 0.3 rad/s commanded -> 0.28 rad/s turned, so 308 * 0.3 / 0.28.
+    rover_width:                       330.0

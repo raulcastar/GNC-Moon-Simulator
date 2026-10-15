@@ -769,7 +769,8 @@ const odomCanvas = $('odomCanvas'), odomCtx = odomCanvas.getContext('2d');
 const mapStack = $('map-stack');           /* invisible: the map's placement (zoom + pan) */
 const cbCanvas = $('cbarCanvas'),   cbCtx   = cbCanvas.getContext('2d');
 let mapRes = 1, mapW = 0, mapH = 0;
-const ROVER_WIDTH_M = 0.96;        /* rover_width in the rover's params.yaml */
+let ROVER_WIDTH_M = 0.96;          /* the dashboard's rover_width_m (config), per rover */
+socket.on('config', c => { if (c && c.rover_width_m) ROVER_WIDTH_M = c.rover_width_m; });
 const MAX_ZOOM = 150;
 let currentPose = null, globalPath = [], drivenPath = [];
 let firstPath = [], replans = 0;      /* the route first planned for this goal, and re-plans since */

@@ -42,7 +42,7 @@ import urllib.request
 
 import unreal
 
-ROVER_PREFIX = "Leo_Raph"          # the rover Blueprint's class name
+ROVER_PREFIXES = ("Leo_Raph", "Yutu_Rover")   # the rover Blueprints' class names
 TARGET_COMPONENT = "base_link"     # what the camera looks at (+ LOOK_UP_CM)
 LOOK_UP_CM = 45.0
 FOLLOW_SMOOTHING = 3.0             # 1/s: how fast the orbit centre catches up with the rover
@@ -99,7 +99,7 @@ def install():
 
 def _rover(world):
     pawns = unreal.GameplayStatics.get_all_actors_of_class(world, unreal.Pawn)
-    rovers = [p for p in pawns if p.get_class().get_name().startswith(ROVER_PREFIX)]
+    rovers = [p for p in pawns if p.get_class().get_name().startswith(ROVER_PREFIXES)]
     return rovers[0] if rovers else None
 
 

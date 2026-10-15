@@ -68,6 +68,9 @@ services:
 
   component_rover_leo_raph:
     <<: *ros-node
+    environment:
+      <<: *ros-env
+      GNC_ROVER: ${GNC_ROVER:-leo_raph}   # which rover (.env)
     build: ./component_rover_leo_raph
     image: gnc_moon_simulator/component_rover_leo_raph:dev
     volumes:
@@ -81,6 +84,7 @@ services:
     image: gnc_moon_simulator/component_path_planner:dev
     environment:
       <<: [*ros-env, *display-env]
+      GNC_ROVER: ${GNC_ROVER:-leo_raph}   # which rover (.env)
     volumes:
       - ./component_path_planner:/opt/ros/jazzy/src/component_path_planner
       - ./custom_map_interfaces:/opt/ros/jazzy/src/custom_map_interfaces
@@ -112,6 +116,9 @@ services:
   # TF by robot_state_publisher. odom -> base_link comes from the rover node.
   component_robot_description:
     <<: *ros-node
+    environment:
+      <<: *ros-env
+      GNC_ROVER: ${GNC_ROVER:-leo_raph}   # which rover (.env)
     build: ./component_robot_description
     image: gnc_moon_simulator/component_robot_description:dev
     volumes:
@@ -148,6 +155,9 @@ services:
   # Web mission control on http://localhost:5000 — starts automatically.
   mission_control_dashboard:
     <<: *ros-node
+    environment:
+      <<: *ros-env
+      GNC_ROVER: ${GNC_ROVER:-leo_raph}   # which rover (.env)
     build: ./mission_control_dashboard
     image: gnc_moon_simulator/mission_control_dashboard:dev
     volumes:

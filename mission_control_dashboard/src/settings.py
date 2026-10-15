@@ -66,7 +66,7 @@ FEED_NAMES = {
 TIMELINE_MAX = 400            # mission events kept for the overview's timeline
 DEM_LIDAR_MAX_POINTS = 4000   # lidar points overlaid on the local DEM
 OBSTACLE_MAX_POINTS = 800     # local obstacle cells drawn on the global map
-LIDAR_SELF_RADIUS = 0.6       # m; lidar returns closer than this hit the rover
+LIDAR_SELF_RADIUS = 0.6       # m; default of lidar_self_radius_m: lidar returns closer than this hit the rover
 
 # Lifecycle nodes shown in the SYSTEM panel (state + restart).
 LIFECYCLE_NODES = (

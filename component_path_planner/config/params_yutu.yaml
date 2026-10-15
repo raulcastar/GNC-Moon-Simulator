@@ -1,0 +1,14 @@
+# Overrides for the Yutu rover (GNC_ROVER=yutu), loaded after params.yaml.
+lc_component_path_planner:
+  ros__parameters:
+    # Footprint: wheels (1.2 m wheelbase + 0.34 m wheels, 0.94 m track + wheel width).
+    # The solar wings (1.9 m across, 0.75 m up) clear rocks lower than the obstacle height.
+    robot_width: 1.15             # [m]
+    robot_length: 1.55            # [m]
+    robot_radius: 0.8             # [m] goal tolerance and the obstacle cells kept clear around it
+    # The lidar sits on the mast (1.13 m up) and sees the wings and the arm close by.
+    lidar_self_radius_m: 1.0      # [m]
+    # Spot turns rock Yutu's rigid six-wheel chassis much more than Leo_Raph (pitch/roll
+    # swing ~2-4 deg at 0.1 rad/s, 5-8 at 0.15, 8-10 at 0.2, 18-24 at 0.3): 8 deg/s keeps it
+    # near 5 deg. A rocker-bogie suspension would allow faster turns.
+    max_yaw_rate_deg: 8.0

@@ -156,6 +156,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 ('lidar_frame', 'lidar'),
                 ('obstacle_min_height_m', 0.15),
                 ('obstacle_max_range_m', 6.0),
+                ('lidar_self_radius_m', 0.45),
                 ('obstacle_memory_s', 20.0),
                 ('obstacle_replan_lookahead_m', 5.0),
                 ('obstacle_clearance_m', 1.5),
@@ -223,7 +224,8 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
         settings = lidar_obstacles.DetectionSettings(
             pitch_deg=self._param('lidar_pitch_deg'), x_offset_m=self._param('lidar_x_offset_m'),
             min_height_m=self._param('obstacle_min_height_m'),
-            max_range_m=self._param('obstacle_max_range_m'))
+            max_range_m=self._param('obstacle_max_range_m'),
+            self_radius_m=self._param('lidar_self_radius_m'))
         found = lidar_obstacles.detect(np.asarray(points, dtype=float).reshape(-1, 3), settings)
 
         x, y, yaw = self._pose

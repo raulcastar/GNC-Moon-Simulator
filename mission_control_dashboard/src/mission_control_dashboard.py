@@ -48,7 +48,7 @@ from .imagery import ImageryMixin
 from .mapping import MappingMixin
 from .recording import RecordingMixin
 from .replay import ReplayMixin
-from .settings import (CAM_PRODUCT_MIN_PERIOD, DEFAULT_BAG_PRESET, HEALTH_PERIOD, INSPECT_PERIOD,
+from .settings import (CAM_PRODUCT_MIN_PERIOD, LIDAR_SELF_RADIUS, DEFAULT_BAG_PRESET, HEALTH_PERIOD, INSPECT_PERIOD,
                        LIFECYCLE_NODES, PLANNER_NODE, REMOTE_PARAMS, TIMELINE_MAX)
 from .telemetry import TelemetryMixin
 from .topics import TopicsMixin
@@ -118,7 +118,7 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
         self._overlay_shown = False     # a non-empty path overlay is on screen
         self._mask_legend = {}          # stencil id -> class name
         self._mask_classes = []         # [{id, name, group, rgb}] (object_mask_classes)
-        self._remote = {k: None for k in REMOTE_PARAMS}
+        self._remote = {k: None for k in REMOTE_PARAMS}   # + rover_width_m (own parameter, set at configure)
         self._node_states = {n: 'unknown' for n in LIFECYCLE_NODES}
         self._cli_get_state, self._cli_change_state, self._cli_params = {}, {}, {}
         self._pending = set()           # outstanding async service calls
@@ -153,6 +153,9 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
         # ground. Defaults: following the central navcam (pitched 20 deg down).
         self.declare_parameter('lidar_yaw_deg', 0.0)
         self.declare_parameter('lidar_pitch_deg', -20.0)
+        # Lidar returns this close hit the rover itself; the rover's width draws its map icon.
+        self.declare_parameter('lidar_self_radius_m', LIDAR_SELF_RADIUS)
+        self.declare_parameter('rover_width_m', 0.96)
         self.declare_parameter('lidar_height_m', 0.55)  # Navcam_Center above the ground (ground-plane fit while driving)
         self.declare_parameter('bag_directory', '/opt/ros/jazzy/src/mission_control_dashboard/bags')
         self.map_resolution = self.get_parameter('global_res').value
@@ -160,6 +163,8 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
     def on_configure(self, state: State) -> TransitionCallbackReturn:
         self.get_logger().info("Lifecycle: configuring mission control interfaces.")
         ns = self.get_parameter('camera_namespace').value
+        # Sent to the browsers with the remote parameters (config): the map's rover icon.
+        self._remote['rover_width_m'] = self.get_parameter('rover_width_m').value
 
         self._pub_goal = self.create_lifecycle_publisher(PoseStamped, 'goal_pose', 10)
         self._pub_lights = self.create_lifecycle_publisher(Bool, 'headlights_cmd', 10)

@@ -11,17 +11,21 @@ from launch import LaunchDescription
 from launch.actions import SetEnvironmentVariable
 from ament_index_python.packages import get_package_share_directory
 
+def rover_parameters(package):
+    """params.yaml, then params_<GNC_ROVER>.yaml (the rover's overrides) when it exists."""
+    share = get_package_share_directory(package)
+    files = [os.path.join(share, 'config', 'params.yaml')]
+    override = os.path.join(share, 'config', f"params_{os.environ.get('GNC_ROVER', 'leo_raph')}.yaml")
+    if os.path.exists(override):
+        files.append(override)
+    return files
+
 def generate_launch_description():
 
-    yaml_config = os.path.join(
-        get_package_share_directory('component_path_planner'),
-        'config',
-        'params.yaml'
-    )
 
     path_planner_node = launch_ros.actions.LifecycleNode(package='component_path_planner', 
         executable='lc_component_path_planner', name='lc_component_path_planner', namespace='', output='screen', emulate_tty=True, respawn=True,
-        arguments=['--ros-args', '--log-level', "info"], parameters = [yaml_config])
+        arguments=['--ros-args', '--log-level', "info"], parameters = rover_parameters('component_path_planner'))
     
     # Make the path planner node take the 'configure' transition
     path_planner_node_configure_event = launch.actions.EmitEvent(

@@ -1,6 +1,6 @@
 """
 The rover's frames: robot_state_publisher publishes every fixed joint of
-urdf/leo_raph.urdf (exported from the Unreal Blueprint) on /tf_static.
+urdf/<GNC_ROVER>.urdf (exported from the Unreal Blueprint; leo_raph or yutu) on /tf_static.
 odom -> base_link comes from component_rover_leo_raph.
 """
 import os
@@ -12,7 +12,8 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    urdf = os.path.join(get_package_share_directory('component_robot_description'), 'urdf', 'leo_raph.urdf')
+    rover = os.environ.get('GNC_ROVER', 'leo_raph')
+    urdf = os.path.join(get_package_share_directory('component_robot_description'), 'urdf', f'{rover}.urdf')
     with open(urdf) as handle:
         description = handle.read()
 

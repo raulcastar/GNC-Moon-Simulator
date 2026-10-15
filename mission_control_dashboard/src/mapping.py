@@ -12,7 +12,7 @@ from sensor_msgs.msg import PointCloud2
 from std_msgs.msg import Float32MultiArray
 
 from .geometry import cloud_xyz, ground_plane, level_points
-from .settings import DEM_LIDAR_MAX_POINTS, DEM_MAX_CELLS, GRID_MIN_PERIOD, LIDAR_MIN_PERIOD, LIDAR_SELF_RADIUS, MAX_LIDAR_POINTS, OBSTACLE_MAX_POINTS
+from .settings import DEM_LIDAR_MAX_POINTS, DEM_MAX_CELLS, GRID_MIN_PERIOD, LIDAR_MIN_PERIOD, MAX_LIDAR_POINTS, OBSTACLE_MAX_POINTS
 from .web import emit_map, socketio
 
 
@@ -64,7 +64,7 @@ class MappingMixin:
         x, y = -lev[:, 1], lev[:, 0]
         z = lev[:, 2] + self.get_parameter('lidar_height_m').value
         keep = ((y >= 0) & (y <= h * res) & (np.abs(x) <= w * res / 2)
-                & (np.hypot(lev[:, 0], lev[:, 1]) > LIDAR_SELF_RADIUS))
+                & (np.hypot(lev[:, 0], lev[:, 1]) > self.get_parameter('lidar_self_radius_m').value))
         pts = np.column_stack((x[keep], y[keep], z[keep]))
         if len(pts) > DEM_LIDAR_MAX_POINTS:
             pts = pts[::len(pts) // DEM_LIDAR_MAX_POINTS + 1]

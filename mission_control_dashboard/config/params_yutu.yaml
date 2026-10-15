@@ -1,0 +1,7 @@
+# Overrides for the Yutu rover (GNC_ROVER=yutu). The dashboard has no params.yaml: its
+# defaults are in the node (Leo_Raph).
+mission_control_dashboard:
+  ros__parameters:
+    lidar_height_m: 1.13          # the mast's navcam, which the lidar follows
+    lidar_self_radius_m: 1.0      # lidar returns this close hit the rover (wings, arm)
+    rover_width_m: 1.11           # the map's rover icon
