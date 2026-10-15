@@ -3,7 +3,7 @@ The LIDR scan stream from the UnrealLidarCam plugin, parsed by LidarCamReceiver,
 and its conversion to PointCloud2.
 
 Packets are assembled byte by byte at the offsets documented in
-unreal/UnrealLidarCam/Source/UnrealLidarCam/Public/UnrealLidarCam.h, so a
+the Unreal project's Plugins/UnrealLidarCam/Source/UnrealLidarCam/Public/UnrealLidarCam.h, so a
 change to the wire format on either side fails here:
 
     offset size  field

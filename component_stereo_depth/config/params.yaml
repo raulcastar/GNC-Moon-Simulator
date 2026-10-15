@@ -14,7 +14,7 @@ lc_component_stereo_depth:
     image_reading_hz_rate:                10.0
 
     # ── Frame stream ──────────────────────────────────────────────────────────
-    # Frames are pushed by the UnrealStereoCam plugin (unreal/UnrealStereoCam/)
+    # Frames are pushed by the UnrealStereoCam plugin (the Unreal project's Plugins/UnrealStereoCam/)
     # to this TCP server: captures render with the game frame and reach this node
     # with no game-thread stall. Left/right are paired by Unreal's frame counter,
     # so both eyes always come from the same world tick.

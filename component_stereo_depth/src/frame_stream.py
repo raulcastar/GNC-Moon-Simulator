@@ -18,7 +18,7 @@ import numpy as np
 
 class FrameStreamReceiver:
     """
-    TCP server for the UnrealStereoCam plugin (unreal/UnrealStereoCam/).
+    TCP server for the UnrealStereoCam plugin (the Unreal project's Plugins/UnrealStereoCam/).
 
     Unreal renders the navcams with each frame and pushes them here over one
     connection, so nothing is rendered on demand and the game thread never

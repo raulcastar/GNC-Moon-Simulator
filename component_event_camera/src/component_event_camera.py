@@ -2,13 +2,13 @@
 ROS 2 Lifecycle Node for the simulated event (DVS) camera.
 
 Receives the event stream pushed by the UnrealEventCam plugin
-(unreal/UnrealEventCam/) over TCP and turns it into something the rest of the
+(the Unreal project's Plugins/UnrealEventCam/) over TCP and turns it into something the rest of the
 stack can look at: a rolling **event-frame visualisation** (colour by polarity)
 on `event_camera/image_events`, plus the instantaneous event rate on
 `event_camera/event_rate`.
 
 The plugin sends one packet per rendered frame that produced events. Wire format
-(little-endian), matching unreal/UnrealEventCam/README.md:
+(little-endian), matching the Unreal project's Plugins/UnrealEventCam/README.md:
 
     header  'EVT0' | ver u8 | cam_id u8 | width u16 | height u16
             | t0_ns u64 | count u32 | pad u16                        (24 bytes)

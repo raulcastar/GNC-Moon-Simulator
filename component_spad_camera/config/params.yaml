@@ -5,7 +5,7 @@ lc_component_spad_camera:
     use_sim_time: true
 
     # ── Intensity stream ──────────────────────────────────────────────────────
-    # TCP server the UnrealSPADCam plugin (unreal/UnrealSPADCam/) connects to.
+    # TCP server the UnrealSPADCam plugin (the Unreal project's Plugins/UnrealSPADCam/) connects to.
     # Must match the plugin's ServerIp / ServerPort. Only 127.0.0.1 crosses into
     # WSL under mirrored networking, so bind 0.0.0.0 and let Unreal dial in.
     stream_bind_ip:                    0.0.0.0

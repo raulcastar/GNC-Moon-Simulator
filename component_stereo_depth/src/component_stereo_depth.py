@@ -36,7 +36,7 @@ Disparity has no separate visualisation: it is a monotonic function of depth, so
 it would just render image_depth/visualization inverted.
 
 Frames arrive over TCP from the UnrealStereoCam Unreal plugin
-(unreal/UnrealStereoCam/): each SceneCapture renders when a frame is sent and is
+(the Unreal project's Plugins/UnrealStereoCam/): each SceneCapture renders when a frame is sent and is
 pushed here, with no game-thread stall. Every capture enqueued in one Unreal
 tick carries the same frame id, which is what pairs the left/right eyes as one
 rigid stereo view.
@@ -119,7 +119,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self.declare_parameters(
             namespace='',
             parameters=[
-                # The UnrealStereoCam plugin (unreal/UnrealStereoCam/) pushes
+                # The UnrealStereoCam plugin (the Unreal project's Plugins/UnrealStereoCam/) pushes
                 # frames to this TCP server.
                 ('stream_bind_ip',          rclpy.Parameter.Type.STRING),
                 ('stream_port',             rclpy.Parameter.Type.INTEGER),

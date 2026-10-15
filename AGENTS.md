@@ -7,8 +7,8 @@ full documentation; this file covers what an agent needs to work safely.
 
 A ROS 2 Jazzy GNC stack for a simulated lunar rover. Each `component_*` package
 is a ROS node in its own Docker container (WSL2 on Windows, Zenoh middleware).
-Unreal Engine 5.7 runs the simulation on the Windows host. Its plugins
-(`unreal/Unreal*`) and the rover Blueprint dial the containers on `127.0.0.1`
+Unreal Engine 5.7 runs the simulation on the Windows host. Its sensor plugins
+(in the Unreal project's `Plugins/`) and the rover Blueprint dial the containers on `127.0.0.1`
 when Play starts. The terrain, rocks, masks and sun come from Terrain Studio,
 in the sibling repo `Unreal-Moon-Terrain-Generation`.
 
@@ -24,7 +24,7 @@ running editor with `unreal.Paths.project_dir()` (Terrain Studio's
 | `component_<name>/` | One ROS package each: `src/`, `config/params.yaml` (+ `params_<rover>.yaml`), `launch/`, `test/`, `Dockerfile` |
 | `mission_control_dashboard/` | Web mission control (Flask + SocketIO, ports 5000-5007) and the JSON API (`src/api.py`, `/api/` on 5001) |
 | `mcp/gnc_mcp.py` | MCP server for agents, a thin client of the JSON API |
-| `unreal/` | Unreal plugins (C++) and editor Python (`unreal/python/`, copied to the project's `Content/Python`) |
+| `unreal/python/` | Editor Python (viewport cameras), copied to the Unreal project's `Content/Python`. The sensor plugins (C++) live only in the Unreal project's `Plugins/` |
 | `tools/scenarios/` | Checks that need Unreal in Play |
 | `docker/`, `docker-compose.yml`, `.env` | Base image and entrypoint, services, `GNC_ROVER` (`leo_raph` or `yutu`) |
 

@@ -2,7 +2,7 @@
 ROS 2 Lifecycle Node for the simulated single-photon (SPAD) camera.
 
 Receives 8-bit intensity frames pushed by the UnrealSPADCam plugin
-(unreal/UnrealSPADCam/) over TCP, runs the spadSim photon model on each frame
+(the Unreal project's Plugins/UnrealSPADCam/) over TCP, runs the spadSim photon model on each frame
 (see spad_model.py — ported from spadSim, MIT, (c) 2025 David Rodriguez-Martinez),
 and publishes:
 
@@ -11,7 +11,7 @@ and publishes:
                   frames summed and scaled to grayscale, which is how a SPAD's
                   usable image is built up from sparse photon detections.
 
-Wire format from the plugin (little-endian), matching unreal/UnrealSPADCam:
+Wire format from the plugin (little-endian), matching the Unreal project's Plugins/UnrealSPADCam:
 
     header  'SPD0' | ver u8 | cam_id u8 | width u16 | height u16
             | t_ns u64 | payload u32 (= width*height) | pad u16    (24 bytes)

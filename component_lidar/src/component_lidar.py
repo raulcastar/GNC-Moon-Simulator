@@ -1,7 +1,7 @@
 """
 ROS 2 Lifecycle Node for the UnrealLidarCam lidar.
 
-Serves the UnrealLidarCam Unreal plugin (unreal/UnrealLidarCam/): a ray-traced
+Serves the UnrealLidarCam Unreal plugin (the Unreal project's Plugins/UnrealLidarCam/): a ray-traced
 lidar with a configurable horizontal / vertical aperture, mounted on a camera or
 anywhere on the rover, that streams whole scans over TCP (`port`, default 3007).
 
@@ -37,7 +37,7 @@ from sensor_msgs.msg import PointCloud2, PointField
 class LidarCamReceiver:
     """
     TCP server for the UnrealLidarCam plugin: one packet per scan, a 48-byte
-    header then point_count x 20-byte points (see unreal/UnrealLidarCam).
+    header then point_count x 20-byte points (see the Unreal project's Plugins/UnrealLidarCam).
     Calls `on_scan(header, payload)` for every complete scan. Re-accepts after
     each Play/Stop; runs on a daemon thread.
     """

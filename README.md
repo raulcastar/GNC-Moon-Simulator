@@ -74,9 +74,11 @@ for their optional matplotlib debug windows (`enable_path_visualization` and
 
 ## The simulator (Unreal)
 
-The Unreal project (`Moon_Simulator`, Unreal 5.7) holds the level, the rover
-Blueprint `Leo_Raph` and the sensor plugins in `unreal/`, copied into
-`<Project>/Plugins/` (each has a README with its setup):
+The Unreal project (`Moon_Simulator`, Unreal 5.7) is its own repository,
+[Unreal-Moon-Simulator](https://github.com/raulcastar/Unreal-Moon-Simulator).
+It holds the levels, the rover Blueprints (`Leo_Raph`, `Yutu_Rover`) and the
+sensor plugins in its `Plugins/`, each with a README for its setup. This
+repository has none of the plugins' code:
 
 | Plugin | Role |
 |---|---|
@@ -113,7 +115,7 @@ in nanoseconds since the Unix epoch, never running backwards across Play
 sessions. Every sensor plugin (stereo cameras, lidar, event and SPAD cameras)
 stamps its data with it at capture through its own copy of `GncSimTime.h`, so
 the plugins stay independent of each other. The **UnrealSimClock** plugin
-(`unreal/UnrealSimClock/`, no Blueprint setup: a world subsystem) streams that
+(the Unreal project's `Plugins/UnrealSimClock/`, no Blueprint setup: a world subsystem) streams that
 time to `component_sim_clock`, which publishes `/clock`. The rover Blueprint
 puts the same time in its telemetry (`t_ns`, from *Get Sim Time Ns String*), so
 odometry is stamped with the moment Unreal measured the pose.
@@ -410,8 +412,8 @@ overview's VIEWS), and the FULL PERCEPTION bag preset records them.
 
 ### How frames arrive
 
-The **UnrealStereoCam** plugin (`unreal/UnrealStereoCam/` — build
-instructions in its README) renders each navcam **with the game frame** on the
+The **UnrealStereoCam** plugin (the Unreal project's `Plugins/UnrealStereoCam/`,
+build instructions in its README) renders each navcam **with the game frame** on the
 render thread, reads it back asynchronously, and pushes it to the node over TCP
 port 3004 — no render-on-demand, no game-thread stall. `component_stereo_depth`
 runs a TCP server there and processes frames as they land.
@@ -565,8 +567,10 @@ that keeps the wheel tracks in frame), an **orbit** around the rover, or a
 **top-down** view above it. The orbit and top-down views move a level actor
 tagged `RoverOrbitCamera` every frame; they only read the rover.
 
-Install: copy `rover_cameras.py` and `rover_cameras_startup.py` to
-`<Project>/Content/Python/`, add `rover_cameras_startup.py` to *Project Settings
+Install: the Unreal project already has both scripts in its `Content/Python/`.
+This folder holds their source: after editing one here, copy it there (the two
+must stay the same). For a new project, copy `rover_cameras.py` and
+`rover_cameras_startup.py` to `<Project>/Content/Python/`, add `rover_cameras_startup.py` to *Project Settings
 → Python → Startup Scripts*, and run `rover_cameras.install()` once with Play
 stopped (it places the camera actor; save the level). The startup script polls
 the dashboard's `GET /viewport_camera` (port 5001), so the overview's 🎥 VIEW
@@ -671,9 +675,16 @@ shutdowns are a known WSL bug fixed in newer builds.
 
 ## License
 
-[MIT](LICENSE), © 2026 Raul Castilla Arquillo. Three parts are adapted from
-other MIT projects and keep their notices: the SPAD model (spadSim), the DWA
-local planner (PythonRobotics) and the event model (ESIM). The dashboard
-loads Socket.IO and three.js, and the images install ROS 2, Zenoh, OpenCV and
-other libraries under their own licences. See
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the full list.
+[MIT](LICENSE), © 2026 Raul Castilla Arquillo. Two parts are adapted from other
+MIT projects and carry their notices in the file:
+
+- `component_spad_camera/src/spad_model.py`, from
+  [spadSim](https://github.com/drodriguezSRL/spadSim) (© 2025 David
+  Rodriguez-Martinez);
+- `component_path_planner/src/local_planner.py`, the DWA, from
+  [PythonRobotics](https://github.com/AtsushiSakai/PythonRobotics) (© 2016 - now
+  Atsushi Sakai and other contributors).
+
+The sensor plugins, including the ESIM-based event camera, are in the
+[Unreal project](https://github.com/raulcastar/Unreal-Moon-Simulator), which
+lists its own third-party content.
