@@ -2,7 +2,10 @@
 Local planner: the velocity command that follows the route, by the Dynamic
 Window Approach (DWA). No ROS.
 
-Based on the PythonRobotics DWA sample by Atsushi Sakai and Goktug Karakasli.
+Based on the PythonRobotics DWA sample by Atsushi Sakai and Goktug Karakasli
+(https://github.com/AtsushiSakai/PythonRobotics, PathPlanning/DynamicWindowApproach),
+used under its MIT License: Copyright (c) 2016 - now Atsushi Sakai and other
+contributors. The full licence text is reproduced at the end of this module.
 
 Each control cycle, command():
  1. The local goal is the first route point lookahead_dist from the rover.
@@ -237,3 +240,29 @@ def approach_yaw_rate(w: float, dist_to_goal: float, braking_distance: float,
 def wrap_angle(a: float) -> float:
     """The angle in (-pi, pi]."""
     return math.atan2(math.sin(a), math.cos(a))
+
+
+# -----------------------------------------------------------------------------
+# PythonRobotics licence (the DWA sample this planner is based on)
+# -----------------------------------------------------------------------------
+# The MIT License (MIT)
+#
+# Copyright (c) 2016 - now Atsushi Sakai and other contributors
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
