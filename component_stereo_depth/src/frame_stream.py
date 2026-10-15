@@ -111,6 +111,19 @@ class FrameStreamReceiver:
             return None
         return img
 
+    def latest_with(self, cam_id: int, other_id: int):
+        """
+        (frame_id, image, stamp_ns, other_image) of the newest frame of cam_id
+        whose frame id other_id also has (a capture and its mask, rendered in
+        the same tick), or None while no such pair has arrived.
+        """
+        with self._lock:
+            others = {e[0]: e[1] for e in self._frames.get(other_id, ())}
+            for fid, img, _, stamp_ns in reversed(self._frames.get(cam_id, ())):
+                if fid in others:
+                    return fid, img, stamp_ns, others[fid]
+        return None
+
     def latest(self, cam_id: int):
         """(frame_id, image, stamp_ns) of the newest frame for cam_id, or None."""
         with self._lock:

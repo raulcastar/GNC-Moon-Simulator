@@ -39,13 +39,20 @@ lc_component_stereo_depth:
     # no mask (and set enable_object_mask: false).
     mask_camera_id:                          3
 
-    # Extra mono cameras streamed as they are, no stereo: "<cam_id>:<topic>[:<hfov_deg>]".
+    # Extra mono cameras streamed as they are, no stereo:
+    #   "<cam_id>:<topic>[:<hfov_deg>[:<mask_cam_id>]]"
     # Each needs a SceneCapture2D in Unreal streamed on that cam id — e.g. the
     # rover's RearCam, streamed by its own UnrealStereoCam component
-    # (RearCam_Stream: Center = RearCam, CenterCamId = 10, nothing else). Published
-    # on <topic>/image_color (+ /compressed, + /camera_info when hfov_deg is set).
+    # (RearCam_Stream: Center = RearCam, CenterCamId = 10). Published on
+    # <topic>/image_color (+ /compressed, + /camera_info when hfov_deg is set).
+    # With mask_cam_id, its object-mask capture (RearCam_Mask, the streamer's
+    # Mask on MaskCamId 13; a copy of Navcam_Mask's render settings) is published
+    # like the central one: <topic>/object_mask (+ _mapping, _classes) and, with
+    # enable_shadow_mask, <topic>/shadow_mask, shadow_label (+ _mapping). The
+    # enable_object_mask / enable_shadow_mask switches below cover it too; drop
+    # the mask id (or clear MaskCaptureName in Unreal) to stop it.
     extra_cameras:
-      - "10:rear_cam:90"
+      - "10:rear_cam:90:13"
     extra_cameras_hz:                      5.0
 
     # Object-mask classes: id, name, colour and group of each class, published

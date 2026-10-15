@@ -125,6 +125,7 @@
     odom: 'odometry', imu: 'IMU', cam_central: 'navcam central', cam_left: 'navcam left',
     cam_right: 'navcam right', cam_rear: 'rear camera', depth: 'stereo depth',
     depth_gt: 'ground-truth depth', mask: 'segmentation', shadow: 'shadow mask',
+    rear_mask: 'rear segmentation', rear_shadow: 'rear shadow mask',
     events: 'event camera', spad: 'SPAD camera', lidar: 'lidar', local_dem: 'local DEM',
   };
   const ageClass = a => a === null || a === undefined ? 'none' : a < 3 ? 'ok' : a < 10 ? 'stale' : 'dead';

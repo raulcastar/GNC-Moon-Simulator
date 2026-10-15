@@ -73,7 +73,10 @@ def test_mask_classes_file_of_the_package():
     ("7:rear_cam", ExtraCamera(7, "rear_cam", None)),
     (" 7 : /rear_cam/ : 90 ", ExtraCamera(7, "rear_cam", 90.0)),
     ("-1:x", ExtraCamera(-1, "x", None)),
-    ("rear_cam", None), ("a:b", None), ("7:", None), ("1:2:3:4", None)])
+    ("10:rear_cam:90:13", ExtraCamera(10, "rear_cam", 90.0, 13)),     # with its object mask
+    ("10:rear_cam::13", ExtraCamera(10, "rear_cam", None, 13)),       # mask, no hfov
+    ("rear_cam", None), ("a:b", None), ("7:", None), ("7:x:wide", None),
+    ("10:rear_cam:90:", None), ("10:rear_cam:90:-1", None), ("1:2:3:4:5", None)])
 def test_extra_camera_entries(entry, expected):
     assert parse_extra_camera(entry) == expected
 

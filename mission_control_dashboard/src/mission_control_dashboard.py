@@ -214,6 +214,8 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
             ('depth_gt', f'{ns}/central/depth_ground_truth/visualization', self._make_image_relay('depth_gt')),
             ('mask', f'{ns}/central/object_mask', self._make_image_relay('mask')),
             ('shadow', f'{ns}/central/shadow_mask', self._make_image_relay('shadow')),
+            ('rear_mask', 'rear_cam/object_mask', self._make_image_relay('rear_mask')),
+            ('rear_shadow', 'rear_cam/shadow_mask', self._make_image_relay('rear_shadow')),
             ('events', 'event_camera/image_events',
              self._make_image_relay('events', min_period=CAM_PRODUCT_MIN_PERIOD)),
             ('spad', 'spad/image', self._make_image_relay('spad', min_period=CAM_PRODUCT_MIN_PERIOD)),

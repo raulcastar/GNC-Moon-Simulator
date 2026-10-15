@@ -168,3 +168,16 @@ def test_frame_near_and_latest(rx):
     fid, _img, _stamp = rx.latest(3)
     assert fid == 104
     assert rx.latest(9) is None
+
+
+def test_latest_with_pairs_a_camera_and_its_mask_by_frame_id(rx):
+    cam, mask = bgra(seed=1), bgra(seed=2)
+    rx._drain(navf(10, 50, cam) + navf(13, 50, mask))
+    rx._drain(navf(10, 56, bgra(seed=3)))        # newer colour; its mask still in flight
+    fid, img, _stamp, got_mask = rx.latest_with(10, 13)
+    assert fid == 50, "the mask must come from the same frame"
+    assert np.array_equal(img, cam[:, :, [2, 1, 0]])
+    assert np.array_equal(got_mask, mask[:, :, [2, 1, 0]])
+    rx._drain(navf(13, 56, bgra(seed=4)))        # it lands: the newer pair wins
+    assert rx.latest_with(10, 13)[0] == 56
+    assert rx.latest_with(10, 14) is None        # no mask stream

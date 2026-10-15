@@ -59,6 +59,7 @@ FEED_NAMES = {
     'odom': 'Odometry', 'imu': 'IMU', 'cam_central': 'Central navcam', 'cam_left': 'Left navcam',
     'cam_right': 'Right navcam', 'cam_rear': 'Rear camera', 'depth': 'Stereo depth',
     'depth_gt': 'Ground-truth depth', 'mask': 'Segmentation', 'shadow': 'Shadow mask',
+    'rear_mask': 'Rear segmentation', 'rear_shadow': 'Rear shadow mask',
     'events': 'Event camera', 'spad': 'SPAD camera', 'lidar': 'Lidar', 'local_dem': 'Local elevation map',
 }
 TIMELINE_MAX = 400            # mission events kept for the overview's timeline
@@ -127,6 +128,8 @@ BAG_PRESETS = {
             '/navcam/central/object_mask_classes',
             '/navcam/central/shadow_mask', '/navcam/central/shadow_label',
             '/navcam/central/shadow_label_mapping',
+            '/rear_cam/object_mask', '/rear_cam/object_mask_mapping', '/rear_cam/object_mask_classes',
+            '/rear_cam/shadow_mask', '/rear_cam/shadow_label', '/rear_cam/shadow_label_mapping',
             '/navcam/left/image_color/compressed', '/navcam/left/camera_info',
             '/navcam/right/image_color/compressed', '/navcam/right/camera_info',
             '/event_camera/image_events', '/event_camera/event_rate', '/spad/image',

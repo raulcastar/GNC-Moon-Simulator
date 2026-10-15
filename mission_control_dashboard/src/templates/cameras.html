@@ -91,6 +91,8 @@
     ['depth_gt',    'GROUND TRUTH DEPTH'],
     ['mask',        'SEGMENTATION'],
     ['shadow',      'SHADOW MASK'],
+    ['rear_mask',   'REAR SEGMENTATION'],
+    ['rear_shadow', 'REAR SHADOW MASK'],
     ['events',      'EVENT CAM'],
     ['spad',        'SPAD CAM'],
   ];
@@ -171,8 +173,8 @@
   // Depth / segmentation legends, and per-feed rate and age.
   FeedLegends.attach(socket, {
     depth: [$('t-depth').querySelector('.feed'), $('t-depth_gt').querySelector('.feed')],
-    mask: [$('t-mask').querySelector('.feed')],
-    shadow: [$('t-shadow').querySelector('.feed')],
+    mask: [$('t-mask').querySelector('.feed'), $('t-rear_mask').querySelector('.feed')],
+    shadow: [$('t-shadow').querySelector('.feed'), $('t-rear_shadow').querySelector('.feed')],
   });
   NavOverlay.attach(socket, [$('t-cam_central').querySelector('.feed')]);
   socket.on('health', h => {

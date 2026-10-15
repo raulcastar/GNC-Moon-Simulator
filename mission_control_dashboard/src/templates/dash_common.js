@@ -22,7 +22,8 @@ const escHtml = t => String(t).replace(/[&<>"]/g,
  *
  *   ViewPicker.attach({
  *     button,                  the element that opens the list
- *     items,                   [{ key, label }] in display order
+ *     items,                   [{ key, label, on }] in display order; on: false
+ *                              starts the item hidden until the user picks it
  *     storageKey,              localStorage key for the selection
  *     onChange(selection),     { key: true|false }; called once at attach time too
  *     title = 'CAMERA VIEWS',
@@ -55,7 +56,7 @@ const ViewPicker = (() => {
     }
     let sel = {};
     try { sel = JSON.parse(localStorage.getItem(storageKey) || '{}'); } catch (e) { sel = {}; }
-    items.forEach(i => { if (!(i.key in sel)) sel[i.key] = true; });
+    items.forEach(i => { if (!(i.key in sel)) sel[i.key] = i.on !== false; });
     if (!items.some(i => sel[i.key])) items.forEach(i => sel[i.key] = true);
 
     const pop = document.createElement('div');

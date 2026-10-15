@@ -296,6 +296,10 @@
           <div class="feed" id="f-events"><div class="nosig">EVENT CAM</div><img></div>
           <div class="feed" id="f-spad"><div class="nosig">SPAD CAM</div><img></div>
         </div>
+        <div class="cam-row">
+          <div class="feed" id="f-rear_mask" data-default-off><div class="nosig">REAR SEGMENTATION</div><img></div>
+          <div class="feed" id="f-rear_shadow" data-default-off><div class="nosig">REAR SHADOW MASK</div><img></div>
+        </div>
       </div>
     </div>
   </div>
@@ -503,7 +507,7 @@ function updateMissionEta() {
 const FEED_NAMES = {
   odom: 'odometry', imu: 'IMU', cam_central: 'navcam central', cam_left: 'navcam left',
   cam_right: 'navcam right', cam_rear: 'rear camera', depth: 'stereo depth', depth_gt: 'ground-truth depth', mask: 'segmentation',
-  shadow: 'shadow mask', events: 'event camera',
+  shadow: 'shadow mask', rear_mask: 'rear segmentation', rear_shadow: 'rear shadow mask', events: 'event camera',
   spad: 'SPAD camera', lidar: 'lidar', local_dem: 'local DEM',
 };
 const ageClass = a => a === null || a === undefined ? 'none' : a < 3 ? 'ok' : a < 10 ? 'stale' : 'dead';
@@ -685,8 +689,8 @@ socket.on('lidar', m => {
 const demView = LocalDemView($('demView'), { info: $('dem-info'), nosig: $('dem-nosig') });
 socket.on('local_dem', m => demView.update(m));
 socket.on('local_dem_lidar', m => demView.updateLidar(m));
-FeedLegends.attach(socket, { depth: [$('f-depth'), $('f-depth_gt')], mask: [$('f-mask')],
-                             shadow: [$('f-shadow')] });
+FeedLegends.attach(socket, { depth: [$('f-depth'), $('f-depth_gt')], mask: [$('f-mask'), $('f-rear_mask')],
+                             shadow: [$('f-shadow'), $('f-rear_shadow')] });
 NavOverlay.attach(socket, [$('f-cam_central')]);
 
 /* ---------------- rover command buttons ---------------- */
@@ -1125,7 +1129,7 @@ function layoutFeeds() {
 
 ViewPicker.attach({
   button: $('btn-feeds'), storageKey: 'mc_feeds',
-  items: feedEls.map(f => ({ key: f.id, label: f.title })),
+  items: feedEls.map(f => ({ key: f.id, label: f.title, on: !('defaultOff' in f.dataset) })),
   onChange: sel => {
     feedSel = sel;
     layoutFeeds();

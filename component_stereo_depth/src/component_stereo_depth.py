@@ -23,6 +23,10 @@ person actually looks at:
 
 TF frame names flatten the namespace: navcam_left, navcam_right, navcam_central.
 
+Extra mono cameras (extra_cameras, e.g. rear_cam) publish image_color (+
+compressed, camera_info) and, when their entry names a mask capture, the same
+object_mask / shadow_mask / shadow_label topics under their own namespace.
+
 navcam/central/image_depth is the SGBM result reprojected onto the central
 camera's pixel grid: planar Z in metres, NaN where no surface was recovered.
 navcam/central/depth_ground_truth is Unreal's own depth for the same view (the
@@ -76,6 +80,11 @@ from . import stereo_geometry as geo
 from .ros_messages import camera_info, disparity_msg, ros_time
 from .stereo_config import frame_id, parse_extra_camera
 
+# An extra camera's newest frame with its mask may trail its newest frame by
+# this many Unreal frames (a mask still in flight); further behind, the mask
+# stream has stopped and the colour is published alone.
+MASK_PAIR_MAX_LAG = 30
+
 
 class LifecycleStereoDepth(rclpy.lifecycle.Node):
     """Stereo matching node fed by the UnrealStereoCam plugin over TCP."""
@@ -94,6 +103,8 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         # Extra mono cameras (extra_cameras), stereo_config.ExtraCamera each
         self._extras: list = []
         self._extra_last_fid: Dict[int, int] = {}
+        self._extra_masks_on = False      # enable_object_mask: extra cameras' masks too
+        self._shadow_ids_json = "{}"
         self.cv_bridge = CvBridge()
         self._is_active = False
 
@@ -298,6 +309,21 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         msg.header.frame_id = frame
         self._pubs[key + '_compressed'].publish(msg)
 
+    def _publish_masks(self, prefix: str, frame_rgb: np.ndarray, stamp, frame: str) -> None:
+        """
+        One mask capture frame as the object mask (flag bits cleared) and, with
+        enable_shadow_mask, the shadow feeds split from its flag bits; with the
+        legends. Outputs `<prefix>_object_mask`, ... (see _mask_publishers).
+        """
+        if self.enable_shadow_mask:
+            shadow, labels, frame_rgb = masks.split_shadow_mask(frame_rgb)
+            self._publish_image(f'{prefix}_shadow_mask', shadow, 'rgb8', stamp, frame)
+            self._publish_image(f'{prefix}_shadow_label', labels, 'mono8', stamp, frame)
+            self._pubs[f'{prefix}_shadow_label_mapping'].publish(String(data=self._shadow_ids_json))
+        self._publish_image(f'{prefix}_object_mask', frame_rgb, 'rgb8', stamp, frame)
+        self._pubs[f'{prefix}_object_mask_mapping'].publish(String(data=self._cached_color_map_json))
+        self._pubs[f'{prefix}_object_mask_classes'].publish(String(data=self._mask_classes_json))
+
     # =========================================================================
     # Timer callbacks
     # =========================================================================
@@ -376,19 +402,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
             timer.mark('ground truth')
 
             if center_mask is not None:
-                if self.enable_shadow_mask:
-                    shadow, labels, center_mask = masks.split_shadow_mask(center_mask)
-                    self._publish_image('center_shadow_mask', shadow, 'rgb8',
-                                        stamp, f_center)
-                    self._publish_image('center_shadow_label', labels, 'mono8',
-                                        stamp, f_center)
-                    self._pubs['center_shadow_label_mapping'].publish(
-                        String(data=self._shadow_ids_json))
-                self._publish_image('center_object_mask', center_mask, 'rgb8',
-                                    stamp, f_center)
-                self._pubs['center_object_mask_mapping'].publish(
-                    String(data=self._cached_color_map_json))
-                self._pubs['center_object_mask_classes'].publish(String(data=self._mask_classes_json))
+                self._publish_masks('center', center_mask, stamp, f_center)
             timer.mark('masks')
             timer.end()
 
@@ -412,14 +426,26 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         for cam, frame in self._extras:
             try:
                 got = self._stream.latest(cam.cam_id)
-                if got is None or got[0] == self._extra_last_fid.get(cam.cam_id):
+                if got is None:
                     continue
                 fid, rgb, stamp_ns = got
+                mask = None
+                if self._extra_masks_on and cam.mask_cam_id is not None:
+                    # Its mask capture renders in the same tick (same frame id) but
+                    # may land a moment later: take the newest frame both have.
+                    # Without a recent pair (no mask stream), the colour goes alone.
+                    pair = self._stream.latest_with(cam.cam_id, cam.mask_cam_id)
+                    if pair is not None and fid - pair[0] <= MASK_PAIR_MAX_LAG:
+                        fid, rgb, stamp_ns, mask = pair
+                if fid == self._extra_last_fid.get(cam.cam_id):
+                    continue
                 if rgb.ndim != 3:                   # a depth (R32F) stream: not a colour camera
                     continue
                 self._extra_last_fid[cam.cam_id] = fid
                 shot = ros_time(stamp_ns) if stamp_ns else stamp      # capture time when known
                 self._publish_color(f'{cam.key}_color', rgb, shot, frame)
+                if mask is not None and mask.ndim == 3:
+                    self._publish_masks(cam.key, mask, shot, frame)
                 if cam.hfov_deg:
                     h, w = rgb.shape[:2]
                     fx = geo.focal_from_hfov(w, cam.hfov_deg)
@@ -477,6 +503,9 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self.enable_object_mask = self.get_parameter('enable_object_mask').value
         self.enable_shadow_mask = (self.enable_object_mask
                                    and self.get_parameter('enable_shadow_mask').value)
+        # The switches cover the extra cameras' masks too (extra_cameras with a
+        # mask cam id); mask_camera_id < 0 turns off only the central one.
+        self._extra_masks_on = bool(self.enable_object_mask)
         hz                    = self.get_parameter('image_reading_hz_rate').value
 
         # Frames come from the UnrealStereoCam plugin and the rig geometry from
@@ -527,19 +556,26 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
             pub('center_depth_gt', RosImage, f'{C}/depth_ground_truth')
             pub('center_depth_gt_vis', RosImage, f'{C}/depth_ground_truth/visualization')
 
-        if self.enable_object_mask:
-            pub('center_object_mask', RosImage, f'{C}/object_mask')
-            pub('center_object_mask_mapping', String, f'{C}/object_mask_mapping')
-            pub('center_object_mask_classes', String, f'{C}/object_mask_classes')
+        def mask_publishers(prefix, ns):
+            """The object mask (and shadow feeds) of one camera namespace."""
+            pub(f'{prefix}_object_mask', RosImage, f'{ns}/object_mask')
+            pub(f'{prefix}_object_mask_mapping', String, f'{ns}/object_mask_mapping')
+            pub(f'{prefix}_object_mask_classes', String, f'{ns}/object_mask_classes')
             if self.enable_shadow_mask:
-                pub('center_shadow_mask', RosImage, f'{C}/shadow_mask')
-                pub('center_shadow_label', RosImage, f'{C}/shadow_label')
-                pub('center_shadow_label_mapping', String, f'{C}/shadow_label_mapping')
-                self._shadow_ids_json = masks.shadow_ids_json()
+                pub(f'{prefix}_shadow_mask', RosImage, f'{ns}/shadow_mask')
+                pub(f'{prefix}_shadow_label', RosImage, f'{ns}/shadow_label')
+                pub(f'{prefix}_shadow_label_mapping', String, f'{ns}/shadow_label_mapping')
+
+        extra_entries = [parse_extra_camera(e) for e in self.get_parameter('extra_cameras').value or []]
+        if self.enable_object_mask or (self._extra_masks_on and any(
+                c is not None and c.mask_cam_id is not None for c in extra_entries)):
             # The colours are baked into the Unreal post-process material from the
             # same class file, so publishing it tells a consumer what each id and
             # colour in the mask represents.
             self._cached_color_map_json, self._mask_classes_json = self._load_mask_classes()
+            self._shadow_ids_json = masks.shadow_ids_json()
+        if self.enable_object_mask:
+            mask_publishers('center', C)
 
         self.get_logger().info(
             f'Publishing {L}/*, {R}/* (colour) and {C}/* '
@@ -549,21 +585,26 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
             f'{" + shadow mask" if self.enable_shadow_mask else ""}). '
             f'Frames: {self.left_frame}, {self.right_frame}, {self.center_frame}.')
 
-        # Extra mono cameras: "<cam_id>:<topic>[:<hfov_deg>]".
+        # Extra mono cameras: "<cam_id>:<topic>[:<hfov_deg>[:<mask_cam_id>]]".
         self._extras, self._extra_last_fid = [], {}
-        for entry in self.get_parameter('extra_cameras').value or []:
-            cam = parse_extra_camera(entry)
+        for entry, cam in zip(self.get_parameter('extra_cameras').value or [], extra_entries):
             if cam is None:
                 self.get_logger().warn(f'extra_cameras: ignored "{entry}" '
-                                       '(expected "<cam_id>:<topic>[:<hfov_deg>]").')
+                                       '(expected "<cam_id>:<topic>[:<hfov_deg>[:<mask_cam_id>]]").')
                 continue
             pub(f'{cam.key}_color', RosImage, f'{cam.topic}/image_color')
             pub(f'{cam.key}_color_compressed', CompressedImage, f'{cam.topic}/image_color/compressed')
             if cam.hfov_deg:
                 pub(f'{cam.key}_info', CameraInfo, f'{cam.topic}/camera_info')
+            masked = self._extra_masks_on and cam.mask_cam_id is not None
+            if masked:
+                mask_publishers(cam.key, cam.topic)
             self._extras.append((cam, frame_id(cam.topic)))
-            self.get_logger().info(f'Extra camera: stream cam id {cam.cam_id} -> {cam.topic}/image_color'
-                                   f'{f" (hfov {cam.hfov_deg:g} deg)" if cam.hfov_deg else ""}.')
+            self.get_logger().info(
+                f'Extra camera: stream cam id {cam.cam_id} -> {cam.topic}/image_color'
+                f'{f" (hfov {cam.hfov_deg:g} deg)" if cam.hfov_deg else ""}'
+                f'{f"; object mask from cam id {cam.mask_cam_id} -> {cam.topic}/object_mask" if masked else ""}'
+                f'{" + shadow mask" if masked and self.enable_shadow_mask else ""}.')
 
         self._stream = FrameStreamReceiver(
             self.get_parameter('stream_bind_ip').value,
@@ -574,7 +615,8 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self._stream.known_ids = {i for i in (
             self.left_camera_id, self.right_camera_id, self.center_camera_id,
             self.mask_camera_id if self.enable_object_mask else -1,
-            self.depth_gt_camera_id) if i is not None and i >= 0} | {c.cam_id for c, _ in self._extras}
+            self.depth_gt_camera_id) if i is not None and i >= 0} | {c.cam_id for c, _ in self._extras} | {
+            c.mask_cam_id for c, _ in self._extras if c.mask_cam_id is not None}
         self._stream.start()
 
         self._timer = self.create_timer(1.0 / hz, self.read_stereo_pair)
