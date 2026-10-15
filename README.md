@@ -671,19 +671,9 @@ shutdowns are a known WSL bug fixed in newer builds.
 
 ## License
 
-[MIT](LICENSE), © 2026 Raul Castilla Arquillo, except:
-
-- `component_spad_camera/src/spad_model.py` is ported from
-  [spadSim](https://github.com/drodriguezSRL/spadSim), MIT, © 2025 David
-  Rodriguez-Martinez (credited in the file).
-- `component_path_planner/src/local_planner.py` (the DWA local planner) is
-  based on the [PythonRobotics](https://github.com/AtsushiSakai/PythonRobotics)
-  DWA sample by Atsushi Sakai and Goktug Karakasli, MIT, © 2016 - now Atsushi
-  Sakai and other contributors (licence reproduced in the file).
-- `unreal/UnrealEventCam`'s event model (`EventSimulator.h/.cpp`) is ported
-  from ESIM ([rpg_esim](https://github.com/uzh-rpg/rpg_esim)), MIT, Robotics
-  and Perception Group, University of Zurich (see its `LICENSE`).
-- The Unreal project ([Unreal-Moon-Simulator](https://github.com/raulcastar/Unreal-Moon-Simulator))
-  lists its third-party content in its `THIRD_PARTY_NOTICES.md`: the Yutu model
-  (CC-BY-4.0 by tashtego, see [Two rovers](#two-rovers-leo_raph-and-yutu)),
-  Poly Haven's moon rocks and textures (CC0), TCP-Unreal (MIT) and TAPython.
+[MIT](LICENSE), © 2026 Raul Castilla Arquillo. Three parts are adapted from
+other MIT projects and keep their notices: the SPAD model (spadSim), the DWA
+local planner (PythonRobotics) and the event model (ESIM). The dashboard
+loads Socket.IO and three.js, and the images install ROS 2, Zenoh, OpenCV and
+other libraries under their own licences. See
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the full list.
