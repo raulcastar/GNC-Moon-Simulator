@@ -318,6 +318,17 @@ differ). The node publishes them as JSON on `object_mask_mapping` and
 `object_mask_classes`; the dashboard draws its legends from them. The shadow
 feeds come from flag bits in the same mask frame (see Terrain Studio's README).
 
+**The rear camera has its masks too:** `rear_cam/object_mask` (+ `_mapping`,
+`_classes`), `rear_cam/shadow_mask` and `rear_cam/shadow_label` (+ `_mapping`),
+from `RearCam_Mask` in the Blueprint (a copy of `Navcam_Mask`'s render settings
+at `RearCam`'s pose), streamed by `RearCam_Stream` on cam id 13. The option is
+the fourth field of its `extra_cameras` entry (`"10:rear_cam:90:13"`): drop it to
+publish the colour only. Each mask is paired with the rear image of the same
+Unreal frame, so both carry the same stamp. `enable_object_mask` /
+`enable_shadow_mask` switch them with the central ones. The dashboard shows them
+as REAR SEGMENTATION and REAR SHADOW MASK (camera wall; hidden by default in the
+overview's VIEWS), and the FULL PERCEPTION bag preset records them.
+
 ### How frames arrive
 
 The **UnrealStereoCam** plugin (`unreal/UnrealStereoCam/` — build

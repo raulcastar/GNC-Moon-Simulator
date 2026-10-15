@@ -148,16 +148,27 @@ it pixel for pixel.
 
 Any other SceneCapture2D can ride the same link as a plain colour camera: add
 a second UnrealStereoCam component that streams only that capture — Center =
-the capture, CenterCamId = a free id (10 and up), Left / Right / Mask blank,
+the capture, CenterCamId = a free id (10 and up), Left / Right blank,
 `bStreamCenterDepth` off. The ROS node accepts several streamer connections on
 port 3004 at once, and publishes the camera as listed in `extra_cameras`
-(`"<cam_id>:<topic>[:<hfov_deg>]"`, rate `extra_cameras_hz`) in
+(`"<cam_id>:<topic>[:<hfov_deg>[:<mask_cam_id>]]"`, rate `extra_cameras_hz`) in
 `component_stereo_depth/config/params.yaml`.
+
+**Its own object mask (optional):** a mask capture beside it — the same
+`PPM_GroundTruthMask` material, sun-only show flags and manual exposure as the
+navcam's mask capture, at the camera's pose and FOV — set as this streamer's
+**MaskCaptureName** with a free **MaskCamId**, and that id as the entry's fourth
+field. The node then publishes `<topic>/object_mask`, `shadow_mask` and
+`shadow_label` (with their mappings), each paired with the image of the same
+frame. Terrain Studio sets up the navcam's mask camera only; copy its settings
+(a mask capture's render settings live on the placed rover, where Terrain Studio
+writes them, and on the Blueprint).
 
 Leo_Raph does this for its rear camera: `RearCam` on the body (behind it,
 looking back, pitched -20°, 90° FOV) streamed by `RearCam_Stream` on cam id 10
 -> `rear_cam/image_color` (+ `/compressed`, `/camera_info`), shown as REAR on
-the dashboard.
+the dashboard; and `RearCam_Mask` on cam id 13 -> `rear_cam/object_mask`,
+`shadow_mask`, `shadow_label`, shown as REAR SEGMENTATION / REAR SHADOW MASK.
 
 ## Exposure
 
