@@ -49,6 +49,7 @@ REPLAY_LIVE_OUTPUTS = {
     '/cancel_goal': 'a command',
     '/cmd_vel': 'a command: would drive the rover',
     '/headlights_cmd': 'a command',
+    '/headlights_intensity': 'a command',
 }
 NODE_POLL_TICKS = 3           # health ticks between lifecycle state polls
 # Alerts (the banner in every window): a feed that delivered data while Unreal
@@ -89,6 +90,8 @@ REMOTE_PARAMS = {
     'camera_height_m': ('lc_component_local_mapping', 'camera_height_m'),
     'camera_offset_forward_m': ('lc_component_local_mapping', 'camera_offset_forward_m'),
     'camera_offset_up_m': ('lc_component_local_mapping', 'camera_offset_up_m'),
+    # Headlight brightness at start (the sliders show it until the topic carries one).
+    'headlights_intensity': ('lc_component_rover_leo_raph', 'headlights_intensity'),
 }
 # Fallbacks until the mapper's parameters have been read.
 CAMERA_DEFAULTS = {'camera_angle': 20.0, 'camera_height_m': 0.553,
@@ -102,7 +105,7 @@ MIN_CAMERA_DEPTH = 0.3        # m; samples closer than this are not drawn
 # with the simulator at its default rates.
 _NAVIGATION = [
     '/clock',                                   # simulation time: a replay runs on it
-    '/odom', '/imu/data', '/cmd_vel', '/goal_pose', '/cancel_goal', '/headlights_cmd',
+    '/odom', '/imu/data', '/cmd_vel', '/goal_pose', '/cancel_goal', '/headlights_cmd', '/headlights_intensity',
     '/global_path', '/driven_trajectory', '/mission_status/state', '/mission_status/goal_reached',
     '/local_mapping/elevation_map_raw', '/local_mapping/elevation_grid',
     '/navcam/central/image_color/compressed', '/navcam/central/camera_info',

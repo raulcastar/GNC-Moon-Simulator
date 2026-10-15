@@ -143,6 +143,11 @@
   #cmd-bar button:hover { border-color: var(--accent); color: var(--accent); }
   #cmd-bar button.lit { border-color: var(--amber); color: var(--amber);
                         box-shadow: 0 0 8px rgba(255,180,84,.25); }
+  #light-ctl { flex: 1.3; display: flex; align-items: center; gap: 4px; padding: 0 4px; border-radius: 3px;
+               background: var(--panel2); border: 1px solid var(--line); color: var(--amber);
+               font-family: var(--mono); font-size: calc(10px * var(--fs, 1)); }
+  #light-ctl input { flex: 1; min-width: 40px; accent-color: var(--amber); }
+  #light-val { min-width: 3.2em; text-align: right; color: var(--text); }
   #btn-stop { border-color: #5a2230 !important; color: var(--red) !important; }
   #btn-avoid.off { color: var(--dim); }
   #btn-view.off { color: var(--dim); }
@@ -366,6 +371,7 @@
       <div id="cmd-bar">
         <button id="btn-lon">☀ LIGHTS ON</button>
         <button id="btn-loff">● LIGHTS OFF</button>
+        <label id="light-ctl" title="Headlight brightness: the rover node's headlights_intensity (share of the Blueprint's 20000 cd per light)">☀<input type="range" id="light-level" min="0" max="100" step="5" value="100"><span id="light-val">100%</span></label>
         <button id="btn-stop">■ ALL STOP</button>
         <button id="btn-view" title="Unreal's Play viewport: the rover's follow camera, an orbit around it, or top-down (applied by rover_cameras.py in the editor). Click for the next one.">🎥 VIEW —</button>
         <button id="btn-avoid" title="Lidar obstacle avoidance: the planner steers and re-plans around rocks the lidar sees (its lidar_obstacle_avoidance parameter). Click to switch.">⛰ AVOID —</button>
@@ -699,6 +705,7 @@ $('btn-lon').onclick = () => {
   $('btn-lon').classList.add('lit'); $('btn-loff').classList.remove('lit');
   addLocal('INFO', 'Headlights ON commanded.');
 };
+LightLevel.attach(socket, $('light-level'), $('light-val'));
 $('btn-loff').onclick = () => {
   socket.emit('headlights', { on: false });
   $('btn-loff').classList.add('lit'); $('btn-lon').classList.remove('lit');

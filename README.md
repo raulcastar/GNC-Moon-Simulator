@@ -174,8 +174,15 @@ separator**. Bare, split across reads, coalesced, or newline-delimited all parse
 as do Unreal's locale numbers (`1,205`) even when a read boundary lands inside
 one.
 
-- **Out:** `{"FL", "BL", "FR", "BR", "headlights_on"}`, the wheel inputs
-  (negative = forward in the Blueprint).
+- **Out:** `{"FL", "BL", "FR", "BR", "headlights_on", "headlights_intensity"}`,
+  the wheel inputs (negative = forward in the Blueprint) and the lights.
+  `headlights_intensity` is 0–1 of the Blueprint's own light intensity
+  (`HeadLight_L` / `HeadLight_R`, 20 000 cd each: brighter burnt out up to 44 % of the navcam's ground view); the node takes it from the
+  `headlights_intensity` topic (`std_msgs/Float32`, clamped) or the parameter
+  of that name at start, and the dashboard has a slider for it (overview and
+  teleop). On/off stays on `headlights_cmd`. The Blueprint reads it with *Get
+  Field* (Json Blueprint Utilities), which treats an exact 0 as a missing field,
+  so 0 % goes out as `1e-9` (dark).
 - **In:** the world transform of the Blueprint's `base_link` component
   (`x, y, z` cm, `roll, pitch, yaw` degrees), optionally the physics body's
   velocities (`vx, vy, vz` cm/s, `wx, wy, wz` rad/s) and `t_ns`.

@@ -41,6 +41,12 @@ def handle_teleop_headlights(json_data):
         web.node.set_headlights(json_data.get('on', False))
 
 
+@sio_teleop.on('light_level')
+def handle_teleop_light_level(json_data):
+    if web.node is not None:
+        web.node.set_light_level(json_data.get('level'))
+
+
 @sio_teleop.on('stop_rover')
 def handle_teleop_stop(json_data=None):
     if web.node is not None:
@@ -239,6 +245,12 @@ def handle_headlights(json_data):
         web.node.set_headlights(json_data.get('on', False))
 
 
+@socketio.on('light_level')
+def handle_light_level(json_data):
+    if web.node is not None:
+        web.node.set_light_level(json_data.get('level'))
+
+
 @socketio.on('viewport_camera')
 def handle_viewport_camera(json_data):
     """The Unreal viewport's camera requested on the overview (follow / orbit)."""
@@ -296,6 +308,8 @@ def _send_cached(server, sid):
     server.emit('mission', web.node._mission, to=sid)
     server.emit('avoidance', {'on': web.node._avoidance}, to=sid)
     server.emit('viewport_camera', VIEWPORT.status(), to=sid)
+    if web.node._light_level is not None:
+        server.emit('light_level', {'level': web.node._light_level}, to=sid)
 
 
 @sio_cams.on('connect')

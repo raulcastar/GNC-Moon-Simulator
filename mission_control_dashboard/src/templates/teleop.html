@@ -194,6 +194,10 @@
             <label>MAX ANGULAR <b><span id="ang-val">0.20</span> rad/s</b></label>
             <input type="range" id="ang-max" min="0.02" max="0.35" step="0.01" value="0.20">
           </div>
+          <div class="slider" title="Headlight brightness: the rover node's headlights_intensity (share of the Blueprint's 20000 cd per light)">
+            <label>HEADLIGHT BRIGHTNESS <b><span id="light-val">100%</span></b></label>
+            <input type="range" id="light-level" min="0" max="100" step="5" value="100">
+          </div>
           <div class="gp">
             <button id="gp-toggle" title="Drive with a gamepad (Xbox / PlayStation layout)">GAMEPAD OFF</button>
             <span id="gp-state">—</span>
@@ -425,6 +429,7 @@
     for (const kk in down) down[kk] = false; clearDrive();
     socket.emit('stop_rover', {});
   });
+  LightLevel.attach(socket, $('light-level'), $('light-val'));
   let lightsOn = false;
   $('lights').addEventListener('click', () => {
     lightsOn = !lightsOn;

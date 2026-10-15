@@ -39,7 +39,7 @@ from rclpy.executors import SingleThreadedExecutor
 from rclpy.lifecycle import State, TransitionCallbackReturn
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, CompressedImage, Imu, PointCloud2
-from std_msgs.msg import Bool, Empty, Float32MultiArray, String
+from std_msgs.msg import Bool, Empty, Float32, Float32MultiArray, String
 
 from . import web
 from .commands import CommandsMixin
@@ -70,6 +70,8 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
         self._viewer_feeds, self._viewer_subs = [], []     # feeds subscribed only while watched
         self._pub_goal = None
         self._pub_lights = None
+        self._pub_light_level = None
+        self._light_level = None            # headlight brightness 0..1 last seen on the topic
         self._pub_cmdvel = None
         self._pub_cancel = None
         self._cli_get_maps = None
@@ -161,6 +163,7 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
 
         self._pub_goal = self.create_lifecycle_publisher(PoseStamped, 'goal_pose', 10)
         self._pub_lights = self.create_lifecycle_publisher(Bool, 'headlights_cmd', 10)
+        self._pub_light_level = self.create_lifecycle_publisher(Float32, 'headlights_intensity', 10)
         self._pub_cmdvel = self.create_lifecycle_publisher(Twist, 'cmd_vel', 10)
         self._pub_cancel = self.create_lifecycle_publisher(Empty, 'cancel_goal', 10)
         self._cli_get_maps = self.create_client(GetMatrices, 'get_matrices')
@@ -185,6 +188,9 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
             sub(Float32MultiArray, 'local_mapping/elevation_map_raw',
                 self.raw_dem_callback, 10),
             sub(Imu, 'imu/data', lambda _m: self._mark('imu'), qos_profile_sensor_data),
+            # Headlight brightness from any source (this dashboard, a terminal):
+            # every window's slider follows it.
+            sub(Float32, 'headlights_intensity', self.light_level_callback, 10),
             sub(String, 'mission_status/state', self.mission_callback,
                 QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)),
             sub(CameraInfo, f'{ns}/central/camera_info', self.camera_info_callback, 10),
@@ -251,7 +257,7 @@ class LifecycleMissionControlUI(ImageryMixin, MappingMixin, TelemetryMixin, Topi
         for s in self._subs + self._viewer_subs:
             self.destroy_subscription(s)
         self._subs, self._viewer_subs = [], []
-        for p in (self._pub_goal, self._pub_lights, self._pub_cmdvel, self._pub_cancel):
+        for p in (self._pub_goal, self._pub_lights, self._pub_light_level, self._pub_cmdvel, self._pub_cancel):
             if p:
                 self.destroy_publisher(p)
         clients = [self._cli_get_maps, *self._cli_get_state.values(),

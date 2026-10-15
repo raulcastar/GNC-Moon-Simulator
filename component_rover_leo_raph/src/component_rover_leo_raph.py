@@ -29,7 +29,7 @@ from rclpy.subscription import Subscription
 from geometry_msgs.msg import Twist, TransformStamped
 from tf2_ros import TransformBroadcaster
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float32
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -157,6 +157,32 @@ def stamp_ns_from_telemetry(transform: dict) -> Optional[int]:
     return ns if ns > 0 else None
 
 
+# Unreal's Json Blueprint Utilities 'Get Field' reports an exact 0 (0, 0.0,
+# -0.0) as not found, so the Blueprint would ignore "lights at 0 %". Zero goes
+# out as this instead: 1e-9 x 20000 cd is dark.
+HEADLIGHT_ZERO_ON_WIRE = 1e-9
+
+
+def headlight_wire_value(level: float) -> float:
+    """The brightness as sent to Unreal: 4 decimals, and never an exact zero."""
+    return round(level, 4) or HEADLIGHT_ZERO_ON_WIRE
+
+
+def headlight_level(value) -> Optional[float]:
+    """
+    A headlights_intensity command as the fraction sent to Unreal: clamped to
+    0..1 (1 = the Blueprint's own light intensity), or None when it is not a
+    finite number (ignored).
+    """
+    try:
+        level = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(level):
+        return None
+    return min(max(level, 0.0), 1.0)
+
+
 class LifecycleRoverController(rclpy.lifecycle.Node):
     """
     Lifecycle node handling the link with Unreal Engine (TCP, or legacy UDP).
@@ -176,12 +202,14 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         
         # ROS 2 Interfaces
         self._sub_cmd_vel: Optional[Subscription] = None
-        self._sub_headlights: Optional[Subscription] = None 
+        self._sub_headlights: Optional[Subscription] = None
+        self._sub_intensity: Optional[Subscription] = None
         self._pub_odom:    Optional[Publisher] = None
         self._tf: Optional[TransformBroadcaster] = None    # odom -> base_link
         
         # Rover State
         self.headlights_on: bool = False
+        self.headlights_intensity: float = 1.0      # fraction of the Blueprint's intensity
         self._last_udp_telemetry: float = float("-inf")   # Detects a new Play session (UDP)
         # Last wheel command, so a headlights toggle can be resent in the full
         # drive-packet shape Unreal parses without disturbing motion.
@@ -253,6 +281,9 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self.declare_parameter('wheel_speed_scale', 1.0)   # m/s -> Unreal wheel units
         # Broadcast odom -> base_link on /tf with every odometry message.
         self.declare_parameter('publish_tf', True)
+        # Headlight brightness at start, 0..1 of the Blueprint's intensity; the
+        # headlights_intensity topic changes it.
+        self.declare_parameter('headlights_intensity', 1.0)
         self.wheel_speed_scale: float = 1.0
 
 
@@ -323,8 +354,13 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
             "BL": -vel_left,
             "FR": -vel_right,
             "BR": -vel_right,
-            "headlights_on": self.headlights_on
+            **self._lights(),
         }
+
+    def _lights(self) -> dict:
+        """The light fields every packet carries: Unreal reads them from the drive packet."""
+        return {"headlights_on": self.headlights_on,
+                "headlights_intensity": headlight_wire_value(self.headlights_intensity)}
 
     # =========================================================================
     # UDP Transmission
@@ -372,10 +408,10 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self._v_tgt = self._w_tgt = 0.0
         self._last_cmd_t = None
         self._last_wheels = {"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0}
-        self._send({"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0,
-                    "headlights_on": self.headlights_on}, "headlight state")
+        self._send({"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0, **self._lights()}, "headlight state")
         self.get_logger().info(
-            f"Unreal connected: headlights {'ON' if self.headlights_on else 'OFF'}.")
+            f"Unreal connected: headlights {'ON' if self.headlights_on else 'OFF'}, "
+            f"intensity {self.headlights_intensity:.0%}.")
 
     def _send(self, payload: dict, what: str) -> None:
         """Dispatch one JSON command to Unreal over the configured transport."""
@@ -422,9 +458,26 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         # headlights_on), not from a standalone {"headlights_on": ...}, so send
         # the full shape. Reuse the last wheel command so the toggle alone does
         # not change motion (zeros when the rover is idle).
-        self._send({**self._last_wheels, "headlights_on": self.headlights_on},
-                   "headlights")
+        self._send({**self._last_wheels, **self._lights()}, "headlights")
         self.get_logger().info(f"Headlights toggled: {'ON' if self.headlights_on else 'OFF'}")
+
+    def headlights_intensity_callback(self, msg: Float32) -> None:
+        """
+        Headlight brightness, 0..1 of the Blueprint's intensity (clamped); kept
+        and sent with every packet, so it survives an off/on and a new Play
+        session. Like the toggle, it rides a full drive packet (the last wheel
+        command), so motion is not disturbed.
+        """
+        level = headlight_level(msg.data)
+        if level is None:
+            self.get_logger().warn(f"Headlight intensity {msg.data!r} ignored: not a number.",
+                                   throttle_duration_sec=10.0)
+            return
+        if level == self.headlights_intensity:
+            return
+        self.headlights_intensity = level
+        self._send({**self._last_wheels, **self._lights()}, "headlight intensity")
+        self.get_logger().info(f"Headlight intensity: {level:.0%}.")
 
     def cmd_vel_callback(self, msg: Twist) -> None:
         """
@@ -702,6 +755,9 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self.rover_width = self.get_parameter('rover_width').value / 100.0  # cm -> m
         self.wheel_speed_scale = self.get_parameter('wheel_speed_scale').value
         self.headlights_on = self.get_parameter('headlights_on').value
+        self.headlights_intensity = headlight_level(self.get_parameter('headlights_intensity').value)
+        if self.headlights_intensity is None:
+            self.headlights_intensity = 1.0
         self.max_linear_accel  = self.get_parameter('max_linear_accel').value
         self.max_angular_accel = self.get_parameter('max_angular_accel').value
         self.max_linear_decel  = self.get_parameter('max_linear_decel').value
@@ -747,8 +803,7 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
                 return TransitionCallbackReturn.FAILURE
 
         # Send initial commands
-        self._send({"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0,
-                    "headlights_on": self.headlights_on}, "initial stop")
+        self._send({"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0, **self._lights()}, "initial stop")
 
         # Allocate standard pub/sub endpoints
         self._pub_odom    = self.create_lifecycle_publisher(Odometry, 'odom', 10)
@@ -759,6 +814,8 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
 
         # Allocate headlights subscription
         self._sub_headlights = self.create_subscription(Bool, 'headlights_cmd', self.headlights_callback, 10)
+        self._sub_intensity = self.create_subscription(
+            Float32, 'headlights_intensity', self.headlights_intensity_callback, 10)
 
         return TransitionCallbackReturn.SUCCESS
 
@@ -784,7 +841,9 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         
         # 1. Dispatch absolute zero velocities to enforce a hardware/simulation halt
         self._send({"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0,
-                    "headlights_on": False}, "stop")
+                    "headlights_on": False,
+                    "headlights_intensity": headlight_wire_value(self.headlights_intensity)},
+                   "stop")
         # Sent zeros directly, bypassing the ramp — zero its state too so the
         # next command ramps from a standstill instead of a phantom velocity.
         self._v_cmd = self._w_cmd = 0.0
@@ -813,10 +872,13 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
             
         if self._sub_headlights:
             self.destroy_subscription(self._sub_headlights)
-            
+
+        if self._sub_intensity:
+            self.destroy_subscription(self._sub_intensity)
+
         if self._pub_odom:
             self.destroy_publisher(self._pub_odom)
-            
+
         if self.udp_send_socket:
             self.udp_send_socket.close()
             self.udp_send_socket = None
@@ -849,6 +911,9 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
 
         if self._sub_headlights:
             self.destroy_subscription(self._sub_headlights)
+
+        if self._sub_intensity:
+            self.destroy_subscription(self._sub_intensity)
 
         if self._pub_odom:
             self.destroy_publisher(self._pub_odom)

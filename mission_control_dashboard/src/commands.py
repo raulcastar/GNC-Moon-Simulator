@@ -9,7 +9,7 @@ from .settings import AVOIDANCE_PARAM, PLANNER_NODE
 from .web import emit_all
 
 from geometry_msgs.msg import PoseStamped, Twist
-from std_msgs.msg import Bool, Empty
+from std_msgs.msg import Bool, Empty, Float32
 
 
 class CommandsMixin:
@@ -44,6 +44,22 @@ class CommandsMixin:
             self._pub_lights.publish(Bool(data=bool(on)))
             self.get_logger().info(
                 f"Headlights commanded {'ON' if on else 'OFF'} from the console.")
+
+    def set_light_level(self, level) -> None:
+        """Headlight brightness (0..1) on headlights_intensity; the rover node clamps it too."""
+        try:
+            level = min(max(float(level), 0.0), 1.0)
+        except (TypeError, ValueError):
+            return
+        if level != level:                  # NaN
+            return
+        if self._pub_light_level and self._pub_light_level.is_activated:
+            self._pub_light_level.publish(Float32(data=level))
+
+    def light_level_callback(self, msg: Float32) -> None:
+        """The brightness on the topic (ours or anyone's): every window's slider follows it."""
+        self._light_level = float(msg.data)
+        emit_all('light_level', {'level': self._light_level})
 
     def stop_rover(self) -> None:
         """

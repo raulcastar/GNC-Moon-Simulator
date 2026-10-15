@@ -50,6 +50,11 @@ lc_component_rover_leo_raph:
     # Headlights at start. Sent to Unreal whenever it (re)connects, so every
     # Play session starts with this state; the dashboard toggles them.
     headlights_on:                      false
+    # Headlight brightness at start, 0..1 of the Blueprint's own intensity
+    # (HeadLight_L / HeadLight_R, 20000 cd each). Sent with headlights_on in
+    # every packet; the headlights_intensity topic (std_msgs/Float32) and the
+    # dashboard's slider change it.
+    headlights_intensity:               1.0
 
 
     # Acceleration limits: a commanded velocity STEP (manual `ros2 topic pub`,

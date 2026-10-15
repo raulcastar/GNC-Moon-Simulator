@@ -101,3 +101,30 @@ const ViewPicker = (() => {
 
   return { attach };
 })();
+
+/* LightLevel: a headlight brightness slider (0-100 %, the rover node's
+ * headlights_intensity topic as 0-1).
+ *
+ *   LightLevel.attach(socket, input, label)
+ *
+ * Sends while dragging (at most ~6 times a second, and once on release).
+ * Follows the brightness the dashboard last saw on the topic ('light_level',
+ * so every window and a `ros2 topic pub` agree), or the rover node's starting
+ * parameter ('config') until then; not while the user drags it. */
+const LightLevel = (() => {
+  function attach(socket, input, label) {
+    let dragging = false, last = 0, known = false;
+    const show = pct => { label.textContent = `${Math.round(pct)}%`; };
+    const set = level => {
+      if (dragging || typeof level !== 'number' || !isFinite(level)) return;
+      input.value = Math.round(level * 100); show(input.value);
+    };
+    const send = () => { last = Date.now(); socket.emit('light_level', { level: input.value / 100 }); };
+    input.addEventListener('pointerdown', () => { dragging = true; });
+    input.addEventListener('input', () => { show(input.value); if (Date.now() - last > 160) send(); });
+    input.addEventListener('change', () => { dragging = false; send(); });
+    socket.on('light_level', m => { known = true; set(m && m.level); });
+    socket.on('config', c => { if (!known && c) set(c.headlights_intensity); });
+  }
+  return { attach };
+})();
