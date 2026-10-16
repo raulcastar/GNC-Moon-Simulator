@@ -38,7 +38,8 @@ The object mask's classes (id, name, colour, group) are in
 **edit both together** (Terrain Studio's ground-truth page reports when they
 differ). The node publishes them as JSON on `object_mask_mapping` and
 `object_mask_classes`; the dashboard draws its legends from them. The shadow
-feeds come from flag bits in the same mask frame (see Terrain Studio's README).
+feeds come from flag bits in the same mask frame (see Terrain Studio's
+[masks documentation](https://github.com/raulcastar/Unreal-Moon-Terrain-Generation/blob/main/docs/masks.md#how-the-shadows-travel)).
 
 The rear camera has its masks too: `rear_cam/object_mask` (+ `_mapping`,
 `_classes`), `rear_cam/shadow_mask` and `rear_cam/shadow_label` (+ `_mapping`),

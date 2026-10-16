@@ -16,9 +16,10 @@ repository, with its setup, wire format and prebuilt releases:
 | [UnrealEventCam](https://github.com/raulcastar/UnrealEventCam) | Event camera: brightness-change events from rendered frames (ESIM) | `component_event_camera` |
 | [UnrealSPADCam](https://github.com/raulcastar/UnrealSPADCam) | Intensity frames for the SPAD photon model | `component_spad_camera` |
 
-The project also uses the `TCP-Unreal` plugin for the rover link, and editor
-Python (*Python Editor Script Plugin*, *Remote Execution* on) for Terrain
-Studio and the [viewport cameras](mission-control.md#viewport-cameras).
+The project also uses the `TCP-Unreal` plugin for the rover link, the
+`TAPython` plugin (Terrain Studio builds Landscapes with it), and editor Python
+(*Python Editor Script Plugin*, *Remote Execution* on) for Terrain Studio and
+the [viewport cameras](mission-control.md#viewport-cameras).
 
 ## Links and ports
 
