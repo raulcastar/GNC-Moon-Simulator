@@ -3,7 +3,7 @@
 ## Project and plugins
 
 The Unreal project (`Moon_Simulator`, Unreal Engine 5.7) is its own repository,
-[Unreal-Moon-Simulator](https://github.com/raulcastar/Unreal-Moon-Simulator).
+[MARE-Lunar-Simulator](https://github.com/raulcastar/MARE-Lunar-Simulator).
 It holds the levels and the rover Blueprints (`Leo_Raph`, `Yutu_Rover`), with a
 copy of the sensor plugins in its `Plugins/`. Each plugin also has its own
 repository, with its setup, wire format and prebuilt releases:

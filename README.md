@@ -42,14 +42,14 @@ This repository is the ROS side and the entry point of the project:
 | Repository | What it holds |
 |---|---|
 | **GNC-Moon-Simulator** (this one) | ROS 2 nodes, one Docker container each; web dashboard; MCP server for AI agents |
-| [Unreal-Moon-Simulator](https://github.com/raulcastar/Unreal-Moon-Simulator) | The Unreal project: levels, rovers (Leo_Raph, Yutu), sensor plugins |
+| [MARE-Lunar-Simulator](https://github.com/raulcastar/MARE-Lunar-Simulator) | The Unreal project: levels, rovers (Leo_Raph, Yutu), sensor plugins |
 | [Unreal-Moon-Terrain-Generation](https://github.com/raulcastar/Unreal-Moon-Terrain-Generation) | Terrain Studio: terrain, craters, rocks, ground-truth masks, sun |
 | [UnrealStereoCam](https://github.com/raulcastar/UnrealStereoCam), [UnrealLidarCam](https://github.com/raulcastar/UnrealLidarCam), [UnrealEventCam](https://github.com/raulcastar/UnrealEventCam), [UnrealSPADCam](https://github.com/raulcastar/UnrealSPADCam), [UnrealSimClock](https://github.com/raulcastar/UnrealSimClock) | The sensor plugins, each usable on its own |
 
 ## Requirements
 
 - Windows with WSL2 and Docker (the stack runs in containers on ROS 2 Jazzy).
-- Unreal Engine 5.7 on the same machine, with the Unreal-Moon-Simulator project.
+- Unreal Engine 5.7 on the same machine, with the MARE-Lunar-Simulator project.
 - About 32 GB of RAM to run Unreal and the stack together.
 
 ## Quick start
