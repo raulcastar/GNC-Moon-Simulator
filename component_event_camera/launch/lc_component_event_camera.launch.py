@@ -24,7 +24,7 @@ def generate_launch_description():
         executable='lc_component_event_camera', name='lc_component_event_camera', namespace='', output='screen', emulate_tty=True, respawn=True,
         arguments=['--ros-args', '--log-level', "info"], parameters=[yaml_config])
 
-    # Make the node take the 'configure' transition
+    # Configure the node at launch
     event_node_configure_event = launch.actions.EmitEvent(
         event=launch_ros.events.lifecycle.ChangeState(
             lifecycle_node_matcher=launch.events.matches_action(event_node),
@@ -32,7 +32,7 @@ def generate_launch_description():
         )
     )
 
-    # Make the node take the 'activate' transition
+    # Activate it once configured
     event_node_activate_event = launch.actions.EmitEvent(
         event=launch_ros.events.lifecycle.ChangeState(
             lifecycle_node_matcher=launch.events.matches_action(event_node),

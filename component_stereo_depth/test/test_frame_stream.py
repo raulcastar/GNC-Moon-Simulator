@@ -1,9 +1,9 @@
 """
 The NAVF frame stream from the UnrealStereoCam plugin, parsed by FrameStreamReceiver.
 
-Packets are assembled byte by byte at the offsets documented in
-the Unreal project's Plugins/UnrealStereoCam/Source/UnrealStereoCam/Public/UnrealStereoCam.h
-(not with the parser's own struct), so a change to the wire format on either
+Packets are assembled byte by byte at the offsets documented in the
+UnrealStereoCam plugin (Source/UnrealStereoCam/Public/UnrealStereoCam.h),
+not with the parser's own struct,, so a change to the wire format on either
 side fails here instead of in a Play session:
 
     offset size  field

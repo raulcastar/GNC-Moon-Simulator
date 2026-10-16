@@ -218,7 +218,7 @@ class ReplayMixin:
         with self._replay_lock:
             if (self._replay.get('error') and self._replay['state'] not in ('playing', 'paused')
                     and time.monotonic() - self._replay.get('error_t', 0.0) > 8.0):
-                self._replay['error'] = None          # an old refusal: no longer news
+                self._replay['error'] = None          # clear a refusal from earlier
             r = dict(self._replay)
             if proc is not None and proc.poll() is not None:     # the player exited
                 err = []

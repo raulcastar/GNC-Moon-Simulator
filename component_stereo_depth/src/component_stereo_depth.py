@@ -1,5 +1,5 @@
 """
-ROS 2 Lifecycle Node for the simulated stereo navcam rig (UnrealStereoCam).
+ROS 2 lifecycle node for the simulated stereo navcam rig (UnrealStereoCam).
 
 Serves three cameras under one hierarchical namespace. The left and right eyes
 publish colour; the central camera publishes colour plus the full depth product,
@@ -35,9 +35,8 @@ where there is no surface (sky).
 Disparity has no separate visualisation: it is a monotonic function of depth, so
 it would just render image_depth/visualization inverted.
 
-Frames arrive over TCP from the UnrealStereoCam Unreal plugin
-(the Unreal project's Plugins/UnrealStereoCam/): each SceneCapture renders when a frame is sent and is
-pushed here, with no game-thread stall. Every capture enqueued in one Unreal
+Frames arrive over TCP from the UnrealStereoCam plugin: each SceneCapture
+renders when a frame is due and is pushed here, with no game-thread stall. Every capture enqueued in one Unreal
 tick carries the same frame id, which is what pairs the left/right eyes as one
 rigid stereo view.
 
@@ -119,8 +118,7 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
         self.declare_parameters(
             namespace='',
             parameters=[
-                # The UnrealStereoCam plugin (the Unreal project's Plugins/UnrealStereoCam/) pushes
-                # frames to this TCP server.
+                # The UnrealStereoCam plugin pushes frames to this TCP server.
                 ('stream_bind_ip',          rclpy.Parameter.Type.STRING),
                 ('stream_port',             rclpy.Parameter.Type.INTEGER),
                 ('left_camera_id',          rclpy.Parameter.Type.INTEGER),
@@ -147,8 +145,8 @@ class LifecycleStereoDepth(rclpy.lifecycle.Node):
                 ('right_topic',             rclpy.Parameter.Type.STRING),
                 ('center_topic',            rclpy.Parameter.Type.STRING),
                 ('image_reading_hz_rate',   rclpy.Parameter.Type.DOUBLE),
-                # Rig geometry, declared (stream mode cannot measure it): both
-                # baseline_m and hfov_deg are REQUIRED.
+                # Rig geometry, declared (a stream cannot measure it); both
+                # are required.
                 ('baseline_m',              rclpy.Parameter.Type.DOUBLE),
                 ('hfov_deg',                rclpy.Parameter.Type.DOUBLE),
                 # Centre camera's distance from the left eye along the baseline

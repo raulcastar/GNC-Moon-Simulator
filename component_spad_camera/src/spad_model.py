@@ -1,5 +1,5 @@
 """
-SPAD sensor model — ported from spadSim.
+SPAD sensor model, ported from spadSim.
 
 ── Credit ────────────────────────────────────────────────────────────────────
 This is a port of the photon-detection core of spadSim by David Rodriguez-
@@ -18,8 +18,8 @@ efficiency and the SPAD-vs-RGB exposure ratio), optionally add a dark-count
 term, draw the actual photon count from a Poisson distribution, and threshold to
 a binary single-photon frame. Only the surrounding plumbing differs: this runs on
 a live intensity stream from the UnrealSPADCam plugin instead of pre-recorded
-video, so spadSim's optical-flow frame interpolation (a trick for boosting the
-frame rate of recorded footage) is not needed — Unreal renders real frames.
+video, so spadSim's optical-flow frame interpolation (which raises the frame
+rate of recorded footage) is not needed: Unreal renders every frame.
 ────────────────────────────────────────────────────────────────────────────────
 """
 

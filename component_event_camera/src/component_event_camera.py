@@ -1,11 +1,9 @@
 """
-ROS 2 Lifecycle Node for the simulated event (DVS) camera.
+ROS 2 lifecycle node for the simulated event (DVS) camera.
 
-Receives the event stream pushed by the UnrealEventCam plugin
-(the Unreal project's Plugins/UnrealEventCam/) over TCP and turns it into something the rest of the
-stack can look at: a rolling **event-frame visualisation** (colour by polarity)
-on `event_camera/image_events`, plus the instantaneous event rate on
-`event_camera/event_rate`.
+Receives the event stream the UnrealEventCam plugin pushes over TCP and
+publishes a rolling event-frame visualisation (colour by polarity) on
+`event_camera/image_events`, and the event rate on `event_camera/event_rate`.
 
 The plugin sends one packet per rendered frame that produced events. Wire format
 (little-endian), as in the UnrealEventCam plugin's docs/wire-format.md:
@@ -16,8 +14,7 @@ The plugin sends one packet per rendered frame that produced events. Wire format
 
 Events are asynchronous and have no frame; the visualisation simply accumulates
 every event seen in the last `accumulation_window_s` and renders it, ON events
-one colour and OFF events another, on a dark background — the standard way to
-make an event stream legible.
+one colour and OFF events another, on a dark background.
 """
 
 import socket

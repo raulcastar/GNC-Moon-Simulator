@@ -5,7 +5,7 @@ lc_component_spad_camera:
     use_sim_time: true
 
     # ── Intensity stream ──────────────────────────────────────────────────────
-    # TCP server the UnrealSPADCam plugin (the Unreal project's Plugins/UnrealSPADCam/) connects to.
+    # TCP server the UnrealSPADCam plugin connects to.
     # Must match the plugin's ServerIp / ServerPort. Only 127.0.0.1 crosses into
     # WSL under mirrored networking, so bind 0.0.0.0 and let Unreal dial in.
     stream_bind_ip:                    0.0.0.0
@@ -58,9 +58,8 @@ lc_component_spad_camera:
     # frames = brighter, less noisy reconstruction.
     digitize_frames:                        64
 
-    # Readout rate: how often a binary frame + the digitised reconstruction are
-    # published (Hz). Matched to the navcam (component_stereo_depth
-    # image_reading_hz_rate = 1.0) so the sensors share a cadence.
+    # Readout rate: how often a binary frame and the digitised reconstruction
+    # are published (Hz).
     publish_rate_hz:                       1.0
 
     # spad/binary : raw single-photon frame (mono8, 0/255)

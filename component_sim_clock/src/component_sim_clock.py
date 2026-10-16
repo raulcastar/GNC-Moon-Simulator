@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-ROS 2 Lifecycle Node — the simulation clock (/clock) from Unreal.
+ROS 2 lifecycle node: the simulation clock (/clock) from Unreal.
 
-The UnrealSimClock plugin (the Unreal project's Plugins/UnrealSimClock/) keeps one clock for the
-whole simulation: Unreal's game time (it stops when Play is paused, follows
+The UnrealSimClock plugin keeps one clock for the whole simulation: Unreal's game time (it stops when Play is paused, follows
 time dilation), offset so it reads as nanoseconds since the Unix epoch and
 never runs backwards across Play sessions. Every sensor plugin stamps its data
 with it, and every world tick it sends the time here over TCP (the plugin

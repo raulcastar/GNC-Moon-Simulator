@@ -5,7 +5,7 @@ lc_component_path_planner:
     use_sim_time: true
 
     # ---------------------------------------------------------
-    # Map & Environment Configuration
+    # Maps
     # ---------------------------------------------------------
     elevation_map_path: "maps/procedural_lunar_terrain_1_elevationMap_2.csv"
     soil_map_path: "maps/procedural_lunar_terrain_1_soilMap_edges_0_2.csv"
@@ -14,27 +14,27 @@ lc_component_path_planner:
     max_tilt_deg: 25.0            # [deg] abort the goal above this body tilt (static tip-over: ~58 deg)
 
     # ---------------------------------------------------------
-    # Planning & Control Tuning
+    # Control and the DWA
     # ---------------------------------------------------------
-    control_rate_hz: 10.0         # The frequency of the DWA control loop
-    lookahead_dist: 4.0           # Distance to look ahead on the global path
+    control_rate_hz: 10.0         # [Hz] the control loop (mission + DWA)
+    lookahead_dist: 4.0           # [m] local goal this far along the route
     max_speed: 0.5                # [m/s] below the rover's ~0.6 m/s traction limit
     min_speed: 0.0                # [m/s]
     max_accel: 0.4                # [m/s^2] the rover node's accel limit (Earth gravity)
-    max_yaw_rate_deg: 12.0        # Degrees per second. Spot turns scrub and rock the rover: under Earth gravity
+    max_yaw_rate_deg: 12.0        # [deg/s] Spot turns scrub and rock the rover: under Earth gravity
                                   # 0.2 rad/s swings pitch ~4.5 deg, 0.35 ~8, 0.5 ~14 (the Moon needed 8 deg/s)
-    max_delta_yaw_rate_deg: 20.0  # Degrees per second squared (0.35 rad/s^2, below the rover node's 1.0)
+    max_delta_yaw_rate_deg: 20.0  # [deg/s^2] (0.35 rad/s^2, below the rover node's 1.0)
     v_resolution: 0.02            # < max_accel * dt (0.04), or only v = 0 is sampled; a DWA cycle ~10 ms
     yaw_rate_resolution_deg: 0.5
 
-    # DWA Prediction & Costs
+    # DWA prediction and costs
     dt: 0.1                       # [s]
     predict_time: 1.5             # [s]
     to_goal_cost_gain: 1.0
     speed_cost_gain: 1.0
     robot_stuck_flag_cons: 0.001
-    
-    # Robot Geometry (the DWA's footprint; the Unreal rover's body is ~0.63 m square)
+
+    # Rover geometry (the DWA's footprint; Leo_Raph's body is ~0.63 m square)
     robot_width: 0.65             # [m]
     robot_length: 0.65            # [m]
     robot_radius: 0.35            # [m] goal tolerance and the obstacle cells kept clear around the rover
@@ -76,12 +76,12 @@ lc_component_path_planner:
     max_stalls: 3
 
     # ---------------------------------------------------------
-    # Debug & Visualization
+    # Debug (a matplotlib window on the host display)
     # ---------------------------------------------------------
     enable_path_visualization: false
 
     # ---------------------------------------------------------
-    # Goal Reached tolerances
+    # Final approach
     # ---------------------------------------------------------
-    braking_distance: 4.5    # Start slowing down
-    stop_tolerance: 0.7      # Parking zone radius
+    braking_distance: 4.5    # [m] from the goal, the speed limit starts falling
+    stop_tolerance: 0.7      # [m] goal reached within this distance

@@ -58,7 +58,7 @@ from src.mission import Mission, MissionSettings
 from src.planner_maps import load_planner_maps
 from src.ros_conversions import finite_cost_map, matrix_msg, path_msg
 
-# Suppress Matplotlib GUI warnings during live ROS 2 execution
+# Matplotlib's GUI warnings, from the optional debug plots.
 warnings.filterwarnings("ignore")
 
 # A Play/Stop in Unreal teleports the rover to its start pose: an odometry
@@ -67,6 +67,7 @@ SESSION_JUMP_M = 2.0
 
 
 class LifecyclePlannerController(rclpy.lifecycle.Node):
+    """Path planner node: the mission, global and local planners on ROS topics."""
 
     def __init__(self, node_name: str, **kwargs):
         super().__init__(node_name, **kwargs)
@@ -250,7 +251,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
     def goal_pose_callback(self, msg: PoseStamped) -> None:
         """A new goal: stop and plan to it."""
         goal = [msg.pose.position.x, msg.pose.position.y]
-        self.get_logger().info(f"Waypoint update received: [{goal[0]:.2f}, {goal[1]:.2f}]. Suspending kinematics.")
+        self.get_logger().info(f"New goal: [{goal[0]:.2f}, {goal[1]:.2f}].")
         self._stop_robot()
         with self._lock:
             event = self.mission.set_goal(goal)
@@ -396,7 +397,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
 
     def get_matrices_callback(self, request, response):
         """The cost and elevation maps, for a UI that asks for them."""
-        self.get_logger().info("Map Service called. Packaging matrices for UI.")
+        self.get_logger().info("get_matrices: sending the cost and elevation maps.")
         if self.maps is not None:
             response.cost_map = matrix_msg(finite_cost_map(self.maps.cost))
             response.elevation_map = matrix_msg(self.maps.elevation)
@@ -461,7 +462,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
 
     def on_configure(self, state: State) -> TransitionCallbackReturn:
         """Loads the maps, builds the planners and the mission, creates the interfaces."""
-        self.get_logger().info("Lifecycle transition: CONFIGURED. Standing by for UI coordinates.")
+        self.get_logger().info("Lifecycle transition: CONFIGURED.")
         if self._param('lidar_mount_from_tf'):
             self._lidar_mount_from_tf()
         share = get_package_share_directory('component_path_planner')
@@ -471,7 +472,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
                 os.path.join(share, self._param('soil_map_path')),
                 self._param('global_res'), self._param('slope_threshold'))
         except Exception as e:
-            self.get_logger().error(f"Matrix parsing failure: {e}")
+            self.get_logger().error(f"Loading the maps failed: {e}")
             return TransitionCallbackReturn.FAILURE
         if self._param('enable_path_visualization'):
             debug_plots.preview_maps(self.maps.elevation, self.maps.cost)
@@ -505,7 +506,7 @@ class LifecyclePlannerController(rclpy.lifecycle.Node):
 
     def on_activate(self, state: State) -> TransitionCallbackReturn:
         """Starts the control loop and announces an idle mission."""
-        self.get_logger().info("Lifecycle transition: ACTIVE. Listening for UI goals.")
+        self.get_logger().info("Lifecycle transition: ACTIVE.")
         if self._pub_goal_reached and self._pub_goal_reached.is_activated:
             self._pub_goal_reached.publish(Bool(data=False))
         self._control_timer = self.create_timer(1.0 / self._param('control_rate_hz'), self.control_loop_callback)

@@ -7,11 +7,10 @@ lc_component_imu:
     # ── Simulated IMU derived from /odom (Unreal pose telemetry) ──────────────
     # The rover node publishes Unreal's pose as nav_msgs/Odometry; this node
     # differentiates it into a sensor_msgs/Imu. Orientation passes straight
-    # through from odom, so when the rover starts publishing real roll/pitch this
-    # IMU reports them automatically.
+    # through from odom.
 
     # Surface gravity: must match Unreal's (Project Settings > Physics >
-    # Default Gravity Z, now Earth: -980 cm/s^2). Moon = 1.62 m/s^2.
+    # Default Gravity Z: Earth, -980 cm/s^2). Moon = 1.62 m/s^2.
     # A level, stationary accelerometer reads (0, 0, +gravity).
     gravity:            9.81
 
@@ -32,5 +31,5 @@ lc_component_imu:
     gyro_noise_std:     0.0     # rad/s
 
     # A pose gap larger than this (seconds) resets the differentiator instead of
-    # emitting a huge spike — covers Unreal Play/Stop teleports and dropouts.
+    # emitting a spike: Unreal Play/Stop teleports and dropouts.
     max_dt:             0.5

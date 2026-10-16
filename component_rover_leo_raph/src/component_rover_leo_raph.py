@@ -1,7 +1,7 @@
 """
-ROS 2 Lifecycle Node for Unreal Engine Rover Control and Odometry.
+ROS 2 lifecycle node: rover control and odometry for the Unreal rover.
 
-A bi-directional bridge between ROS 2 and the rover Blueprint in Unreal Engine.
+A bidirectional bridge between ROS 2 and the rover Blueprint in Unreal Engine.
 geometry_msgs/Twist commands on cmd_vel are ramped to the acceleration limits
 and sent as skid-steer wheel inputs; a background thread reads Unreal's pose
 telemetry and publishes it as nav_msgs/Odometry (REP-103: metres, right-handed,
@@ -25,7 +25,6 @@ import rclpy.lifecycle
 from rclpy.lifecycle import Publisher, State, TransitionCallbackReturn
 from rclpy.subscription import Subscription
 
-# Standard ROS 2 messages for kinematics and state estimation
 from geometry_msgs.msg import Twist, TransformStamped
 from tf2_ros import TransformBroadcaster
 from nav_msgs.msg import Odometry
@@ -185,38 +184,30 @@ def headlight_level(value) -> Optional[float]:
 
 class LifecycleRoverController(rclpy.lifecycle.Node):
     """
-    Lifecycle node handling the link with Unreal Engine (TCP, or legacy UDP).
-
-    Sends wheel commands and receives telemetry in a dedicated background
-    thread. Strictly enforces ROS 2 REP-103 standards for units and frames.
+    The link with Unreal (TCP, or legacy UDP): wheel commands out, telemetry in
+    on a background thread, published in REP-103 units and frames.
     """
 
     def __init__(self, node_name: str, **kwargs):
-        """
-        Initialize the LifecycleRoverController node and declare configurable parameters.
-
-        Args:
-            node_name (str): The designated name of the ROS 2 node.
-        """
         super().__init__(node_name, **kwargs)
-        
-        # ROS 2 Interfaces
+
+        # ROS 2 interfaces
         self._sub_cmd_vel: Optional[Subscription] = None
         self._sub_headlights: Optional[Subscription] = None
         self._sub_intensity: Optional[Subscription] = None
         self._pub_odom:    Optional[Publisher] = None
         self._tf: Optional[TransformBroadcaster] = None    # odom -> base_link
-        
-        # Rover State
+
+        # Rover state
         self.headlights_on: bool = False
         self.headlights_intensity: float = 1.0      # fraction of the Blueprint's intensity
         self._last_udp_telemetry: float = float("-inf")   # Detects a new Play session (UDP)
         # Last wheel command, so a headlights toggle can be resent in the full
         # drive-packet shape Unreal parses without disturbing motion.
         self._last_wheels: dict = {"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0}
-        # Slew-rate (acceleration) limiter state. A commanded velocity STEP
-        # (e.g. a manual `ros2 topic pub`, or any glitch) would otherwise become
-        # an instant wheel-speed jump and flip the rover; these ramp v and w.
+        # Acceleration limiter state: a velocity step (e.g. a manual
+        # `ros2 topic pub`) would otherwise jump the wheel speeds and can flip
+        # the rover, so v and w are ramped.
         self._v_cmd: float = 0.0
         self._w_cmd: float = 0.0
         self._last_cmd_t: Optional[float] = None
@@ -225,11 +216,10 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self._w_tgt: float = 0.0
         self._ramp_timer = None
         self._warned_no_stamp = False
-        
-        # Network Utilities: Transmission
+
+        # UDP transport: send and receive sockets, and the receive thread.
         self.udp_send_socket: Optional[socket.socket] = None
-        
-        # Network Utilities: Reception & Threading
+
         self.udp_recv_socket: Optional[socket.socket] = None
         self._listen_thread:  Optional[threading.Thread] = None
         self._keep_listening: bool = False
@@ -241,7 +231,7 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self.tcp_server: Optional[socket.socket] = None
         self.tcp_port: int = 3003
         self._decoder = json.JSONDecoder()
-        
+
         # Runtime configuration defaults
         self.target_ip: str = "127.0.0.1"
         self.target_port: int = 3002
@@ -254,7 +244,6 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self._autodetect_target: bool = False
         self._target_learned: bool = False
 
-        # Declare ROS 2 Parameters for dynamic configuration
         self.declare_parameters(
             namespace='',
             parameters=[
@@ -269,11 +258,9 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
                 ('tcp_port',     rclpy.Parameter.Type.INTEGER),
             ])
 
-        # Acceleration limits (declared with defaults so an older params.yaml
-        # without them still starts). A step command is ramped to these rates
-        # instead of jumping, which is what stops the rover tipping on a hard
-        # launch. The path planner already ramps at ~0.4 m/s^2, so a slightly
-        # higher cap here is a safety net that leaves normal driving untouched.
+        # Acceleration limits: a step command is ramped to these rates, so a hard
+        # launch cannot tip the rover. The planner ramps on its own; these are
+        # the safety net for any other command source.
         self.declare_parameter('max_linear_accel', 0.6)    # m/s^2
         self.declare_parameter('max_angular_accel', 1.5)   # rad/s^2
         self.declare_parameter('max_linear_decel', 0.4)    # m/s^2
@@ -313,7 +300,7 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
 
 
     # =========================================================================
-    # Kinematics & Coordinate Transformation Helpers
+    # Kinematics
     # =========================================================================
 
     @staticmethod
@@ -362,18 +349,15 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
 
     def twist_to_wheels(self, v: float, w: float) -> dict:
         """
-        Computes Inverse Kinematics for a 4-wheel skid-steer/differential vehicle.
-
-        v [m/s], w [rad/s] -> Unreal wheel inputs. rover_width is the effective
+        Skid-steer inverse kinematics: v [m/s], w [rad/s] -> Unreal wheel inputs. rover_width is the effective
         (slip-calibrated) track in metres; wheel_speed_scale converts m/s to
         wheel input units.
         """
-        # Compute individual side velocities based on chassis track width
         k = self.wheel_speed_scale
         vel_left  = k * (v - (w * self.rover_width / 2.0))
         vel_right = k * (v + (w * self.rover_width / 2.0))
-        
-        # Apply mechanical inversion (negative input = forward motion in UE blueprint)
+
+        # Negative input = forward in the Blueprint.
         return {
             "FL": -vel_left,
             "BL": -vel_left,
@@ -388,7 +372,7 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
                 "headlights_intensity": headlight_wire_value(self.headlights_intensity)}
 
     # =========================================================================
-    # UDP Transmission
+    # Sending
     # =========================================================================
 
     def _resolve_target(self, sending_ip: str) -> None:
@@ -425,9 +409,9 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         otherwise keep its own default).
 
         The ramp is reset first. It runs on simulation time, which stands still
-        between Play sessions, so a ramp cut short by Stop (the rover still
-        driving) would otherwise carry on in the next session and spin the
-        wheels while the rover lands at spawn: it rolled over.
+        between Play sessions, so a ramp cut short by Stop would otherwise carry
+        on in the next session and spin the wheels while the rover lands at
+        spawn, which can roll it over.
         """
         self._v_cmd = self._w_cmd = 0.0
         self._v_tgt = self._w_tgt = 0.0
@@ -471,13 +455,11 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
                 throttle_duration_sec=10.0)
 
     # =========================================================================
-    # Core Callbacks & Background Threads
+    # Callbacks and the receive threads
     # =========================================================================
 
     def headlights_callback(self, msg: Bool) -> None:
-        """
-        Updates the internal state of the headlights based on incoming ROS 2 commands.
-        """
+        """Headlights on/off from headlights_cmd."""
         self.headlights_on = msg.data
         # Unreal reads the light state from the drive packet (FL/BL/FR/BR +
         # headlights_on), not from a standalone {"headlights_on": ...}, so send
@@ -505,24 +487,18 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self.get_logger().info(f"Headlight intensity: {level:.0%}.")
 
     def cmd_vel_callback(self, msg: Twist) -> None:
-        """
-        Processes incoming linear/angular velocity commands: sets the ramp's target and steps it.
-        """
-        # Set the target; _ramp_step applies the accel/decel limits.
+        """A cmd_vel twist becomes the ramp's target; _ramp_step applies the limits."""
         self._v_tgt = msg.linear.x
         self._w_tgt = msg.angular.z
         self._ramp_step()
 
     def _udp_receive_loop(self) -> None:
-        """
-        Background thread loop for handling incoming UDP telemetry asynchronously.
-        """
+        """Background thread: receives UDP telemetry and publishes it."""
         self.get_logger().info(f"Telemetry listener thread initialized on port {self.listen_port}.")
-        
+
         while self._keep_listening:
             try:
-                # 0.5s timeout prevents blocking indefinitely, allowing the thread 
-                # to regularly check the `_keep_listening` termination flag.
+                # The timeout lets the loop check _keep_listening.
                 self.udp_recv_socket.settimeout(0.5)
                 data, addr = self.udp_recv_socket.recvfrom(1024)
 
@@ -548,7 +524,6 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
                 self._publish_telemetry(data)
 
             except socket.timeout:
-                # Expected timeout; loop repeats to evaluate `_keep_listening`
                 continue
             except Exception as e:
                 if self._keep_listening:
@@ -631,7 +606,7 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         # Velocities, when the Blueprint sends them: straight from the physics
         # body, so the IMU differentiates them once instead of the pose twice.
         # A non-zero twist covariance marks the twist as measured; without the
-        # fields it stays all zero (unknown), as before.
+        # fields it stays all zero (unknown).
         if all(k in transform for k in _TWIST_KEYS):
             o = odom_msg.pose.pose.orientation
             lin, ang = twist_from_telemetry(transform, (o.x, o.y, o.z, o.w))
@@ -656,7 +631,7 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self._tf.sendTransform(t)
 
     # =========================================================================
-    # TCP Transport
+    # TCP transport
     # =========================================================================
 
     def _tcp_accept(self) -> None:
@@ -707,9 +682,10 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         Hold one TCP link to Unreal, carrying commands out and telemetry back.
 
         TCP needs no send address: replies come back on the established
-        connection, so neither side has to know the other's IP. That removes the
-        whole class of failure the UDP path suffers under WSL2 mirrored
-        networking. Frames are newline-delimited JSON.
+        connection, so neither side has to know the other's IP (the failure the
+        UDP path suffers under WSL2 mirrored networking). Commands go out as
+        newline-delimited JSON; telemetry is parsed object by object
+        (_drain_frames), since Unreal sends no delimiter.
 
         tcp_role decides who dials: 'server' (we listen, Unreal connects) or
         'client' (we connect to a listening Unreal).
@@ -765,13 +741,10 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
             self.tcp_server = None
 
     # =========================================================================
-    # Lifecycle Transition Callbacks
+    # Lifecycle transitions
     # =========================================================================
 
     def on_configure(self, state: State) -> TransitionCallbackReturn:
-        """
-        Transition callback for node configuration.
-        """
         self.get_logger().info("Lifecycle state transition: CONFIGURED.")
 
         self.target_port = self.get_parameter('sending_port').value
@@ -811,14 +784,14 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
                 f"Transport: TCP, {where}. Telemetry returns on the same "
                 f"connection, so no send address is needed.")
         else:
-            # Initialize Transmission Socket (Unbound UDP Datagram)
+            # Send socket (unbound).
             try:
                 self.udp_send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             except socket.error as e:
                 self.get_logger().error(f"Failed to allocate UDP transmission socket: {e}")
                 return TransitionCallbackReturn.FAILURE
 
-            # Initialize Reception Socket (Bound to targeted listening port)
+            # Receive socket, bound to listen_port.
             try:
                 self.udp_recv_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 self.udp_recv_socket.bind((self.listen_ip, self.listen_port))
@@ -827,17 +800,15 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
                     f"Failed to bind UDP reception socket on port {self.listen_port}: {e}")
                 return TransitionCallbackReturn.FAILURE
 
-        # Send initial commands
+        # Start stopped, with the configured lights.
         self._send({"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0, **self._lights()}, "initial stop")
 
-        # Allocate standard pub/sub endpoints
         self._pub_odom    = self.create_lifecycle_publisher(Odometry, 'odom', 10)
         if self.get_parameter('publish_tf').value:
             self._tf = TransformBroadcaster(self)
         self._sub_cmd_vel = self.create_subscription(Twist, 'cmd_vel', self.cmd_vel_callback, 10)
         self._ramp_timer  = self.create_timer(0.05, self._ramp_tick)
 
-        # Allocate headlights subscription
         self._sub_headlights = self.create_subscription(Bool, 'headlights_cmd', self.headlights_callback, 10)
         self._sub_intensity = self.create_subscription(
             Float32, 'headlights_intensity', self.headlights_intensity_callback, 10)
@@ -845,12 +816,9 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         return TransitionCallbackReturn.SUCCESS
 
     def on_activate(self, state: State) -> TransitionCallbackReturn:
-        """
-        Transition callback for node activation.
-        """
         self.get_logger().info("Lifecycle state transition: ACTIVE.")
-        
-        # Ignite the background listening thread natively
+
+        # The receive thread (TCP link or UDP telemetry).
         self._keep_listening = True
         loop = self._tcp_loop if self.transport == 'tcp' else self._udp_receive_loop
         self._listen_thread = threading.Thread(target=loop, daemon=True)
@@ -859,23 +827,20 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         return super().on_activate(state)
 
     def on_deactivate(self, state: State) -> TransitionCallbackReturn:
-        """
-        Transition callback for node deactivation.
-        """
         self.get_logger().info("Lifecycle state transition: DEACTIVATED.")
-        
-        # 1. Dispatch absolute zero velocities to enforce a hardware/simulation halt
+
+        # Stop the rover.
         self._send({"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0,
                     "headlights_on": False,
                     "headlights_intensity": headlight_wire_value(self.headlights_intensity)},
                    "stop")
-        # Sent zeros directly, bypassing the ramp — zero its state too so the
-        # next command ramps from a standstill instead of a phantom velocity.
+        # The zeros bypassed the ramp: reset it so the next command ramps from
+        # a standstill.
         self._v_cmd = self._w_cmd = 0.0
         self._v_tgt = self._w_tgt = 0.0
         self._last_cmd_t = None
 
-        # 2. Assert thread termination and await its graceful exit (max 1 second block)
+        # Stop the receive thread (waits at most 1 s).
         self._keep_listening = False
         if self._listen_thread and self._listen_thread.is_alive():
             self._listen_thread.join(timeout=1.0)
@@ -883,9 +848,6 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         return super().on_deactivate(state)
 
     def on_cleanup(self, state: State) -> TransitionCallbackReturn:
-        """
-        Transition callback for node cleanup.
-        """
         self.get_logger().info('Lifecycle state transition: CLEANING UP.')
 
         if self._ramp_timer:
@@ -894,7 +856,7 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
 
         if self._sub_cmd_vel:
             self.destroy_subscription(self._sub_cmd_vel)
-            
+
         if self._sub_headlights:
             self.destroy_subscription(self._sub_headlights)
 
@@ -917,12 +879,9 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         return TransitionCallbackReturn.SUCCESS
 
     def on_shutdown(self, state: State) -> TransitionCallbackReturn:
-        """
-        Transition callback for node shutdown.
-        """
         self.get_logger().info('Lifecycle state transition: SHUTTING DOWN.')
-        
-        # Terminate active threads if bypassing the 'deactivate' step
+
+        # Stop the receive thread, in case deactivate was skipped.
         self._keep_listening = False
         if self._listen_thread and self._listen_thread.is_alive():
             self._listen_thread.join(timeout=1.0)
@@ -953,15 +912,12 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
 
 
 def main():
-    """
-    Entry point for the executable. 
-    """
     rclpy.init()
 
     executor = rclpy.executors.SingleThreadedExecutor()
     lc_node  = LifecycleRoverController('lc_component_rover_leo_raph')
     executor.add_node(lc_node)
-    
+
     try:
         executor.spin()
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):

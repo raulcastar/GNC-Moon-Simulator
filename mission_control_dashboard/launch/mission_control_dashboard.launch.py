@@ -22,11 +22,11 @@ def rover_parameters(package):
 
 def generate_launch_description():
 
-    dashboard_node = launch_ros.actions.LifecycleNode(package='mission_control_dashboard', 
+    dashboard_node = launch_ros.actions.LifecycleNode(package='mission_control_dashboard',
         executable='mission_control_dashboard', name='mission_control_dashboard', namespace='', output='screen', emulate_tty=True, respawn=True,
         arguments=['--ros-args', '--log-level', "info"], parameters=rover_parameters('mission_control_dashboard'))
-    
-    # Make the cameras node take the 'configure' transition
+
+    # Configure the node at launch
     dashboard_node_configure_event = launch.actions.EmitEvent(
         event = launch_ros.events.lifecycle.ChangeState(
             lifecycle_node_matcher = launch.events.matches_action(dashboard_node),
@@ -34,7 +34,7 @@ def generate_launch_description():
         )
     )
 
-    # Make the cameras node node take the 'activate' transition
+    # Activate it once configured
     dashboard_node_trans_event = launch.actions.EmitEvent(
         event = launch_ros.events.lifecycle.ChangeState(
             lifecycle_node_matcher = launch.events.matches_action(dashboard_node),
@@ -52,15 +52,13 @@ def generate_launch_description():
         )
     )
 
-    
+
     return LaunchDescription([
-        # Set env var to print messages colored. The ANSI color codes will appear in a log.
+        # Coloured console output.
         SetEnvironmentVariable('RCUTILS_COLORIZED_OUTPUT', '1'),
 
-        # Start Nodes
         dashboard_node,
 
-        #activate system
         dashboard_node_configure_event,
         active_state_handler,
     ])

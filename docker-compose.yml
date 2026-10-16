@@ -111,9 +111,9 @@ services:
     volumes:
       - ./component_imu:/opt/ros/jazzy/src/component_imu
 
-  # The rover's frames: urdf/leo_raph.urdf (exported from the Unreal Blueprint by
-  # component_robot_description/unreal/export_rover_urdf.py) published as static
-  # TF by robot_state_publisher. odom -> base_link comes from the rover node.
+  # The rover's frames: urdf/<GNC_ROVER>.urdf (exported from the Unreal Blueprint
+  # by component_robot_description/unreal/export_rover_urdf.py) published as
+  # static TF by robot_state_publisher. odom -> base_link comes from the rover node.
   component_robot_description:
     <<: *ros-node
     environment:

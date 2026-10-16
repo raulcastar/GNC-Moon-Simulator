@@ -1,8 +1,8 @@
 """
-ROS 2 Lifecycle Node for the UnrealLidarCam lidar.
+ROS 2 lifecycle node for the UnrealLidarCam lidar.
 
-Serves the UnrealLidarCam Unreal plugin (the Unreal project's Plugins/UnrealLidarCam/): a ray-traced
-lidar with a configurable horizontal / vertical aperture, mounted on a camera or
+Serves the UnrealLidarCam plugin: a lidar with a configurable horizontal and
+vertical aperture (GPU depth captures or line traces), mounted on a camera or
 anywhere on the rover, that streams whole scans over TCP (`port`, default 3007).
 
 Each scan is published as an organized sensor_msgs/PointCloud2 on `topic`
@@ -12,13 +12,8 @@ width = beams per channel, fields x, y, z, intensity (float32), ring, column
 NaN where a beam returns nothing. The wire layout of a point is the PointCloud2
 layout, so a scan is republished without per-point work.
 
-Architecture:
-    - Inherits from rclpy.lifecycle.Node for managed state transitions.
-    - A daemon thread runs the TCP server (blocking I/O off the executor) and
-      re-accepts after every Unreal Play/Stop.
-
-(Replaces the MetaLidar / Velodyne VLP-16 UDP input, which the simulator no
-longer uses.)
+A daemon thread runs the TCP server (blocking I/O off the executor) and
+re-accepts after every Unreal Play/Stop.
 """
 
 import socket
@@ -37,7 +32,7 @@ from sensor_msgs.msg import PointCloud2, PointField
 class LidarCamReceiver:
     """
     TCP server for the UnrealLidarCam plugin: one packet per scan, a 48-byte
-    header then point_count x 20-byte points (see the Unreal project's Plugins/UnrealLidarCam).
+    header then point_count x 20-byte points (the plugin's docs/wire-format.md).
     Calls `on_scan(header, payload)` for every complete scan. Re-accepts after
     each Play/Stop; runs on a daemon thread.
     """
@@ -177,7 +172,7 @@ class LifecycleUnrealLidarCam(rclpy.lifecycle.Node):
         self._pub_cloud.publish(msg)
 
     # -------------------------------------------------------------------------
-    # ROS 2 Lifecycle Management Overrides
+    # Lifecycle transitions
     # -------------------------------------------------------------------------
 
     def on_configure(self, state: State) -> TransitionCallbackReturn:

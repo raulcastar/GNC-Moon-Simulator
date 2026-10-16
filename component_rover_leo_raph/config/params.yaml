@@ -6,12 +6,11 @@ lc_component_rover_leo_raph:
 
     # udp | tcp
     #
-    # tcp carries commands and telemetry on one bidirectional connection. Replies
-    # come back the way they came, so neither side needs the other's address —
-    # which removes every failure mode the UDP path has under WSL2 mirrored
-    # networking. Frames are newline-delimited JSON.
+    # tcp carries commands and telemetry on one bidirectional connection, so
+    # neither side needs the other's address (the UDP path's weak point under
+    # WSL2 mirrored networking). Messages are JSON objects.
     #
-    # udp keeps the original two-socket scheme (sending_port out, listen_port in).
+    # udp is the legacy two-socket scheme (sending_port out, listen_port in).
     transport:                           tcp
 
     # Who dials. Unreal's TCP component connects out, so this side listens.
@@ -23,10 +22,8 @@ lc_component_rover_leo_raph:
     # Where Unreal's UDP plugin listens for drive commands.
     #
     # 127.0.0.1 is correct under WSL2 mirrored networking: datagrams sent there
-    # from the container reach the Unreal process on the Windows host. Verified
-    # by counters — Windows logs the datagrams as received on a listening port.
-    # Do not use the host's LAN address: mirrored networking makes it ambiguous
-    # between Windows and WSL, and packets are lost.
+    # from the container reach Unreal on the Windows host. The host's LAN
+    # address is ambiguous between Windows and WSL, and loses packets.
     #
     # 0.0.0.0 means autodetect (take Unreal's address from the source of its
     # telemetry). It only works once Unreal actually sends telemetry, so it is
@@ -57,7 +54,7 @@ lc_component_rover_leo_raph:
     headlights_intensity:               1.0
 
 
-    # Acceleration limits: a commanded velocity STEP (manual `ros2 topic pub`,
+    # Acceleration limits: a commanded velocity step (manual `ros2 topic pub`,
     # the planner, teleop) is ramped to these rates instead of jumping (per
     # simulated second). Earth gravity (Unreal DefaultGravityZ -980). Under Moon
     # gravity (-162) the wheels' reaction lifted the light body: 0.6 m/s^2 to

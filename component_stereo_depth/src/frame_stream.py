@@ -18,13 +18,12 @@ import numpy as np
 
 class FrameStreamReceiver:
     """
-    TCP server for the UnrealStereoCam plugin (the Unreal project's Plugins/UnrealStereoCam/).
+    TCP server for the UnrealStereoCam plugin.
 
-    Unreal renders the navcams with each frame and pushes them here over one
-    connection, so nothing is rendered on demand and the game thread never
-    stalls. Packets are 24-byte-header BGRA frames tagged with
-    Unreal's frame counter; captures enqueued in one tick share a tag, which
-    is what lets left/right be paired as a rigid stereo view.
+    Unreal pushes the navcam frames here, read back asynchronously so the game
+    thread never stalls. Packets are BGRA (or R32F depth) frames tagged with
+    Unreal's frame counter; captures of one tick share a tag, which is what
+    lets left/right be paired as a rigid stereo view.
 
     Runs a background thread; survives Play/Stop cycles by re-accepting.
     Several UnrealStereoCam components may connect at once (e.g. the navcam
@@ -72,8 +71,8 @@ class FrameStreamReceiver:
         """
         Newest frame id present for BOTH eyes, with the nearest centre frame.
 
-        Returns (left, right, center, frame_id, age_s) or None. The eyes must
-        match exactly — that is the rigid-pair guarantee. The centre tolerates
+        Returns (left, right, center, frame_id, age_s, stamp_ns) or None. The
+        eyes must match exactly: that is the rigid-pair guarantee. The centre tolerates
         a small offset: it is not matched against anything, only overlaid.
         """
         with self._lock:
@@ -161,8 +160,8 @@ class FrameStreamReceiver:
 
     def _read_stream(self, conn: socket.socket) -> None:
         conn.settimeout(0.5)
-        # A bytearray grows in place: with bytes, every read copied the whole
-        # partial frame again (a 1.2 MB frame arrives in many reads).
+        # A bytearray grows in place; bytes would copy the whole partial frame
+        # on every read (a 1.2 MB frame arrives in many reads).
         buf = bytearray()
         while not self._stop.is_set():
             try:

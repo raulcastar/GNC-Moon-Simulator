@@ -980,9 +980,8 @@ function drawOverlay() {
     const x = currentPose.x/mapRes, y = mapH - currentPose.y/mapRes;
     if (currentPose.yaw !== undefined) {
       // Heading arrow. Screen y is down, world +y is up, so the y term is
-      // negated — same convention the paths above use (y = mapH - y_world).
-      // Odom now carries a clean REP-103 heading (fixed at the rover node), so
-      // the reported yaw is the travel direction directly — no correction.
+      // negated, as for the paths above (y = mapH - y_world). Odom's heading is
+      // REP-103, so yaw is the travel direction.
       const a = currentPose.yaw * Math.PI / 180;
       const dx = Math.cos(a), dy = -Math.sin(a);
       const L = 26*kr, hl = 12*kr, hw = 7*kr;    // shaft length, head length, head half-width

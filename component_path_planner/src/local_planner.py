@@ -18,9 +18,9 @@ Each control cycle, command():
     so it parks instead of overshooting or spinning over it.
 
 Keeping a distance from rocks is the global route's job (planned with a
-clearance); the DWA only refuses to hit them. A cost that grows as the rover
-nears a rock outweighs the speed the window offers from rest (max_accel * dt),
-which left the rover stopped beside rocks for good.
+clearance); the DWA only refuses to hit them. A cost growing as the rover
+nears a rock would outweigh the speed the window offers from rest
+(max_accel * dt) and leave the rover stopped beside rocks.
 """
 
 import math

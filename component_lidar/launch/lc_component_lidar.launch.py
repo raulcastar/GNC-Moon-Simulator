@@ -19,11 +19,11 @@ def generate_launch_description():
         'params.yaml'
     )
 
-    lidar_node = launch_ros.actions.LifecycleNode(package='component_lidar', 
+    lidar_node = launch_ros.actions.LifecycleNode(package='component_lidar',
         executable='lc_component_lidar', name='lc_component_lidar', namespace='', output='screen', emulate_tty=True, respawn=True,
         arguments=['--ros-args', '--log-level', "info"], parameters = [yaml_config])
-    
-    # Make the lidar node take the 'configure' transition
+
+    # Configure the node at launch
     lidar_node_configure_event = launch.actions.EmitEvent(
         event = launch_ros.events.lifecycle.ChangeState(
             lifecycle_node_matcher = launch.events.matches_action(lidar_node),
@@ -31,7 +31,7 @@ def generate_launch_description():
         )
     )
 
-    # Make the lidar node take the 'activate' transition
+    # Activate it once configured
     lidar_node_activate_event = launch.actions.EmitEvent(
         event = launch_ros.events.lifecycle.ChangeState(
             lifecycle_node_matcher = launch.events.matches_action(lidar_node),
@@ -49,15 +49,13 @@ def generate_launch_description():
         )
     )
 
-    
+
     return LaunchDescription([
-        # Set env var to print messages colored. The ANSI color codes will appear in a log.
+        # Coloured console output.
         SetEnvironmentVariable('RCUTILS_COLORIZED_OUTPUT', '1'),
 
-        # Start Nodes
         lidar_node,
 
-        #activate system
         lidar_node_configure_event,
         active_state_handler,
     ])

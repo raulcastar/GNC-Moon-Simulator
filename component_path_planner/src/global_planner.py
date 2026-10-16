@@ -56,6 +56,8 @@ class Clearance:
 
 
 class GlobalPlanner:
+    """Routes over the planner maps with fast marching; see the module docstring."""
+
     def __init__(self, maps: PlannerMaps, resolution: float, slope_threshold: float,
                  clearance: Clearance, log=None):
         self.maps = maps
@@ -116,7 +118,7 @@ class GlobalPlanner:
             goal = snapped
             used_goal = [goal[0] * res, goal[1] * res]
 
-        self.log.info(f"Computing global trajectory from {start} to {goal}...")
+        self.log.info(f"Planning a route from {start} to {goal}...")
         T = self.search.travel_time(cost, obstacles, goal, start)
         if not np.isfinite(T[start[1], start[0]]):
             return Route(False, reason='goal not reachable', message=(
@@ -126,7 +128,7 @@ class GlobalPlanner:
             return Route(False, reason='no path to the goal', message=(
                 f"Pathfinding failed: no route to {goal} could be traced."))
         return Route(True, path * res, used_goal, message=(
-            f"Global trajectory resolved with {len(path)} waypoints. Resuming kinematic control."))
+            f"Route found: {len(path)} waypoints."))
 
 
 # =============================================================================

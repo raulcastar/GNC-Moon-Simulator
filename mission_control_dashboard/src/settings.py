@@ -12,11 +12,9 @@ LIDAR_MIN_PERIOD = 1.0        # seconds between lidar frames
 ODOM_MIN_PERIOD = 0.15        # seconds between telemetry emits
 GRID_MIN_PERIOD = 1.0         # seconds between local DEM frames
 DEM_MAX_CELLS = 160           # max DEM cells per side sent to the browser
-# The driven-trajectory Path grows without bound as the rover moves. Relaying
-# every pose meant an ever-larger payload each update, and the browser re-drew
-# the whole polyline on every odom tick — O(N) with N climbing, which is what
-# made the machine crawl over a long run. Decimate to a fixed budget (the trail
-# shape is preserved) and throttle. Bounds payload and client redraw cost.
+# The driven-trajectory Path grows without bound, and the browser redraws the
+# whole polyline on every update: decimate it to a fixed budget (the shape is
+# kept) and throttle, which bounds both the payload and the redraw cost.
 TRAJ_MAX_POINTS = 1500        # points per driven-path push (decimated)
 TRAJ_MIN_PERIOD = 0.5         # seconds between driven-path frames
 # The event and SPAD cameras publish at ~30 Hz. Relaying every frame to the

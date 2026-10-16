@@ -1,17 +1,16 @@
 """
-ROS 2 Lifecycle Node for the simulated single-photon (SPAD) camera.
+ROS 2 lifecycle node for the simulated single-photon (SPAD) camera.
 
-Receives 8-bit intensity frames pushed by the UnrealSPADCam plugin
-(the Unreal project's Plugins/UnrealSPADCam/) over TCP, runs the spadSim photon model on each frame
-(see spad_model.py — ported from spadSim, MIT, (c) 2025 David Rodriguez-Martinez),
-and publishes:
+Receives the 8-bit intensity frames the UnrealSPADCam plugin pushes over TCP,
+runs the spadSim photon model on each (spad_model.py, ported from spadSim, MIT,
+(c) 2025 David Rodriguez-Martinez), and publishes:
 
   * spad/binary — the raw single-photon binary frame (mono8, 0/255)
   * spad/image  — a digitised reconstruction: the last `digitize_frames` binary
                   frames summed and scaled to grayscale, which is how a SPAD's
                   usable image is built up from sparse photon detections.
 
-Wire format from the plugin (little-endian), matching the Unreal project's Plugins/UnrealSPADCam:
+Wire format (little-endian), as in the UnrealSPADCam plugin's docs/wire-format.md:
 
     header  'SPD0' | ver u8 | cam_id u8 | width u16 | height u16
             | t_ns u64 | payload u32 (= width*height) | pad u16    (24 bytes)
@@ -305,8 +304,8 @@ class LifecycleSpadCamera(rclpy.lifecycle.Node):
             acc, denom = self._accum_sum, len(self._accum)
         else:
             # 'subframes': integrate digitize_frames fresh exposures of the
-            # current intensity per readout (a SPAD integrating between readouts).
-            # Rich reconstruction even at a low, navcam-matched readout rate.
+            # current intensity per readout (a SPAD integrating between readouts),
+            # which gives a full reconstruction even at a low readout rate.
             acc, bits = self._model.sample_sum(frame, self._digitize_frames)
             denom = self._digitize_frames
 

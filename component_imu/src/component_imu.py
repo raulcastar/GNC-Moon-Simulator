@@ -1,28 +1,25 @@
 #!/usr/bin/env python3
 """
-ROS 2 Lifecycle Node — Simulated IMU from Unreal telemetry (via /odom).
+ROS 2 lifecycle node: a simulated IMU from Unreal's telemetry (via /odom).
 
 The rover node (component_rover_leo_raph) turns Unreal Engine's pose telemetry
 into nav_msgs/Odometry. This node turns that pose stream into a sensor_msgs/Imu
 the way a strap-down IMU would report it:
 
-  orientation          — the rover attitude, straight from odom (REP-103 frame).
-                         Whatever orientation odom carries flows through, so once
-                         the rover publishes real roll/pitch this IMU gets them
-                         for free — no change here.
-  angular_velocity     — body-frame rates from the quaternion time-derivative.
-  linear_acceleration  — body-frame specific force: proper acceleration minus
-                         gravity, i.e. what an accelerometer physically reads.
-                         At rest and level this is (0, 0, +g).
+  orientation          the rover attitude, straight from odom (REP-103).
+  angular_velocity     body-frame rates (the measured twist, or the quaternion's
+                       time derivative).
+  linear_acceleration  body-frame specific force: proper acceleration minus
+                       gravity, what an accelerometer reads; (0, 0, +g) at rest
+                       and level.
 
 When the rover Blueprint also sends the physics body's velocities, the rover
 node fills odom's twist (marked by a non-zero twist covariance). The gyro is
 then that angular velocity, and the acceleration is one difference of that
 velocity rather than two of the position. Without them, everything is a finite
-difference of the pose. Either way an EMA smoothing factor and optional
-Gaussian noise make the signal behave like hardware instead of a perfect
-analytic value. A pose gap (e.g. an Unreal Play/Stop teleport) resets the
-differentiator so it does not emit a huge spurious spike.
+difference of the pose. Either way EMA smoothing and optional Gaussian noise
+make the signal behave like hardware. A pose gap (e.g. an Unreal Play/Stop
+teleport) resets the differentiator, so it emits no spurious spike.
 
 Publishes: imu/data (sensor_msgs/Imu) in frame `imu_frame_id`.
 """
@@ -190,8 +187,8 @@ class LifecycleImu(rclpy.lifecycle.Node):
         if self._t_prev is not None:
             dt = t - self._t_prev
             if dt <= 1e-4 or dt > self.max_dt:
-                # Duplicate stamp or a gap/teleport (Unreal Play-Stop): drop the
-                # differentiator so we never emit a giant spurious spike.
+                # Duplicate stamp, or a gap or teleport (Unreal Play/Stop): reset
+                # the differentiator rather than emit a spike.
                 self._reset()
             else:
                 if not measured:
@@ -239,8 +236,7 @@ class LifecycleImu(rclpy.lifecycle.Node):
         imu.angular_velocity = Vector3(x=float(g_out[0]), y=float(g_out[1]), z=float(g_out[2]))
         imu.linear_acceleration = Vector3(x=float(a_out[0]), y=float(a_out[1]), z=float(a_out[2]))
 
-        # Diagonal covariances. Orientation roll/pitch are only as good as odom's
-        # (yaw-only until the rover publishes real tilt), so they are marked loose.
+        # Diagonal covariances; orientation is as good as odom's.
         imu.orientation_covariance = [0.05, 0.0, 0.0,
                                       0.0, 0.05, 0.0,
                                       0.0, 0.0, 0.01]

@@ -14,10 +14,8 @@ lc_component_stereo_depth:
     image_reading_hz_rate:                10.0
 
     # ── Frame stream ──────────────────────────────────────────────────────────
-    # Frames are pushed by the UnrealStereoCam plugin (the Unreal project's Plugins/UnrealStereoCam/)
-    # to this TCP server: captures render with the game frame and reach this node
-    # with no game-thread stall. Left/right are paired by Unreal's frame counter,
-    # so both eyes always come from the same world tick.
+    # The UnrealStereoCam plugin pushes frames to this TCP server. Left/right are
+    # paired by Unreal's frame counter, so both eyes come from the same tick.
     stream_bind_ip:                    0.0.0.0
     stream_port:                          3004
 
@@ -26,9 +24,9 @@ lc_component_stereo_depth:
     # central camera's pixel grid, so its depth, disparity, object mask and RGB
     # all overlay one another.
     #
-    # These are the UnrealStereoCam cam ids (its Left/Right/Center CamId).
-    # On startup this node logs where the central
-    # camera sits along the baseline: expect ~50%, ~0 cm off the eye-to-eye line.
+    # These are the UnrealStereoCam cam ids (its Left/Right/Center CamId). The
+    # node logs the solved rig, with the central camera's position on the
+    # baseline, when the first frames arrive.
     left_camera_id:                          1
     right_camera_id:                         2
     center_camera_id:                        0   # Navcam_Sensor
@@ -70,14 +68,14 @@ lc_component_stereo_depth:
     center_topic:               navcam/central
 
     # ── Rig geometry ──────────────────────────────────────────────────────────
-    # A stream cannot be measured, so BOTH ARE REQUIRED: set them to the
+    # A stream cannot be measured, so both are required: set them to the
     # UnrealStereoCam captures' real geometry.
     #   baseline_m  metres between the eyes
     #   hfov_deg    the captures' FOVAngle
     baseline_m:                            0.2   # metres between the eyes
     hfov_deg:                             90.0   # capture FOVAngle, degrees
 
-    # Centre camera's distance from the LEFT eye along the baseline, metres.
+    # Centre camera's distance from the left eye along the baseline, metres.
     # Negative = midpoint of the eyes.
     center_offset_m:                      -1.0
 
@@ -90,20 +88,19 @@ lc_component_stereo_depth:
     #   left border cost             num_disparities columns (see fill_left_border)
     #   matching time                linear in it
     #
-    # Depth nearer than the derived near limit is rejected; the node logs it.
-    # Surfaces closer still alias into the search range as plausible garbage.
+    # Depth nearer than the derived near limit is rejected (the node logs the
+    # limit); nearer surfaces would alias into the search range as false matches.
     #
     # With fx*B = 64 (20 cm baseline, 90°, 640 px):
     #   64  -> near 1.00 m, border 10% of the image
     #   128 -> near 0.50 m, border 20%
     #   224 -> near 0.29 m, border 35%
     #
-    # The navcams are horizontal at 0.4 m, so the bottom of the image sees ground
-    # at only ~0.53 m. At 64 (near 1.0 m) that whole near band is inside the blind
-    # zone and never matches — the "lower image doesn't work" symptom, and the
-    # source of the DEM's holes near the rover. 128 (near 0.5 m) resolves it; the
-    # extra border is recovered by fill_left_border. Raise to 160/192 if the very
-    # bottom rows still drop out (e.g. when the rover pitches forward).
+    # The bottom rows of the image see the ground close to the rover. At 64 that
+    # band is nearer than the limit and never matches, leaving holes in the DEM
+    # in front of the rover; 128 resolves it, and fill_left_border recovers the
+    # wider border. Raise to 160/192 if the bottom rows still drop out (e.g. when
+    # the rover pitches forward).
     num_disparities:                       128
 
     max_depth_m:                           6.0
@@ -128,8 +125,8 @@ lc_component_stereo_depth:
     fill_left_border:                     true
 
     # CLAHE on both images before matching. Recovers texture from near-clipped
-    # pixels, but not from a fully saturated highlight. Leave false to measure
-    # the raw glare penalty; true to see what a real pipeline could claw back.
+    # pixels, but not from a fully saturated highlight. Off measures the raw
+    # glare penalty; on shows what equalisation recovers.
     equalize_for_glare:                  false
 
     # ── Central camera products ───────────────────────────────────────────────

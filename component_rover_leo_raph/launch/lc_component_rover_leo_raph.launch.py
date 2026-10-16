@@ -23,11 +23,11 @@ def rover_parameters(package):
 def generate_launch_description():
 
 
-    rover_node = launch_ros.actions.LifecycleNode(package='component_rover_leo_raph', 
+    rover_node = launch_ros.actions.LifecycleNode(package='component_rover_leo_raph',
         executable='lc_component_rover_leo_raph', name='lc_component_rover_leo_raph', namespace='', output='screen', emulate_tty=True, respawn=True,
         arguments=['--ros-args', '--log-level', "info"], parameters = rover_parameters('component_rover_leo_raph'))
-    
-    # Make the cameras node take the 'configure' transition
+
+    # Configure the node at launch
     rover_node_configure_event = launch.actions.EmitEvent(
         event = launch_ros.events.lifecycle.ChangeState(
             lifecycle_node_matcher = launch.events.matches_action(rover_node),
@@ -35,7 +35,7 @@ def generate_launch_description():
         )
     )
 
-    # Make the cameras node node take the 'activate' transition
+    # Activate it once configured
     rover_node_trans_event = launch.actions.EmitEvent(
         event = launch_ros.events.lifecycle.ChangeState(
             lifecycle_node_matcher = launch.events.matches_action(rover_node),
@@ -53,15 +53,13 @@ def generate_launch_description():
         )
     )
 
-    
+
     return LaunchDescription([
-        # Set env var to print messages colored. The ANSI color codes will appear in a log.
+        # Coloured console output.
         SetEnvironmentVariable('RCUTILS_COLORIZED_OUTPUT', '1'),
 
-        # Start Nodes
         rover_node,
 
-        #activate system
         rover_node_configure_event,
         active_state_handler,
     ])

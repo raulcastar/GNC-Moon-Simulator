@@ -1,10 +1,11 @@
 """
-ROS 2 Lifecycle Node — Local DEM Mapping from Depth Camera.
+ROS 2 lifecycle node: a local DEM from the central navcam's stereo depth.
 
-  projectCameraCoord  — pixel (u, v) + depth d → camera frame (x_p, y_p, d)
-  rotateRefSystem     — camera frame → local world (x_w, y_w, z_w), accounting
-                        for camera tilt angle and physical mounting height
-  computeDEM          — bin (x_w, y_w) → 2-D grid, elevation = max z_w per cell
+Per depth frame: pixels to camera coordinates (pinhole), camera to a levelled
+local frame (mount tilt and height, rover roll and pitch), then binned into a
+grid with a robust maximum per cell. The stage names (projectCameraCoord,
+rotateRefSystem, computeDEM) follow the CameraTransform / MergedImage code this
+was ported from.
 
 Published topics
 ----------------
@@ -140,25 +141,23 @@ class CycleTimer:
 
 class LifecycleLocalMapping(rclpy.lifecycle.Node):
     """
-    Local DEM built from a single RealSense-style depth camera.
+    Local DEM from the central navcam's depth.
 
     Pipeline per depth frame
     ------------------------
-    1. projectCameraCoord (vectorised)
-       The depth topic carries planar Z-depth in metres.  z_cam = d
-       x_cam = px · z_cam   [lateral,  right +]   px = (u - cx)/fx
-       y_cam = py · z_cam   [vertical, down  +]   py = (v - cy)/fy
+    1. projectCameraCoord: the depth topic carries planar Z depth in metres.
+       z_cam = d,  x_cam = px · z_cam (right +),  y_cam = py · z_cam (down +),
+       with px = (u - cx)/fx and py = (v - cy)/fy.
 
-    2. rotateRefSystem (vectorised)  — ref: CameraTransform.rotateRefSystem
-       total = π/2 + camera_angle_rad
-       x_w   = x_cam                                    [lateral, unchanged]
-       y_w   = y_cam·cos(total) + z_cam·sin(total)      [horizontal forward]
-       z_w   = -y_cam·sin(total) + z_cam·cos(total) + camera_height_m  [elevation]
+    2. rotateRefSystem, with total = π/2 + camera angle + rover pitch:
+       x_w = x_cam                                         (lateral)
+       y_w = y_cam·cos(total) + z_cam·sin(total)           (forward)
+       z_w = -y_cam·sin(total) + z_cam·cos(total) + camera_height_m  (elevation)
+       then the camera and rover roll, about the forward axis.
 
-    3. computeDEM (vectorised)       — ref: MergedImage.computeDEM
-       Filter by distance_limit on both x_w and y_w.
-       x_offset = |min(x_w)|  (shift so all lateral indices ≥ 0)
-       DEM[x_idx, y_idx] = max z_w in that cell (obstacle-safe aggregation)
+    3. computeDEM: points within distance_limit, binned into a fixed grid
+       (x_offset = distance_limit centres the camera); each cell keeps its
+       (drop_highest + 1)-th highest point.
 
     4. Global frame for PointCloud2
        Points relative to the camera (REP-103: X=forward, Y=left, Z=up):
@@ -206,14 +205,13 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
                 ('use_camera_info',  rclpy.Parameter.Type.BOOL),
                 ('camera_fx',        rclpy.Parameter.Type.DOUBLE),
                 ('camera_fy',        rclpy.Parameter.Type.DOUBLE),
-                ('camera_cx',        rclpy.Parameter.Type.DOUBLE),  # = Cu in reference
-                ('camera_cy',        rclpy.Parameter.Type.DOUBLE),  # = Cv in reference
+                ('camera_cx',        rclpy.Parameter.Type.DOUBLE),
+                ('camera_cy',        rclpy.Parameter.Type.DOUBLE),
                 # Physical mounting
-                ('camera_height_m',  rclpy.Parameter.Type.DOUBLE),  # = phys_h in reference
+                ('camera_height_m',  rclpy.Parameter.Type.DOUBLE),
                 ('camera_angle',     rclpy.Parameter.Type.DOUBLE),  # degrees; 0 = horizontal
                 ('camera_roll',      rclpy.Parameter.Type.DOUBLE),  # degrees; lateral mounting tilt (usually 0)
-                # Camera optical centre relative to the odom origin, body frame (m).
-                # Defaults of 0 keep the previous behaviour.
+                # Camera optical centre relative to base_link, body frame (m).
                 ('camera_offset_forward_m', 0.0),
                 # The camera mount from TF overrides the camera_* values when found.
                 ('mount_from_tf', True),
@@ -228,8 +226,8 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
                 ('drop_highest',            0),
                 # DEM parameters
                 ('map_resolution',   rclpy.Parameter.Type.DOUBLE),  # metres per cell
-                ('distance_limit',   rclpy.Parameter.Type.DOUBLE),  # metres; mirrors reference
-                # Depth validity window (max is distance_limit — single source of truth)
+                ('distance_limit',   rclpy.Parameter.Type.DOUBLE),  # metres
+                # Depth validity window; its maximum is distance_limit.
                 ('min_valid_depth',  rclpy.Parameter.Type.DOUBLE),
                 ('depth_scale',      rclpy.Parameter.Type.DOUBLE),
                 # Elevation sanity window (metres, relative to the rover base at
@@ -237,10 +235,8 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
                 # outliers before they poison the max-per-cell DEM.
                 ('min_elevation',    rclpy.Parameter.Type.DOUBLE),
                 ('max_elevation',    rclpy.Parameter.Type.DOUBLE),
-                # Apply live rover roll/pitch (from /odom) to the DEM. OFF by
-                # default: the odom orientation is in a non-standard frame, so the
-                # extracted roll is garbage (~-84° on flat ground) and warps the
-                # DEM. The fixed camera tilt is handled by camera_angle instead.
+                # Level the points with the rover's roll and pitch from /odom,
+                # at each frame's capture time.
                 ('apply_rover_tilt', rclpy.Parameter.Type.BOOL),
                 ('debug_mode',       rclpy.Parameter.Type.BOOL),
                 ('debug_save_path',  rclpy.Parameter.Type.STRING),
@@ -350,7 +346,7 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         )
 
     # =========================================================================
-    # DEM computation — vectorised port of MergedImage.computeDEM (RealSense)
+    # DEM computation
     # =========================================================================
 
     def _compute_dem(self, depth_m: np.ndarray,
@@ -368,13 +364,12 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
 
         Returns
         -------
-        DEM      : ndarray (DEM_width, DEM_height) — max elevation per cell (m),
-                   NaN where no valid point landed.
+        DEM      : ndarray (DEM_width, DEM_height): elevation per cell (m),
+                   NaN where too few points landed.
         x_w_v    : ndarray (N,) — lateral world coord of each mapped point
         y_w_v    : ndarray (N,) — forward world coord of each mapped point
         z_w_v    : ndarray (N,) — elevation of each mapped point
-        x_offset : float — shift applied to x_w so all x grid indices are ≥ 0;
-                   matches `x_offset` in reference's computeDEM.
+        x_offset : float, shift applied to x_w so all x grid indices are ≥ 0.
         colors   : ndarray (N, 3) float32 RGB in [0, 1], or None.
         Returns (None, …) when there are no valid points this frame.
         """
@@ -407,26 +402,15 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         if d.size == 0:
             return None, None, None, None, None, None
 
-        # ── 2. projectCameraCoord (vectorised) ───────────────────────────────
-        # The depth topic carries planar Z depth (component_stereo_depth). Do not
-        # reintroduce a
-        # `/ sqrt(1 + px² + py²)` divide — on already-planar depth it pulls
-        # off-centre points toward the camera by 60% in the corners at 90° HFOV.
+        # ── 2. projectCameraCoord ────────────────────────────────────────────
+        # The depth is planar Z, not range: dividing by sqrt(1 + px² + py²) would
+        # pull off-centre points 60% toward the camera in the corners at 90° HFOV.
         z_cam = d               # planar Z-depth  (forward along optical axis)
         x_cam = px * z_cam      # lateral  (right +)
         y_cam = py * z_cam      # vertical (down  +)
 
-        # ── 3. rotateRefSystem (vectorised) ──────────────────────────────────
-        #   ref:
-        #     angle_radians = radians(camera_angle)
-        #     ref_rotation  = π/2
-        #     total         = ref_rotation + angle_radians
-        #     x_r =   x_p
-        #     y_r =   y_p * cos(total) + d * sin(total)
-        #     z_r = - y_p * sin(total) + d * cos(total) + phys_h
-        #
-        # rover_pitch tilts the combined sensor forward/backward:
-        #   total pitch = fixed camera mounting angle + live rover pitch from odom
+        # ── 3. rotateRefSystem ───────────────────────────────────────────────
+        # Total pitch: the camera's mounting angle plus the rover's pitch.
         total = math.pi / 2.0 + self._camera_angle_rad + rover_pitch
         cos_t = math.cos(total)
         sin_t = math.sin(total)
@@ -459,18 +443,14 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
                 f"distance_limit={self.distance_limit} m"
             )
 
-        # ── 4. Distance limit filter ──────────────────────────────────────────
-        #   ref: if(x_w < distance_limit and y_w < distance_limit)
-        #   We extend to both sides of the lateral axis via abs(x_w).
+        # ── 4. Distance and elevation limits ─────────────────────────────────
         in_range = (
             (np.abs(x_w) < self.distance_limit) &
             (y_w > 0.0) &
             (y_w < self.distance_limit) &
-            # Elevation sanity gate: stereo depth degrades as Z²/(fx·B) and, on a
-            # near-horizontal camera, a grazing ground pixel or a bad above-horizon
-            # match projects to a wildly wrong height. Those outliers otherwise win
-            # the max-per-cell reduction and spike the DEM. Keep only plausible
-            # ground/rock elevations relative to the rover base (z_w = 0).
+            # Stereo error grows as Z²/(fx·B), and grazing or above-horizon
+            # matches project to impossible heights: keep plausible ground and
+            # rock elevations relative to the rover base (z_w = 0).
             (z_w >= self.min_elevation) &
             (z_w <= self.max_elevation)
         )
@@ -489,10 +469,8 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         if x_w.size == 0:
             return None, None, None, None, None, None
 
-        # ── 5. computeDEM grid building ───────────────────────────────────────
-        # Fixed-size grid bounded by distance_limit so that changing the limit
-        # directly controls the area that gets mapped — not just the plot view.
-        #
+        # ── 5. computeDEM grid ───────────────────────────────────────────────
+        # A fixed-size grid bounded by distance_limit:
         #   lateral extent: -distance_limit … +distance_limit  (width  = 2*dl/res + 1)
         #   forward extent:  0              … +distance_limit  (height =   dl/res + 1)
         #   x_offset = distance_limit  →  x=0 (camera centre) maps to column DEM_width//2
@@ -694,10 +672,8 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         # ── Rover pose snapshot — used for tilt correction AND global frame ───
         tx, ty, tz, qx, qy, qz, qw = self._pose_at(msg.header.stamp)
 
-        # Decompose quaternion into roll (around X) and pitch (around Y).
-        # Standard ZYX Tait-Bryan convention, same as ROS REP-103.
-        #   roll  — rotation around X (right axis): lifts one side of the rover
-        #   pitch — rotation around Y (left axis):  tilts rover forward/backward
+        # Roll (about X, forward) and pitch (about Y, left), ZYX Tait-Bryan as
+        # in REP-103.
         if self.apply_rover_tilt:
             sinr_cosp = 2.0 * (qw * qx + qy * qz)
             cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy)
@@ -706,14 +682,10 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
             sinp = max(-1.0, min(1.0, 2.0 * (qw * qy - qz * qx)))
             rover_pitch = math.asin(sinp)
         else:
-            # The odom orientation is in a non-standard frame (same convention
-            # that mirrors the dashboard heading), so the roll extracted here is
-            # spurious (~-84° on flat ground) and rotates the whole DEM into a
-            # narrow warped sliver. Ignore it; camera_angle carries the fixed tilt.
             rover_roll = 0.0
             rover_pitch = 0.0
 
-        # ── DEM computation (reference code logic, vectorised) ────────────────
+        # ── DEM ──────────────────────────────────────────────────────────────
         DEM, x_w, y_w, z_w, x_offset, colors = self._compute_dem(
             depth_m, color_img, rover_pitch, rover_roll)
         if DEM is None:
@@ -721,10 +693,8 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
 
         DEM_width, DEM_height = DEM.shape
 
-        # ── Local world → global odom frame ──────────────────────────────────
-        # rotateRefSystem produces a left-handed-ish local frame:
-        #   x_w = lateral (right +),  y_w = forward,  z_w = elevation
-        #
+        # ── Local frame → odom ───────────────────────────────────────────────
+        # Local frame: x_w right, y_w forward, z_w up.
         # Points relative to the camera, REP-103 axes (X=forward, Y=left, Z=up):
         #   p_cam = (y_w, -x_w, z_w − camera_height_m)
         # Camera in odom: rover position + R_body→world · mounting offset.
@@ -923,8 +893,6 @@ class LifecycleLocalMapping(rclpy.lifecycle.Node):
         self.min_points_per_cell = int(self.get_parameter('min_points_per_cell').value)
         self.drop_highest        = int(self.get_parameter('drop_highest').value)
         self.apply_rover_tilt = self.get_parameter('apply_rover_tilt').value
-        # max valid depth == distance_limit: single parameter controls both the
-        # pixel-level cut and the world-frame distance filter.
         self.debug_mode      = self.get_parameter('debug_mode').value
         self.debug_save_path = self.get_parameter('debug_save_path').value
 

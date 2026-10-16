@@ -22,8 +22,8 @@ lc_component_local_mapping:
     #   640-px image, 60° HFOV  →  fx = fy = 554.3
     camera_fx: 320.0
     camera_fy: 320.0
-    camera_cx: 320.0   # Cu in reference — image centre x  (= width  / 2)
-    camera_cy: 240.0   # Cv in reference — image centre y  (= height / 2)
+    camera_cx: 320.0   # image centre x (= width  / 2)
+    camera_cy: 240.0   # image centre y (= height / 2)
 
     # ── Physical camera mounting ───────────────────────────────────────────────
     # Read from TF at configure (base_link -> navcam_central_link, base_footprint;
@@ -31,8 +31,7 @@ lc_component_local_mapping:
     # when mount_from_tf; the camera_* values below are the fallback without TF.
     mount_from_tf: true
     # camera_height_m: distance from the ground plane to the camera optical
-    #   centre (= physical_height in CameraTransform). Used by rotateRefSystem
-    #   to set the absolute elevation of z_w = 0 at the ground.
+    #   centre, so that z_w = 0 is the ground.
     # From the URDF: navcam_central_link is 0.465 m above base_link, which is at
     # axle height (0.0885 m above the ground under base_footprint).
     camera_height_m: 0.553  # metres
@@ -44,12 +43,9 @@ lc_component_local_mapping:
     camera_offset_lateral_m: 0.0
     camera_offset_up_m:      0.465
 
-    # camera_angle: tilt of the camera from horizontal in degrees.
-    #   0   = camera looking straight ahead (horizontal)
-    #   Sign (verified against the transform total = pi/2 + camera_angle, and
-    #   empirically against the live DEM): DOWN tilt is POSITIVE. camera_angle
-    #   = +90 gives z_w = h - d (nadir, correct); -90 gives z_w = h + d (up).
-    #   The navcams are physically pitched DOWN 20 deg in Unreal, so this is +20.
+    # camera_angle: tilt of the camera from horizontal in degrees, positive
+    #   down (0 = horizontal, +90 = straight down). The navcams are pitched
+    #   20 deg down in Unreal.
     camera_angle: 20.0
 
     # camera_roll: lateral (sideways) tilt of the camera mounting in degrees.
@@ -60,14 +56,12 @@ lc_component_local_mapping:
     camera_roll: 0.0
 
     # ── DEM computation parameters ────────────────────────────────────────────
-    # map_resolution: size of one DEM cell in metres (= 1/resolution_multiplier
-    #   in reference code).  0.01 = 1 cm/cell, 0.05 = 5 cm/cell.
+    # map_resolution: size of one DEM cell in metres (0.05 = 5 cm/cell).
     map_resolution: 0.05   # metres per cell
 
-    # distance_limit: maximum x_w (lateral) and y_w (forward) distance in metres.
-    #   Points beyond this are discarded before building the grid — matches the
-    #   distance_limit argument of MergedImage.computeDEM.
-    distance_limit: 3.0   # metres — set to cover the full observed depth range
+    # distance_limit: maximum lateral and forward distance in metres; points
+    #   beyond it are discarded before building the grid.
+    distance_limit: 3.0   # metres
 
     # ── Depth pixel validity window (metres) ──────────────────────────────────
     # min_valid_depth: reject pixels closer than this (noise / self-occlusion).
@@ -75,22 +69,15 @@ lc_component_local_mapping:
     # pixel filter and the world-frame distance gate.
     min_valid_depth: 0.1
 
-    # The depth topic carries planar Z depth in metres (component_stereo_depth),
-    # so do not convert it again.
-    #
-    # depth_scale: multiply the incoming depth by this to obtain true metres.
-    # Check the log line "[DEM diag] depth range" — if objects 1 m away show as
-    # ~10 m, the publisher's unit assumption is wrong; fix it there.
+    # depth_scale: factor from the incoming depth to metres. The stereo node
+    # already publishes metres; debug_mode logs the depth range to check it.
     depth_scale: 1.0
 
     # ── Elevation sanity window (metres, rover base = 0) ──────────────────────
-    # Stereo depth on textureless regolith, seen at the grazing angle of a
-    # near-horizontal camera, throws occasional wild outliers — measured heights
-    # from -2.5 m to +3.2 m over a 3 m patch. The DEM keeps the MAX height per
-    # cell (so rocks survive), which means one bad point spikes a whole cell.
-    # This window discards physically impossible elevations before binning.
-    # Widen if you drive real crater walls / tall boulders; tighten to reject
-    # more noise. -2.5..+3.2 m was outliers; ground+rocks live in roughly ±1 m.
+    # Stereo depth on textureless regolith at grazing angles throws occasional
+    # outliers (measured from -2.5 m to +3.2 m over a 3 m patch, while ground
+    # and rocks lie within about ±1 m). Elevations outside this window are
+    # discarded before binning; widen it for crater walls or tall boulders.
     min_elevation: -1.0    # metres below the rover base
     max_elevation:  1.5    # metres above the rover base
 
@@ -107,7 +94,6 @@ lc_component_local_mapping:
     apply_rover_tilt: true
 
     # ── Debug DEM visualisation ───────────────────────────────────────────────
-    # Off: the container runs headless and the mission control dashboard now
-    # renders local_mapping/elevation_grid live, replacing the matplotlib view.
+    # A matplotlib window on the host display; the dashboard shows the DEM live.
     debug_mode: false
     debug_save_path: /opt/ros/jazzy/src/component_local_mapping/debug_dem.png

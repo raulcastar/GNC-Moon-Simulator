@@ -5,7 +5,7 @@ lc_component_event_camera:
     use_sim_time: true
 
     # ── Event stream ──────────────────────────────────────────────────────────
-    # TCP server the UnrealEventCam plugin (the Unreal project's Plugins/UnrealEventCam/) connects to.
+    # TCP server the UnrealEventCam plugin connects to.
     # Must match the plugin's ServerIp / ServerPort. Only 127.0.0.1 crosses into
     # WSL under mirrored networking, so bind 0.0.0.0 and let Unreal dial in.
     stream_bind_ip:                    0.0.0.0
@@ -22,10 +22,8 @@ lc_component_event_camera:
     # publish rate leaves most frames black.
     accumulation_window_s:                 1.0
 
-    # Rate at which the event-frame image is rendered and published (Hz). Matched
-    # to the navcam (component_stereo_depth image_reading_hz_rate = 1.0) so the
-    # sensors share a cadence. The event stream itself is asynchronous; this only
-    # sets the viewing/publish cadence.
+    # Rate at which the event-frame image is rendered and published (Hz). The
+    # event stream itself is asynchronous; this only sets the viewing cadence.
     publish_rate_hz:                       1.0
 
     # Colour-by-polarity event frame (rgb8). ON events (brightness increase) and

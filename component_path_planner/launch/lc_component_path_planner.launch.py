@@ -23,11 +23,11 @@ def rover_parameters(package):
 def generate_launch_description():
 
 
-    path_planner_node = launch_ros.actions.LifecycleNode(package='component_path_planner', 
+    path_planner_node = launch_ros.actions.LifecycleNode(package='component_path_planner',
         executable='lc_component_path_planner', name='lc_component_path_planner', namespace='', output='screen', emulate_tty=True, respawn=True,
         arguments=['--ros-args', '--log-level', "info"], parameters = rover_parameters('component_path_planner'))
-    
-    # Make the path planner node take the 'configure' transition
+
+    # Configure the node at launch
     path_planner_node_configure_event = launch.actions.EmitEvent(
         event = launch_ros.events.lifecycle.ChangeState(
             lifecycle_node_matcher = launch.events.matches_action(path_planner_node),
@@ -35,7 +35,7 @@ def generate_launch_description():
         )
     )
 
-    # Make the path planner node take the 'activate' transition
+    # Activate it once configured
     path_planner_node_trans_event = launch.actions.EmitEvent(
         event = launch_ros.events.lifecycle.ChangeState(
             lifecycle_node_matcher = launch.events.matches_action(path_planner_node),
@@ -53,15 +53,13 @@ def generate_launch_description():
         )
     )
 
-    
+
     return LaunchDescription([
-        # Set env var to print messages colored. The ANSI color codes will appear in a log.
+        # Coloured console output.
         SetEnvironmentVariable('RCUTILS_COLORIZED_OUTPUT', '1'),
 
-        # Start Nodes
         path_planner_node,
 
-        #activate system
         path_planner_node_configure_event,
         active_state_handler,
     ])

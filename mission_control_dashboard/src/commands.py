@@ -13,7 +13,7 @@ from std_msgs.msg import Bool, Empty, Float32
 
 
 class CommandsMixin:
-    """Operator commands: headlights, stop, teleop drive (with its deadman), goals. Mixed into LifecycleMissionControlUI."""
+    """Operator commands: headlights, stop, teleop drive, goals, obstacle avoidance. Mixed into LifecycleMissionControlUI."""
 
     def set_obstacle_avoidance(self, on: bool) -> None:
         """Switches the planner's lidar obstacle avoidance (its parameter, live)."""

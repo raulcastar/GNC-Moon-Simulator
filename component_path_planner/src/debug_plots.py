@@ -42,7 +42,7 @@ def update_live_plot(config, robot_pose, elevation, global_path, predicted_traje
     """Redraws the live plot: maps, routes, the rover and its footprint."""
     plt.cla()
 
-    # Bind ESC key to allow clean termination of the blocking UI thread
+    # ESC in the plot window exits the node.
     plt.gcf().canvas.mpl_connect(
         'key_release_event',
         lambda event: [exit(0) if event.key == 'escape' else None])

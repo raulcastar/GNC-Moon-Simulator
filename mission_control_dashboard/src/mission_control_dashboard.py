@@ -1,5 +1,5 @@
 """
-ROS 2 Lifecycle Web Mission Control.
+ROS 2 lifecycle node: the web mission control.
 
 Flask + SocketIO server presenting the whole stack in one browser page:
 every navcam feed, stereo depth, object segmentation, a live lidar sweep,
@@ -295,16 +295,10 @@ def main(args=None):
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
 
-    # Hub (5000), teleop (5002), cameras (5003), map3d (5005) and system (5006) run in background
-    # threads; the overview (5001) holds the main thread. All reach the node through
-    # web.node.
-    #
-    # The map window uses 5005, not the sequential 5004: under this machine's WSL2
-    # mirrored networking, port 5004 specifically would not mirror to the Windows
-    # host — a listener bound there was live inside the container's netns but
-    # localhost:5004 refused from both Windows and WSL loopback, while every
-    # neighbouring port (5005, 5006, 5010) mirrored instantly. Most likely a stale
-    # Windows-side reservation on 5004. 5005 sidesteps it.
+    # Hub (5000), teleop (5002), cameras (5003), map3d (5005), system (5006) and
+    # bags (5007) run in background threads; the overview (5001) holds the main
+    # thread. All reach the node through web.node. The map skips 5004, which WSL2
+    # mirrored networking did not forward to Windows on the development machine.
     def _serve(sio, flask_app, port):
         sio.run(flask_app, host='0.0.0.0', port=port, allow_unsafe_werkzeug=True)
 

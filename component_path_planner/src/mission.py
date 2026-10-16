@@ -74,6 +74,8 @@ RouteCheck = Callable[..., bool]
 
 
 class Mission:
+    """The mission state machine; see the module docstring for the cycle."""
+
     def __init__(self, settings: MissionSettings, route_blocked: RouteCheck):
         self.settings = settings
         self.route_blocked = route_blocked
@@ -152,7 +154,7 @@ class Mission:
 
         x, y, yaw = pose
         if math.hypot(x - self.goal[0], y - self.goal[1]) <= s.stop_tolerance:
-            event = self._event(REACHED, message=f"Target {self.goal} achieved. Engaging parking brake.")
+            event = self._event(REACHED, message=f"Goal {self.goal} reached.")
             self._new_generation(goal=None)
             return Step(STOP, event)
 
