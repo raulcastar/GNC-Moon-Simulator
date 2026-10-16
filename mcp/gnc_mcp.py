@@ -5,7 +5,8 @@ mission_control_dashboard/src/api.py).
 
 Run (stdio):  py mcp/gnc_mcp.py
 Claude Code:  claude mcp add gnc -- py "<repo>/mcp/gnc_mcp.py"
-Dashboard URL: GNC_DASHBOARD_URL (default http://localhost:5001).
+Dashboard URL: GNC_DASHBOARD_URL (default http://127.0.0.1:5001; not localhost,
+which Windows resolves to IPv6 first and waits ~21 s per request).
 
 Needs the Docker stack up (docker compose up -d) and, for anything that moves
 the rover, Unreal in Play on the active rover's level. Playing / stopping
@@ -22,7 +23,7 @@ from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
-DASHBOARD = os.environ.get('GNC_DASHBOARD_URL', 'http://localhost:5001').rstrip('/')
+DASHBOARD = os.environ.get('GNC_DASHBOARD_URL', 'http://127.0.0.1:5001').rstrip('/')
 FINAL_STATES = ('reached', 'aborted', 'cancelled', 'idle')
 
 READ = ToolAnnotations(read_only_hint=True, open_world_hint=False)

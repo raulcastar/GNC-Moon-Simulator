@@ -8,7 +8,7 @@ on `event_camera/image_events`, plus the instantaneous event rate on
 `event_camera/event_rate`.
 
 The plugin sends one packet per rendered frame that produced events. Wire format
-(little-endian), matching the Unreal project's Plugins/UnrealEventCam/README.md:
+(little-endian), as in the UnrealEventCam plugin's docs/wire-format.md:
 
     header  'EVT0' | ver u8 | cam_id u8 | width u16 | height u16
             | t0_ns u64 | count u32 | pad u16                        (24 bytes)

@@ -3,7 +3,7 @@
     "gnc": {
       "command": "py",
       "args": ["mcp/gnc_mcp.py"],
-      "env": {"GNC_DASHBOARD_URL": "http://localhost:5001"}
+      "env": {"GNC_DASHBOARD_URL": "http://127.0.0.1:5001"}
     }
   }
 }

@@ -1,7 +1,7 @@
 # AGENTS.md: GNC Moon Simulator
 
 Guidance for AI coding agents working in this repository. The README has the
-full documentation; this file covers what an agent needs to work safely.
+overview and links to `docs/`; this file covers what an agent needs to work safely.
 
 ## What this is
 
@@ -83,7 +83,7 @@ These come from actual incidents.
 - Code style: comments explain *why* in full sentences, and match the
   surrounding density. Every node is a lifecycle node, with
   `use_sim_time: true` (`/clock` from Unreal).
-- When you change behaviour, update the README section that documents it.
+- When you change behaviour, update the page in `docs/` that documents it (and the README if it changes the overview).
 
 ## Using the simulator as an agent (MCP)
 
@@ -100,4 +100,4 @@ These come from actual incidents.
 driving, Unreal in Play. Starting and stopping Play, and building terrain, are
 done by the Terrain Studio server (`Unreal-Moon-Terrain-Generation/mcp`).
 The same API is available to plain scripts over HTTP
-(`curl localhost:5001/api/status`).
+(`curl 127.0.0.1:5001/api/status`).
