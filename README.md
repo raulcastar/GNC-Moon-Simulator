@@ -5,6 +5,17 @@ simulated in Unreal Engine 5. The rover drives itself to goals over generated
 lunar terrain, using stereo navcams, lidar, IMU, and event and SPAD cameras,
 watched and commanded from a web mission control.
 
+![Leo_Raph driving itself to a goal past rocks and a crater, seen from the orbit camera](docs/images/drive.gif)
+
+*Leo_Raph driving autonomously to a goal 22 m away, past rocks and a crater
+(Unreal's orbit camera, about 5x speed).*
+
+![The mission control overview during the same drive](docs/images/overview.jpg)
+
+*Mission control during that drive: the navcams with the planned path drawn on
+them, segmentation and shadow masks, the global map with the route, lidar and
+local elevation map, telemetry and the ROS log.*
+
 This repository is the ROS side and the entry point of the project:
 
 | Repository | What it holds |

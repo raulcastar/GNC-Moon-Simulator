@@ -13,6 +13,21 @@ SocketIO, wall clock):
 | 5006 | System: feed rates, lifecycle nodes (restart), remote parameters, ROS 2 topics |
 | 5007 | Bags: record with presets, names and notes; replay into the live system; rename and delete |
 
+![The menu: the six screens, the ROVER selector and the colour themes](images/menu.jpg)
+
+*The menu (5000): the screens, the ROVER selector and the colour themes.*
+
+![The overview following a drive: navcams, map, lidar and local elevation map](images/overview.gif)
+
+*The overview (5001) through a drive, replayed from its rosbag (about 4x speed),
+with FOLLOW ROVER on: the route ahead of the rover on the navcam and the map, and
+the lidar marking the crater rim around the goal as it gets close.*
+
+![The camera wall: navcams and rear camera with their segmentation and shadow masks](images/cameras.jpg)
+
+*The camera wall (5003): the central, left, right and rear cameras, and their
+segmentation and shadow masks with legends.*
+
 ## Bags
 
 Bags are written to `mission_control_dashboard/bags/` (git-ignored) and record
