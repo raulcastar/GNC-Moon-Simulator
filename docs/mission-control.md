@@ -17,11 +17,25 @@ SocketIO, wall clock):
 
 *The menu (5000): the screens, the ROVER selector and the colour themes.*
 
-![The overview following a drive: navcams, map, lidar and local elevation map](images/overview.gif)
+![The overview following a drive: navcams, map, lidar and local elevation map](images/overview.webp)
 
-*The overview (5001) through a drive, replayed from its rosbag (about 4x speed),
-with FOLLOW ROVER on: the route ahead of the rover on the navcam and the map, and
-the lidar marking the crater rim around the goal as it gets close.*
+*The overview (5001) through a drive, replayed from its rosbag (3x speed), with
+FOLLOW ROVER on: the route ahead of the rover on the navcam and the map, the
+lidar and the local elevation map.*
+
+![Teleoperation: the front camera with the path, the side and rear cameras, the drive pad](images/teleop.jpg)
+
+*Teleoperation (5002): the front camera, the side and rear cameras, telemetry
+and the drive pad.*
+
+![System: feed rates, lifecycle nodes and the ROS 2 topics](images/system.jpg)
+
+*System (5006): feed rates and ages, lifecycle nodes with restart, and the ROS 2
+topics.*
+
+![Bags: the recorder, the recorded bags and the player](images/bags.jpg)
+
+*Bags (5007): the recorder with its presets, the recorded bags, and the player.*
 
 ![The camera wall: navcams and rear camera with their segmentation and shadow masks](images/cameras.jpg)
 

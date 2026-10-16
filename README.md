@@ -5,16 +5,37 @@ simulated in Unreal Engine 5. The rover drives itself to goals over generated
 lunar terrain, using stereo navcams, lidar, IMU, and event and SPAD cameras,
 watched and commanded from a web mission control.
 
-![Leo_Raph driving itself to a goal past rocks and a crater, seen from the orbit camera](docs/images/drive.gif)
+![Leo_Raph driving itself to a goal past rocks, seen from the orbit camera](docs/images/drive_orbit.webp)
 
-*Leo_Raph driving autonomously to a goal 22 m away, past rocks and a crater
-(Unreal's orbit camera, about 5x speed).*
+*Leo_Raph driving autonomously to a goal 16 m away, past rocks, until it parks
+at the goal (Unreal's orbit camera, 6x speed).*
 
-![The mission control overview during the same drive](docs/images/overview.jpg)
+| Top-down camera | Follow camera |
+|---|---|
+| ![The same drive from above](docs/images/drive_top.webp) | ![The same drive from behind the rover](docs/images/drive_follow.webp) |
 
-*Mission control during that drive: the navcams with the planned path drawn on
-them, segmentation and shadow masks, the global map with the route, lidar and
-local elevation map, telemetry and the ROS log.*
+The same route from the top-down and follow cameras. Full videos (2x speed):
+[orbit](docs/videos/drive_orbit.mp4), [top-down](docs/videos/drive_top.mp4),
+[follow](docs/videos/drive_follow.mp4).
+
+## Mission control
+
+![The mission control overview during the drive](docs/images/overview.webp)
+
+*The overview during that drive, replayed from its rosbag (3x speed;
+[video](docs/videos/overview.mp4)): the navcams with the planned path drawn on
+them, segmentation and shadow masks, the global map following the rover, lidar
+and local elevation map, telemetry and the ROS log.*
+
+| Teleoperation | System |
+|---|---|
+| ![Manual driving with the camera views and the drive pad](docs/images/teleop.jpg) | ![Feed rates, lifecycle nodes and the ROS 2 topics](docs/images/system.jpg) |
+| **Camera wall** | **Bags** |
+| ![Navcams and rear camera with their segmentation and shadow masks](docs/images/cameras.jpg) | ![Recording and replaying rosbags](docs/images/bags.jpg) |
+
+More in [docs/mission-control.md](docs/mission-control.md).
+
+## The project
 
 This repository is the ROS side and the entry point of the project:
 
@@ -62,6 +83,24 @@ A container restart does not pick up code changes: see
 | `component_path_planner` | Missions, global route (fast marching), local planner (DWA), lidar obstacle avoidance |
 | `mission_control_dashboard` | Web mission control and a JSON API |
 | `custom_map_interfaces` | The `GetMatrices` service (the planner's maps) |
+
+## AI agents (MCP)
+
+`mcp/gnc_mcp.py` is an MCP server, so an AI agent (Claude Code, Claude Desktop
+or any MCP client) can use the running simulator: read the status, log and
+camera images, send goals and wait for them, drive, stop, switch the lights,
+obstacle avoidance, viewport camera and rover, restart nodes and record bags.
+It wraps the dashboard's JSON API (`http://127.0.0.1:5001/api/`), which plain
+scripts can call too.
+
+```bash
+py -m pip install -r mcp/requirements.txt          # once
+claude mcp add gnc -- py "<repo>/mcp/gnc_mcp.py"   # or use the repo's .mcp.json
+```
+
+Commands that move the rover are refused while Unreal is not in Play. Terrain
+Studio has its own MCP server for building terrain and starting Play; details in
+[docs/mission-control.md](docs/mission-control.md#json-api-and-ai-agents-mcp).
 
 ## Documentation
 
