@@ -48,7 +48,8 @@ Obstacles are published on `planner/obstacles` (odom frame).
 `component_path_planner/maps/` (installed with the package, so rebuild after
 adding one). Only the two maps `config/params.yaml` names are tracked in git;
 any other map you add there stays local, and switching maps means updating
-the two exceptions in `.gitignore`. They are Terrain Studio's `<name>_elevationMap.csv`
+the two exceptions in `.gitignore`. The tracked pair describes the terrain of
+both rover levels (`Lunar_Terrain_Raph`, `Lunar_Terrain_Yutu`). They are Terrain Studio's `<name>_elevationMap.csv`
 and `<name>_soilMap.csv` for the terrain in the level, at `global_res` metres
 per cell; cells steeper than `slope_threshold` or with soil 0 are impassable.
 

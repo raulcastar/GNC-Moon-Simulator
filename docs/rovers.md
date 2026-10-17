@@ -2,7 +2,9 @@
 
 ## Leo_Raph and Yutu
 
-The stack drives either rover; one runs at a time (they use the same ports):
+The stack drives either rover; one runs at a time (they use the same ports).
+Both levels share one terrain and rock field, the one the planner's default
+maps describe:
 
 | | Leo_Raph | Yutu |
 |---|---|---|
