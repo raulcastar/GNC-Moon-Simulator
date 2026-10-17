@@ -49,6 +49,13 @@ publish the colour only. Each mask is paired with the rear image of the same
 Unreal frame. `enable_object_mask` / `enable_shadow_mask` switch them with the
 central ones.
 
+![Front and rear cameras with their object and shadow masks](images/ground_truth.webp)
+
+*The front navcam and the rear camera during a drive, with their ground-truth object
+masks and shadow masks (5x speed; [video](videos/ground_truth.mp4) at 2.5x). Ahead, the rover's own
+shadow (orange) is labelled apart from the terrain's shadows; behind, the wheel
+tracks it leaves are their own class in the object mask.*
+
 ### How frames arrive
 
 UnrealStereoCam renders the navcams when a frame is due (`SendHz`), reads them
