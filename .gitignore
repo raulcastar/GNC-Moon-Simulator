@@ -4,7 +4,10 @@ log/
 share/
 __pycache__
 .claude/
-component_path_planner/maps
+# Planner maps: only the ones config/params.yaml uses are tracked
+component_path_planner/maps/*
+!component_path_planner/maps/procedural_lunar_terrain_1_elevationMap_2.csv
+!component_path_planner/maps/procedural_lunar_terrain_1_soilMap_edges_0_2.csv
 # Rosbags recorded from the dashboard
 mission_control_dashboard/bags/
 # Dashboard UI preferences (theme)
