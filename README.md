@@ -1,5 +1,11 @@
 # GNC-Moon-Simulator
 
+[![Part of MARE](https://img.shields.io/badge/Part%20of-MARE-e8a33d)](https://github.com/raulcastar/MARE-Lunar-Simulator)
+[![Video](https://img.shields.io/badge/Video-YouTube-FF0000?logo=youtube&logoColor=white)](https://youtu.be/EI4HgbMFbBE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![ROS 2 Jazzy](https://img.shields.io/badge/ROS%202-Jazzy-22314E?logo=ros&logoColor=white)](https://docs.ros.org/en/jazzy/)
+[![Docker](https://img.shields.io/badge/Docker-containers-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+
 A guidance, navigation and control (GNC) stack in ROS 2 for lunar rovers
 simulated in Unreal Engine 5. The rover drives itself to goals over generated
 lunar terrain, using stereo navcams, lidar, IMU, and event and SPAD cameras,
