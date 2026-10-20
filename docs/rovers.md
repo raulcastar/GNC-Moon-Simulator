@@ -8,6 +8,7 @@ maps describe:
 
 | | Leo_Raph | Yutu |
 |---|---|---|
+| Based on | Fictionlab's [Raph Rover](https://fictionlab.pl/raph-rover/) | "Yutu" by tashtego (Sketchfab, CC-BY-4.0) |
 | Unreal level | `Lunar_Terrain_Raph` | `Lunar_Terrain_Yutu` |
 | Blueprint | `/Game/Blueprints/Leo_Raph` | `/Game/Blueprints/Yutu_Rover` |
 | Meshes, materials | `/Game/RoverAssets/Leo_Raph` | `/Game/RoverAssets/Yutu` |

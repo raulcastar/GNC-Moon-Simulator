@@ -3,7 +3,9 @@
 A guidance, navigation and control (GNC) stack in ROS 2 for lunar rovers
 simulated in Unreal Engine 5. The rover drives itself to goals over generated
 lunar terrain, using stereo navcams, lidar, IMU, and event and SPAD cameras,
-watched and commanded from a web mission control.
+watched and commanded from a web mission control. It is the autonomy stack of
+[MARE](https://github.com/raulcastar/MARE-Lunar-Simulator), an open-source lunar rover simulation suite
+([video overview](https://youtu.be/EI4HgbMFbBE), [project page](https://raulcastar.me/mare/)).
 
 ![Leo_Raph driving itself to a goal past rocks, seen from the orbit camera](docs/images/drive_orbit.webp)
 
