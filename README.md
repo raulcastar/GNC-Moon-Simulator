@@ -1,6 +1,7 @@
 # GNC-Moon-Simulator
 
 [![Part of MARE](https://img.shields.io/badge/Part%20of-MARE-e8a33d)](https://github.com/raulcastar/MARE-Lunar-Simulator)
+[![arXiv](https://img.shields.io/badge/arXiv-2610.28465-b31b1b?logo=arxiv&logoColor=white)](https://arxiv.org/abs/2610.28465)
 [![Video](https://img.shields.io/badge/Video-YouTube-FF0000?logo=youtube&logoColor=white)](https://youtu.be/EI4HgbMFbBE)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![ROS 2 Jazzy](https://img.shields.io/badge/ROS%202-Jazzy-22314E?logo=ros&logoColor=white)](https://docs.ros.org/en/jazzy/)
