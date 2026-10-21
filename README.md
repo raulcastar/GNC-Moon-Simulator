@@ -54,6 +54,7 @@ This repository is the ROS side and the entry point of the project:
 | [MARE-Lunar-Simulator](https://github.com/raulcastar/MARE-Lunar-Simulator) | The Unreal project: levels, rovers (Leo_Raph, Yutu), sensor plugins |
 | [Unreal-Moon-Terrain-Generation](https://github.com/raulcastar/Unreal-Moon-Terrain-Generation) | Terrain Studio: terrain, craters, rocks, ground-truth masks, sun |
 | [UnrealStereoCam](https://github.com/raulcastar/UnrealStereoCam), [UnrealLidarCam](https://github.com/raulcastar/UnrealLidarCam), [UnrealEventCam](https://github.com/raulcastar/UnrealEventCam), [UnrealSPADCam](https://github.com/raulcastar/UnrealSPADCam), [UnrealSimClock](https://github.com/raulcastar/UnrealSimClock) | The sensor plugins, each usable on its own |
+| [UnrealDEMLandscape](https://github.com/raulcastar/UnrealDEMLandscape) | Editor plugin with which Terrain Studio builds the Landscape |
 
 ## Requirements
 
