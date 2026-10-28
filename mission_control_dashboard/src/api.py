@@ -75,6 +75,7 @@ def status_payload(node) -> dict:
     now = time.monotonic()
     feeds = {}
     for name, times in list(node._arrivals.items()):
+        times = tuple(times)        # a snapshot: ROS callbacks append to the deque meanwhile
         if times:
             recent = sum(1 for t in times if now - t <= 3.0)
             feeds[name] = {'hz': round(recent / 3.0, 1), 'age_s': round(now - times[-1], 1)}

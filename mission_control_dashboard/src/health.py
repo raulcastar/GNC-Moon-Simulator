@@ -155,7 +155,8 @@ class HealthMixin:
         self._emit_rover()                         # Unreal's rover, as its link reports it
         now = time.monotonic()
         feeds = {}
-        for name, times in self._arrivals.items():
+        for name, times in list(self._arrivals.items()):
+            times = tuple(times)    # a snapshot: callbacks on other threads append meanwhile
             recent = sum(1 for t in times if now - t <= HEALTH_WINDOW)
             feeds[name] = {'hz': round(recent / HEALTH_WINDOW, 1),
                            'age': round(now - times[-1], 1) if times else None}

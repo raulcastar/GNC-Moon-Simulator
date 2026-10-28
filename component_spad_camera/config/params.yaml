@@ -59,8 +59,9 @@ lc_component_spad_camera:
     digitize_frames:                        64
 
     # Readout rate: how often a binary frame and the digitised reconstruction
-    # are published (Hz).
-    publish_rate_hz:                       1.0
+    # are published (Hz). 10 Hz is above the navcams' rate, so every navcam frame
+    # has a SPAD image within 0.05 s.
+    publish_rate_hz:                       10.0
 
     # spad/binary : raw single-photon frame (mono8, 0/255)
     # spad/image  : digitised grayscale reconstruction (mono8), viewable feed

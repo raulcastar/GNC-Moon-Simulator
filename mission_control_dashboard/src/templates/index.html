@@ -819,6 +819,25 @@ function viridis(t) {
   return [253,231,37];
 }
 
+/* Relief shading of the elevation grid (row 0 = south), lit from the upper left of the drawn map at 45°
+   with the relief exaggerated twice: craters and slopes show at any zoom, whatever the elevation range.
+   Returns 0-1 per cell; cells without data, and their neighbours' differences, count as flat. */
+function hillshade(z) {
+  const out = new Float32Array(z.length), ex = 2 / mapRes, e = Math.PI / 4;
+  const lx = -Math.cos(e) / Math.SQRT2, ly = Math.cos(e) / Math.SQRT2, lz = Math.sin(e);  // +y = north = up
+  const at = (x, y, v) => {
+    x = Math.min(mapW - 1, Math.max(0, x)); y = Math.min(mapH - 1, Math.max(0, y));
+    const w = z[y * mapW + x]; return w >= 9999 ? v : w;
+  };
+  for (let y = 0; y < mapH; y++) for (let x = 0; x < mapW; x++) {
+    const v = z[y * mapW + x];
+    if (v >= 9999) { out[y * mapW + x] = 1; continue; }
+    const dx = (at(x + 1, y, v) - at(x - 1, y, v)) / 2 * ex, dy = (at(x, y + 1, v) - at(x, y - 1, v)) / 2 * ex;
+    out[y * mapW + x] = Math.max(0, Math.min(1, (-dx * lx - dy * ly + lz) / Math.sqrt(dx * dx + dy * dy + 1)));
+  }
+  return out;
+}
+
 socket.on('map_update', m => {
   if (m.data_u16 !== undefined) {           /* uint16-quantised, binary; 65535 = no data */
     const q = new Uint16Array(m.data_u16);
@@ -834,12 +853,13 @@ socket.on('map_update', m => {
   for (const v of m.data) if (v < 9999) { if (v < lo) lo = v; if (v > hi) hi = v; }
   const ok = hi !== -Infinity, span = (hi - lo) || 1;
   if (ok) { elevMin = lo.toFixed(1); elevMax = hi.toFixed(1); }
+  const shade = ok ? hillshade(m.data) : null;
   for (let i = 0; i < m.data.length; i++) {
     const x = i % mapW, y = (i / mapW) | 0;
     const o = (((mapH - 1 - y) * mapW) + x) * 4;
     if (m.data[i] >= 9999 || !ok) { img.data[o+3] = 255; continue; }
-    const c = viridis(Math.floor((m.data[i]-lo)/span*20)/20);
-    img.data[o] = c[0]; img.data[o+1] = c[1]; img.data[o+2] = c[2]; img.data[o+3] = 255;
+    const c = viridis(Math.floor((m.data[i]-lo)/span*20)/20), k = 0.35 + 0.65 * shade[i];
+    img.data[o] = c[0] * k; img.data[o+1] = c[1] * k; img.data[o+2] = c[2] * k; img.data[o+3] = 255;
   }
   elevCtx.putImageData(img, 0, 0);
   drawColorbar(ok); drawOverlay();
