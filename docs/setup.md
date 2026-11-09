@@ -1,6 +1,23 @@
 # Setup
 
-## Host: WSL2 and Docker
+## Host: native Linux
+
+On a Linux host (tested on Arch Linux, Docker 29, x86_64) the stack runs as is:
+every service uses `network_mode: host`, so Unreal on the same machine reaches
+the containers on `127.0.0.1` with no WSL settings. Unreal itself can run in
+Docker too: see the `docker/linux/` setup in MARE-Lunar-Simulator.
+
+- Containers run as root, so the files they write to the bind mounts
+  (`mission_control_dashboard/bags/`, `ui_settings.json`) are root-owned.
+- For the GUI tools in `debug_cli` (rviz2, rqt), allow root on your X server
+  first: `xhost +SI:localuser:root` (works under XWayland too).
+- Host networking binds the dashboard (5000-5007) and Zenoh (7447) on every
+  interface, without authentication: firewall them if the machine is on a
+  shared network.
+- `restart: unless-stopped` brings the stack back whenever Docker starts, until
+  `docker compose down`.
+
+## Host: WSL2 and Docker (Windows)
 
 The stack runs in Docker on WSL2; Unreal runs on Windows. WSL reads its
 settings only from your Windows profile, `%UserProfile%\.wslconfig`. Put this

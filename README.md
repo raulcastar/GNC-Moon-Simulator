@@ -104,8 +104,9 @@ It wraps the dashboard's JSON API (`http://127.0.0.1:5001/api/`), which plain
 scripts can call too.
 
 ```bash
-py -m pip install -r mcp/requirements.txt          # once
-claude mcp add gnc -- py "<repo>/mcp/gnc_mcp.py"   # or use the repo's .mcp.json
+docker build -t gnc_moon_simulator/mcp:dev mcp    # once: the MCP server's image
+claude mcp add gnc -- docker run -i --rm --add-host=host.docker.internal:host-gateway \
+  -e GNC_DASHBOARD_URL=http://host.docker.internal:5001 gnc_moon_simulator/mcp:dev   # or use the repo's .mcp.json
 ```
 
 Commands that move the rover are refused while Unreal is not in Play. Terrain

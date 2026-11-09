@@ -20,7 +20,7 @@ fi
 failed=()
 for package in "${PACKAGES[@]}"; do
     echo "=== $package"
-    if ! docker compose exec -T "$package" bash -lc \
+    if ! docker compose exec -T -e PYTHONDONTWRITEBYTECODE=1 "$package" bash -lc \
         "source /opt/ros/jazzy/setup.bash && source /opt/ros/jazzy/src/install/setup.bash && cd /opt/ros/jazzy/src/$package && python3 -m pytest -q -p no:cacheprovider test $*"; then
         failed+=("$package")
     fi

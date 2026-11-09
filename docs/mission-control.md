@@ -81,8 +81,9 @@ Desktop or any MCP client) can use the running simulator:
   camera, rover switch, node restarts, rosbag recording.
 
 ```bash
-py -m pip install -r mcp/requirements.txt         # once, on the host
-claude mcp add gnc -- py "<repo>/mcp/gnc_mcp.py"  # or use the repo's .mcp.json
+docker build -t gnc_moon_simulator/mcp:dev mcp    # once: the MCP server's image
+claude mcp add gnc -- docker run -i --rm --add-host=host.docker.internal:host-gateway \
+  -e GNC_DASHBOARD_URL=http://host.docker.internal:5001 gnc_moon_simulator/mcp:dev   # or use the repo's .mcp.json
 curl 127.0.0.1:5001/api/status                    # the API without MCP
 ```
 

@@ -3,8 +3,8 @@ MCP server for the GNC Moon Simulator: lets an AI agent watch and drive the
 rover through the mission-control dashboard's JSON API (/api/ on port 5001,
 mission_control_dashboard/src/api.py).
 
-Run (stdio):  py mcp/gnc_mcp.py
-Claude Code:  claude mcp add gnc -- py "<repo>/mcp/gnc_mcp.py"
+Image:        docker build -t gnc_moon_simulator/mcp:dev mcp
+Run (stdio):  see .mcp.json (docker run -i --rm ... gnc_moon_simulator/mcp:dev)
 Dashboard URL: GNC_DASHBOARD_URL (default http://127.0.0.1:5001; not localhost,
 which Windows resolves to IPv6 first and waits ~21 s per request).
 
