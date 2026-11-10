@@ -1,7 +1,7 @@
 """
 The GNC MCP server against a fake dashboard API (a local HTTP server): nothing
-reaches ROS or Unreal. Run in the MCP image: docker run --rm --entrypoint python
-gnc_moon_simulator/mcp:dev -m pytest -q -p no:cacheprovider /mcp
+reaches ROS or Unreal. Run on the host: py -m pytest mcp
+Or in the MCP image (Linux): docker run --rm --entrypoint python gnc_moon_simulator/mcp:dev -m pytest -q -p no:cacheprovider /mcp
 """
 import asyncio
 import json

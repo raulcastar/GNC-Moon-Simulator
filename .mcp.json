@@ -1,10 +1,9 @@
 {
   "mcpServers": {
     "gnc": {
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "--add-host=host.docker.internal:host-gateway",
-               "-e", "GNC_DASHBOARD_URL=http://host.docker.internal:5001",
-               "gnc_moon_simulator/mcp:dev"]
+      "command": "py",
+      "args": ["mcp/gnc_mcp.py"],
+      "env": {"GNC_DASHBOARD_URL": "http://127.0.0.1:5001"}
     }
   }
 }

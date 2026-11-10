@@ -8,7 +8,8 @@ the stack first):
 ```bash
 ./run_tests.sh                          # all packages
 ./run_tests.sh component_path_planner   # one package (extra args go to pytest)
-docker build -t gnc_moon_simulator/mcp:dev mcp && docker run --rm --entrypoint python gnc_moon_simulator/mcp:dev -m pytest -q -p no:cacheprovider /mcp   # the MCP server
+py -m pytest mcp                        # the MCP server, on the host
+docker run --rm --entrypoint python gnc_moon_simulator/mcp:dev -m pytest -q -p no:cacheprovider /mcp   # ...or in its image (Linux)
 ```
 
 Covered: `component_path_planner`, `component_stereo_depth`, `component_lidar`,
