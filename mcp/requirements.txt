@@ -1,4 +1,6 @@
 # The MCP server (gnc_mcp.py) runs on the host, not in a container:
 #     py -m pip install -r mcp/requirements.txt
+# On Linux it can run in its own image instead (mcp/Dockerfile):
+#     docker build -t gnc_moon_simulator/mcp:dev mcp
 mcp==2.3.0
 pytest==9.1.1     # for mcp/test_gnc_mcp.py

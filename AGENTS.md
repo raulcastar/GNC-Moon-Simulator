@@ -35,6 +35,7 @@ docker compose up -d                       # start the stack (each container bui
 ./run_tests.sh                             # every package's unit tests, in its container
 ./run_tests.sh component_path_planner      # one package
 py -m pytest mcp                           # the MCP server's tests (host, Windows)
+docker run --rm --entrypoint python gnc_moon_simulator/mcp:dev -m pytest -q -p no:cacheprovider /mcp   # ...or in its image (Linux; build: docker build -t gnc_moon_simulator/mcp:dev mcp)
 ```
 
 - **Containers don't pick up code changes on restart.** The entrypoint skips
@@ -96,7 +97,8 @@ These come from actual incidents.
 - **Maintenance:** `restart_node`, `record_bag`.
 
 `.mcp.json` registers it for Claude Code. Setup:
-`py -m pip install -r mcp/requirements.txt`. It needs the stack up, and for
+`py -m pip install -r mcp/requirements.txt` (Linux, nothing on the host but Docker: build
+`mcp/Dockerfile` and register it with `claude mcp add`, as in the README). It needs the stack up, and for
 driving, Unreal in Play. Starting and stopping Play, and building terrain, are
 done by the Terrain Studio server (`Unreal-Moon-Terrain-Generation/mcp`).
 The same API is available to plain scripts over HTTP

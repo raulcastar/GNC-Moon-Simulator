@@ -5,6 +5,9 @@ mission_control_dashboard/src/api.py).
 
 Run (stdio):  py mcp/gnc_mcp.py
 Claude Code:  claude mcp add gnc -- py "<repo>/mcp/gnc_mcp.py"
+Linux, in Docker (nothing on the host but Docker): docker build -t gnc_moon_simulator/mcp:dev mcp,
+  then claude mcp add gnc -- docker run -i --rm --add-host=host.docker.internal:host-gateway
+  -e GNC_DASHBOARD_URL=http://host.docker.internal:5001 gnc_moon_simulator/mcp:dev
 Dashboard URL: GNC_DASHBOARD_URL (default http://127.0.0.1:5001; not localhost,
 which Windows resolves to IPv6 first and waits ~21 s per request).
 

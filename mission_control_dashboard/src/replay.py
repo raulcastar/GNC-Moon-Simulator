@@ -18,6 +18,26 @@ _PLAYER = 'rosbag2_player'               # ros2 bag play's node name (its servic
 _PLAYER_LOG = '/tmp/rosbag2_player.log'  # its output (read back only when it fails)
 
 
+def _bag_clock_range(path: str, storage_id: str):
+    """
+    First and last /clock in the bag, ns, or None. The simulation clock can run
+    slower than the wall clock the bag is stamped with (a heavy scene), so the
+    replay position is measured along the bag's own /clock, not its timestamps.
+    """
+    import rosbag2_py
+    from rclpy.serialization import deserialize_message
+    reader = rosbag2_py.SequentialReader()
+    reader.open(rosbag2_py.StorageOptions(uri=path, storage_id=storage_id),
+                rosbag2_py.ConverterOptions('', ''))
+    reader.set_filter(rosbag2_py.StorageFilter(topics=['/clock']))
+    first = last = None
+    while reader.has_next():
+        msg = deserialize_message(reader.read_next()[1], Clock)
+        last = msg.clock.sec * 1_000_000_000 + msg.clock.nanosec
+        first = last if first is None else first
+    return (first, last) if first is not None and last > first else None
+
+
 def _seconds(value) -> float:
     """Bag metadata times/durations: rclpy Time/Duration (Jazzy) or datetime/timedelta."""
     if hasattr(value, 'nanoseconds'):
@@ -39,7 +59,7 @@ class ReplayMixin:
     def _init_replay(self) -> None:
         self._replay_proc = None
         self._replay = {'state': 'idle', 'bag': None, 'rate': 1.0, 'loop': False, 'start_ns': 0,
-                        'duration': 0.0, 'paused': False, 'error': None}
+                        'duration': 0.0, 'clock_range': None, 'paused': False, 'error': None}
         self._replay_lock = threading.Lock()
         self._clock_ns = 0                   # newest /clock seen, ns
         self._clock_rx = 0.0                 # monotonic time it arrived
@@ -141,13 +161,19 @@ class ReplayMixin:
         clock_recorded = '/clock' in in_bag and (not chosen or '/clock' in chosen)
         if not clock_recorded:
             cmd += ['--clock', str(REPLAY_CLOCK_HZ)]    # older bag: a clock from its timestamps
+        try:
+            clock_range = _bag_clock_range(path, meta.storage_identifier) if clock_recorded else None
+        except Exception as exc:                       # position then falls back to the timestamps
+            self.get_logger().warn(f'Could not read the /clock range of {name}: {exc}')
+            clock_range = None
         with open(_PLAYER_LOG, 'w') as log:           # a file, never a pipe: a full pipe would stall the player
             self._replay_proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT,
                                                  start_new_session=True)
         with self._replay_lock:
             self._replay.update(state='playing', bag=os.path.basename(path), rate=rate, loop=loop,
                                 start_ns=int(round(_seconds(meta.starting_time) * 1e9)),
-                                duration=_seconds(meta.duration), paused=False, error=None)
+                                duration=_seconds(meta.duration), clock_range=clock_range,
+                                paused=False, error=None)
         self._console('INFO', f'Replaying rosbag {os.path.basename(path)} at {rate:g}x'
                               f'{" (looping)" if loop else ""}'
                               f'{"" if clock_recorded else " with a generated /clock"}.')
@@ -234,8 +260,14 @@ class ReplayMixin:
         position = None
         if self._seek_pos is not None and self._seek_pos[1] == self._clock_ns and r['state'] in ('playing', 'paused'):
             position = self._seek_pos[0]
+        elif r['state'] in ('playing', 'paused') and r['clock_range']:
+            first, last = r['clock_range']
+            if self._clock_ns >= first:
+                self._seek_pos = None
+                position = min(r['duration'], (self._clock_ns - first) / (last - first) * r['duration'])
         elif r['state'] in ('playing', 'paused') and r['start_ns'] and self._clock_ns >= r['start_ns']:
             self._seek_pos = None
             position = min(r['duration'], (self._clock_ns - r['start_ns']) * 1e-9)
+        r.pop('clock_range', None)
         r.update(position=position, unreal_playing=self._unreal_playing())
         sio_replay.emit('replay', r)
