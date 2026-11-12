@@ -1,0 +1,2 @@
+# Shell scripts run in WSL or Linux containers: keep LF even on a Windows checkout (core.autocrlf).
+*.sh text eol=lf

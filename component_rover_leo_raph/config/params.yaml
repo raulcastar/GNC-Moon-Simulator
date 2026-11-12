@@ -52,6 +52,10 @@ lc_component_rover_leo_raph:
     # every packet; the headlights_intensity topic (std_msgs/Float32) and the
     # dashboard's slider change it.
     headlights_intensity:               1.0
+    # Steering angles [FL, BL, FR, BR] in rad, positive = left, sent as SFL, SBL,
+    # SFR, SBR in every packet. Zeros (straight) for skid steering; rovers without
+    # steering ignore them. Applied live (ros2 param set).
+    steering_angles:                    [0.0, 0.0, 0.0, 0.0]
 
 
     # Acceleration limits: a commanded velocity step (manual `ros2 topic pub`,

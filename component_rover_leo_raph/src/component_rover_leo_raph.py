@@ -167,6 +167,33 @@ def headlight_wire_value(level: float) -> float:
     return round(level, 4) or HEADLIGHT_ZERO_ON_WIRE
 
 
+STEERING_KEYS = ("SFL", "SBL", "SFR", "SBR")
+STEERING_LIMIT = math.pi / 2     # rad; the MuJoCo rover's steering joints reach ±90 deg
+
+
+def steering_fields(angles) -> dict:
+    """
+    The steering fields every packet carries: SFL, SBL, SFR, SBR in rad,
+    positive = left, from [FL, BL, FR, BR]. Zero is straight, so skid steering
+    sends zeros. Rovers without steering ignore the fields.
+    """
+    return {k: round(float(a), 4) for k, a in zip(STEERING_KEYS, angles)}
+
+
+def steering_angles(value) -> Optional[list]:
+    """
+    A steering_angles parameter as four angles clamped to ±STEERING_LIMIT, or
+    None when it is not four finite numbers (rejected).
+    """
+    try:
+        angles = [float(a) for a in value]
+    except (TypeError, ValueError):
+        return None
+    if len(angles) != 4 or not all(math.isfinite(a) for a in angles):
+        return None
+    return [max(-STEERING_LIMIT, min(STEERING_LIMIT, a)) for a in angles]
+
+
 def headlight_level(value) -> Optional[float]:
     """
     A headlights_intensity command as the fraction sent to Unreal: clamped to
@@ -271,6 +298,10 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         # Headlight brightness at start, 0..1 of the Blueprint's intensity; the
         # headlights_intensity topic changes it.
         self.declare_parameter('headlights_intensity', 1.0)
+        # Steering angles [FL, BL, FR, BR] in rad, positive = left; zeros (straight)
+        # for skid steering. Sent with every packet and applied live.
+        self.declare_parameter('steering_angles', [0.0, 0.0, 0.0, 0.0])
+        self.steering: list = [0.0, 0.0, 0.0, 0.0]
         self.wheel_speed_scale: float = 1.0
         self.max_linear_accel = self.max_angular_accel = 0.0
         self.max_linear_decel = self.max_angular_decel = 0.0
@@ -286,7 +317,15 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
     def _on_parameters(self, params):
         from rcl_interfaces.msg import SetParametersResult
         for p in params:
-            if p.name in self._LIVE:
+            if p.name == 'steering_angles':
+                angles = steering_angles(p.value)
+                if angles is None:
+                    return SetParametersResult(successful=False, reason='steering_angles must be 4 numbers (rad)')
+                self.steering = angles
+                self.get_logger().info(f'steering_angles set to {angles} (live).')
+                # An idle rover sends no packets, so send the new angles now.
+                self._send({**self._last_wheels, **self._lights(), **self._steering()}, "steering")
+            elif p.name in self._LIVE:
                 attr, factor = self._LIVE[p.name]
                 try:
                     value = float(p.value) * factor
@@ -364,12 +403,17 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
             "FR": -vel_right,
             "BR": -vel_right,
             **self._lights(),
+            **self._steering(),
         }
 
     def _lights(self) -> dict:
         """The light fields every packet carries: Unreal reads them from the drive packet."""
         return {"headlights_on": self.headlights_on,
                 "headlights_intensity": headlight_wire_value(self.headlights_intensity)}
+
+    def _steering(self) -> dict:
+        """The steering fields every packet carries (straight unless steering_angles is set)."""
+        return steering_fields(self.steering)
 
     # =========================================================================
     # Sending
@@ -417,7 +461,7 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self._v_tgt = self._w_tgt = 0.0
         self._last_cmd_t = None
         self._last_wheels = {"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0}
-        self._send({"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0, **self._lights()}, "headlight state")
+        self._send({"FL": 0.0, "BL": 0.0, "FR": 0.0, "BR": 0.0, **self._lights(), **self._steering()}, "headlight state")
         self.get_logger().info(
             f"Unreal connected: headlights {'ON' if self.headlights_on else 'OFF'}, "
             f"intensity {self.headlights_intensity:.0%}.")
@@ -754,6 +798,7 @@ class LifecycleRoverController(rclpy.lifecycle.Node):
         self.wheel_speed_scale = self.get_parameter('wheel_speed_scale').value
         self.headlights_on = self.get_parameter('headlights_on').value
         self.headlights_intensity = headlight_level(self.get_parameter('headlights_intensity').value)
+        self.steering = steering_angles(self.get_parameter('steering_angles').value) or [0.0, 0.0, 0.0, 0.0]
         if self.headlights_intensity is None:
             self.headlights_intensity = 1.0
         self.max_linear_accel  = self.get_parameter('max_linear_accel').value

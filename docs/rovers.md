@@ -84,6 +84,12 @@ telemetry into `/odom` (it drives either rover).
   `wheel_speed_scale` (m/s → Unreal wheel units). The ramp completes even if
   `/cmd_vel` stops arriving, and the node holds the last command: send a zero
   twist to stop.
+- **Steering:** every packet also carries the `steering_angles` parameter
+  ([FL, BL, FR, BR], rad, positive = left) as `SFL`, `SBL`, `SFR`, `SBR`.
+  The default is straight (zeros), so the rovers skid-steer; the Chaos rovers
+  ignore the fields, and MARE's MuJoCo Raph Rover turns its steerable wheels
+  to them. Set it live, e.g.
+  `ros2 param set /lc_component_rover_leo_raph steering_angles "[0.3, -0.3, 0.3, -0.3]"`.
 - **Odometry:** `pose_from_telemetry` converts the Blueprint's `base_link`
   transform from Unreal (left-handed, cm, degrees) to REP-103 (x forward, y
   left, z up, metres), through the rotation's axes, so roll, pitch and heading
